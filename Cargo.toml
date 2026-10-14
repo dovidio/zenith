@@ -1,0 +1,50 @@
+[package]
+name = "zenith"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "A reading room for source code. Read-only, deliberately un-editor-like."
+license = "MIT"
+authors = ["Umberto D'Ovidio"]
+
+[dependencies]
+# Native shell + immediate-mode UI. 0.35 is the newest line compatible with the
+# toolchain on this machine (0.36 requires rustc 1.95).
+eframe = "0.35"
+egui = "0.35"
+
+# Real syntax parsing (Sublime grammars) so highlighting is accurate...
+syntect = { version = "5.3", default-features = false, features = [
+    "default-syntaxes",
+    "default-themes",
+    "regex-fancy",
+] }
+
+# ...while the *appearance* of every token is decided by zenith's own tone system
+# (see src/theme.rs), not by any editor color scheme.
+
+# Gitignore-aware, read-only directory walking.
+ignore = "0.4"
+
+# Native "open folder" dialog.
+rfd = "0.17"
+
+# Font validation with the *same* parser egui uses (epaint 0.35 rasterises through
+# skrifa), so "zenith says this face is usable" and "egui can draw this face" are
+# the same statement. Version and features are pinned to match epaint's.
+skrifa = { version = "0.42.1", default-features = false, features = [
+    "std",
+    "autohint_shaping",
+] }
+
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+
+# Reading a big file is a one-shot batch job; keep it fast even in debug builds so
+# the app stays pleasant while developing.
+[profile.dev.package."*"]
+opt-level = 2
