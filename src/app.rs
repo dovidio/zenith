@@ -1001,7 +1001,6 @@ impl Zenith {
     fn tree_open(&mut self) {
         let Some(idx) = self.tree_index() else { return };
         match self.tree_rows[idx].clone() {
-            TreeRow::OpenFolder => self.pick_folder(),
             TreeRow::Dir { rel, open, .. } => {
                 if open {
                     // Already open: step into it, the way a file manager does.
@@ -1904,8 +1903,7 @@ impl Zenith {
     /// Built before the keyboard is read each frame, because both the navigation and the
     /// drawing have to mean the same thing by "the row below this one".
     fn build_tree_rows(&self) -> Vec<TreeRow> {
-        // One row to open something else, then the folder that is open.
-        let mut out: Vec<TreeRow> = vec![TreeRow::OpenFolder];
+        let mut out: Vec<TreeRow> = Vec::new();
         if let Some(folder) = &self.folder {
             let mut acc = String::new();
             flatten(&folder.tree, &self.expanded, 0, &mut acc, &mut out);
@@ -1922,22 +1920,12 @@ impl Zenith {
         // keyboard walks, so a row and its key action can never disagree about which row
         // is which.
         let rows: Vec<TreeRow> = self.tree_rows.clone();
-        let top_items: Vec<TreeRow> = rows
-            .iter()
-            .take_while(|r| !matches!(r, TreeRow::Dir { .. } | TreeRow::File { .. }))
-            .cloned()
-            .collect();
-        let tree_files: Vec<TreeRow> = rows
-            .iter()
-            .filter(|r| matches!(r, TreeRow::Dir { .. } | TreeRow::File { .. }))
-            .cloned()
-            .collect();
+        let tree_files: Vec<TreeRow> = rows.clone();
         let folder_name = self.folder.as_ref().map(|s| s.name.clone()).unwrap_or_default();
         let current = self.open.as_ref().map(|o| o.path.clone());
 
         let mut clicked_file: Option<PathBuf> = None;
         let mut toggled_dir: Option<String> = None;
-        let mut open_folder = false;
 
         egui::Panel::left("zenith-folder")
             .resizable(true)
@@ -1951,49 +1939,24 @@ impl Zenith {
                     .inner_margin(Margin::symmetric(PANEL_MARGIN_X, PANEL_MARGIN_Y)),
             )
             .show(ui, |ui| {
-                // -- one row to open something else, drawn from the same list the keyboard
-                // walks, so the two can never disagree about what is on screen.
-                for item in &top_items {
-                    let key = item.key();
-                    let picked = self.tree_focus && self.tree_sel.as_ref() == Some(&key);
-                    let TreeRow::OpenFolder = item else { continue };
-                    let resp = row(
-                        ui,
-                        &pal,
-                        "Open a folder to read…",
-                        typography::mod_label(),
-                        0,
-                        picked,
-                        pal.accent,
-                        &font,
-                        Some(&keys("{mod}O")),
-                        None,
+                // With no folder open the panel stays empty: the page already offers to
+                // open one, and being told twice is noise.
+                if !folder_name.is_empty() {
+                    ui.add_space(6.0);
+                    ui.painter().hline(
+                        ui.min_rect().left()..=ui.min_rect().right(),
+                        ui.cursor().top(),
+                        Stroke::new(1.0, pal.edge),
                     );
-                    if self.tree_moved && picked {
-                        resp.scroll_to_me(Some(egui::Align::Center));
-                    }
-                    if resp.clicked() {
-                        self.tree_focus = true;
-                        self.tree_sel = Some(key);
-                        open_folder = true;
-                    }
+                    ui.add_space(6.0);
+                    ui.painter().text(
+                        Pos2::new(ui.cursor().left() + 1.0, ui.cursor().top() + PANEL_LABEL_DROP),
+                        Align2::LEFT_CENTER,
+                        format!("FOLDER · {folder_name}"),
+                        label_font.clone(),
+                        pal.ink_faint,
+                    );
                 }
-                ui.add_space(6.0);
-                ui.painter().hline(
-                    ui.min_rect().left()..=ui.min_rect().right(),
-                    ui.cursor().top(),
-                    Stroke::new(1.0, pal.edge),
-                );
-                ui.add_space(6.0);
-
-                // -- the folder
-                ui.painter().text(
-                    Pos2::new(ui.cursor().left() + 1.0, ui.cursor().top() + PANEL_LABEL_DROP),
-                    Align2::LEFT_CENTER,
-                    format!("FOLDER · {folder_name}"),
-                    label_font.clone(),
-                    pal.ink_faint,
-                );
                 if let Some(s) = &self.folder {
                     // No file count, no folder count, no total size: none of it is what
                     // a reader came for. Only a fault gets a line of its own.
@@ -2043,16 +2006,6 @@ impl Zenith {
                     .id_salt("zenith-tree")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        if tree_files.is_empty() {
-                            ui.painter().text(
-                                Pos2::new(ui.min_rect().left() + 6.0, ui.min_rect().top() + 8.0),
-                                Align2::LEFT_TOP,
-                                "no folder open",
-                                font.clone(),
-                                pal.ink_faint,
-                            );
-                            return;
-                        }
                         for item in &tree_files {
                             let key = item.key();
                             let picked = self.tree_focus && self.tree_sel.as_ref() == Some(&key);
@@ -2070,7 +2023,6 @@ impl Zenith {
                                     None,
                                     false,
                                 ),
-                                _ => continue,
                             };
                             let on_current = path
                                 .as_ref()
@@ -2103,7 +2055,6 @@ impl Zenith {
                                 match item {
                                     TreeRow::Dir { .. } => toggled_dir = rel,
                                     TreeRow::File { path, .. } => clicked_file = Some(path.clone()),
-                                    _ => {}
                                 }
                             }
                         }
@@ -2114,9 +2065,6 @@ impl Zenith {
             if !self.expanded.remove(&rel) {
                 self.expanded.insert(rel);
             }
-        }
-        if open_folder {
-            self.pick_folder();
         }
         if let Some(path) = clicked_file {
             self.open_file(&path);
@@ -2865,6 +2813,7 @@ impl Zenith {
     /// Sections, two-column rows and paired lists keep the whole panel within a third of
     /// the screen, so nothing has to be scrolled for or hidden.
     fn settings_overlay(&mut self, ctx: &egui::Context) {
+        let mut open_folder = false;
         let pal = self.palette;
         let font = self.typo.ui_id(12.5 * self.scale);
         let head = self.typo.prose_id(15.0 * self.scale);
@@ -2876,7 +2825,6 @@ impl Zenith {
         let mut new_mono = self.typo.mono_idx;
         let mut new_prose = self.typo.prose_idx;
         let mut theme_choice: Option<usize> = None;
-        let mut open_folder = false;
 
         egui::Window::new("settings")
             .open(&mut open)
@@ -3082,16 +3030,13 @@ impl Zenith {
                                 ],
                             );
                             ui.add_space(6.0);
-                            let where_ = self
-                                .folder
-                                .as_ref()
-                                .map(|f| display_path(&f.root))
-                                .unwrap_or_else(|| "no folder open".to_string());
-                            ui.label(
-                                RichText::new(where_)
-                                    .font(small.clone())
-                                    .color(pal.ink_faint),
-                            );
+                            if let Some(f) = &self.folder {
+                                ui.label(
+                                    RichText::new(display_path(&f.root))
+                                        .font(small.clone())
+                                        .color(pal.ink_faint),
+                                );
+                            }
                             if ui
                                 .button(RichText::new("Open a folder…").font(font.clone()))
                                 .clicked()
@@ -3117,9 +3062,6 @@ impl Zenith {
             ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(
                 !self.store.config.frameless,
             ));
-        }
-        if open_folder {
-            self.pick_folder();
         }
         self.show_settings = open;
     }
@@ -3261,7 +3203,6 @@ impl Zenith {
 /// One visible line of the folder tree.
 #[derive(Clone)]
 enum TreeRow {
-    OpenFolder,
     Dir {
         name: String,
         rel: String,
@@ -3284,7 +3225,6 @@ enum TreeRow {
 /// is exactly the kind of quiet misbehaviour a keyboard interface cannot afford.
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum TreeKey {
-    OpenFolder,
     Dir(String),
     File(PathBuf),
 }
@@ -3292,7 +3232,6 @@ enum TreeKey {
 impl TreeRow {
     fn key(&self) -> TreeKey {
         match self {
-            TreeRow::OpenFolder => TreeKey::OpenFolder,
             TreeRow::Dir { rel, .. } => TreeKey::Dir(rel.clone()),
             TreeRow::File { path, .. } => TreeKey::File(path.clone()),
         }
@@ -3307,10 +3246,7 @@ impl TreeRow {
                     depth: pd, open, ..
                 },
             ) => *open && *pd + 1 == *depth,
-            // A top-level row belongs to the folder itself.
-            (TreeRow::Dir { depth, .. } | TreeRow::File { depth, .. }, TreeRow::OpenFolder) => {
-                *depth == 0
-            }
+            // A row at the top has no row above it to go back to.
             _ => false,
         }
     }
@@ -4032,7 +3968,6 @@ mod tree_tests {
     #[test]
     fn going_back_finds_the_folder_you_came_from() {
         let rows = vec![
-            TreeRow::OpenFolder,
             dir("src", 0, true),
             file("src/main.rs", 1),
             dir("src/app", 1, true),
@@ -4041,16 +3976,14 @@ mod tree_tests {
             dir("docs", 0, false),
         ];
         // A nested file belongs to its folder, not to the row above it.
-        assert_eq!(parent_index(&rows, 4), Some(3));
-        // A file at the top of the folder belongs to the folder itself, which is depth 0.
-        assert_eq!(parent_index(&rows, 2), Some(1));
-        // The open-folder row has no parent.
+        assert_eq!(parent_index(&rows, 3), Some(2));
+        // A row at the top of the tree has nothing above it to go back to.
         assert_eq!(parent_index(&rows, 0), None);
     }
 
     #[test]
-    fn a_top_level_folder_belongs_to_the_open_folder_row() {
-        let rows = vec![TreeRow::OpenFolder, dir("src", 0, true)];
+    fn a_folder_inside_an_open_folder_belongs_to_it() {
+        let rows = vec![dir("src", 0, true), dir("src/app", 1, true)];
         assert_eq!(parent_index(&rows, 1), Some(0));
     }
 }
