@@ -918,19 +918,40 @@ pub fn effective_measure(page: Rect, wanted: f32, gutter: f32) -> f32 {
 }
 
 /// Draw the reading-progress spine down the right edge of the page.
-pub fn paint_spine(painter: &Painter, x: f32, top: f32, height: f32, palette: &Palette, frac: f32) {
-    let y = top + height * frac.clamp(0.0, 1.0);
+pub fn paint_spine(
+    painter: &Painter,
+    x: f32,
+    top: f32,
+    height: f32,
+    palette: &Palette,
+    frac: Option<f32>,
+) {
+    // The track runs the whole height of the page, so that its two ends mean the two ends
+    // of the file. An inset here is why the mark never quite reached the bottom.
     painter.vline(
         x,
         Rangef::new(top, top + height),
-        Stroke::new(2.0, alpha(palette.edge, 90)),
+        Stroke::new(2.0, alpha(palette.edge, 140)),
     );
-    painter.vline(
-        x,
-        Rangef::new((y - height * 0.06).max(top), y),
-        Stroke::new(2.0, alpha(palette.accent, 200)),
-    );
+    let Some(frac) = frac else { return };
+    let (a, b) = mark_range(top, height, frac);
+    painter.vline(x, Rangef::new(a, b), Stroke::new(2.0, alpha(palette.accent, 215)));
 }
+
+/// Where the reading-position mark goes, for a fraction down the file.
+///
+/// It is centred on the position but never shorter than a legible few dozen points, and
+/// always inside the track — so it is visible at the very top and the very bottom, which
+/// is exactly where a proportional mark has nowhere to be.
+fn mark_range(top: f32, height: f32, frac: f32) -> (f32, f32) {
+    let len = (height * 0.08).max(MARK_MIN).min(height);
+    let centre = top + height * frac.clamp(0.0, 1.0);
+    let a = (centre - len * 0.5).clamp(top, top + height - len);
+    (a, a + len)
+}
+
+/// The shortest the mark may be drawn, in points.
+const MARK_MIN: f32 = 30.0;
 
 /// Where should the reading column sit inside a page of this width?
 pub fn column_x(page: Rect, measure: f32, gutter: f32) -> f32 {
@@ -968,5 +989,52 @@ mod tests {
         // A rule made only of punctuation stays whole: it is a divider, not a word.
         assert_eq!(split_comment_mark("//////"), ("//////", ""));
         assert_eq!(split_comment_mark("prose"), ("", "prose"));
+    }
+}
+
+#[cfg(test)]
+mod spine_tests {
+    use super::mark_range;
+
+    const TOP: f32 = 100.0;
+    const H: f32 = 600.0;
+
+    #[test]
+    fn the_mark_is_visible_at_both_ends() {
+        // At the very top a proportional mark had zero length and vanished.
+        let (a, b) = mark_range(TOP, H, 0.0);
+        assert!(b - a >= 30.0, "the mark must have a length at the top");
+        assert!(a >= TOP);
+        // At the very bottom it must finish at the bottom, not short of it.
+        let (a, b) = mark_range(TOP, H, 1.0);
+        assert!((b - (TOP + H)).abs() < 0.01, "the mark must reach the bottom");
+        assert!(b - a >= 30.0);
+    }
+
+    #[test]
+    fn the_mark_never_leaves_the_track() {
+        for frac in [0.0, 0.01, 0.25, 0.5, 0.75, 0.99, 1.0] {
+            let (a, b) = mark_range(TOP, H, frac);
+            assert!(a >= TOP - 0.01, "above the track at {frac}");
+            assert!(b <= TOP + H + 0.01, "below the track at {frac}");
+            assert!(b > a);
+        }
+    }
+
+    #[test]
+    fn the_mark_moves_with_the_fraction() {
+        let mid = |f| {
+            let (a, b) = mark_range(TOP, H, f);
+            (a + b) * 0.5
+        };
+        assert!(mid(0.0) < mid(0.5));
+        assert!(mid(0.5) < mid(1.0));
+    }
+
+    #[test]
+    fn a_short_page_still_gets_a_mark_inside_it() {
+        let (a, b) = mark_range(TOP, 20.0, 0.5);
+        assert!(a >= TOP - 0.01);
+        assert!(b <= TOP + 20.0 + 0.01);
     }
 }

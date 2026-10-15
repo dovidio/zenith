@@ -2567,8 +2567,8 @@ impl Zenith {
         // scrollbar, so it lives at the edge of the paper. It is also draggable, which is
         // what a scrollbar was for — so there is one indicator here rather than two.
         let spine_x = page_rect.right() - 16.0;
-        let spine_top = page_rect.top() + 10.0;
-        let spine_h = page_rect.height() - 20.0;
+        let spine_top = page_rect.top();
+        let spine_h = page_rect.height();
         let grab = Rect::from_min_max(
             Pos2::new(spine_x - 7.0, spine_top),
             Pos2::new(spine_x + 7.0, spine_top + spine_h),
@@ -2601,19 +2601,30 @@ impl Zenith {
         );
     }
 
-    /// The inverse of [`Self::read_fraction`]: a place on the spine is a place in the file.
-    fn frac_to_scroll(&self, frac: f32) -> f32 {
-        let Some(open) = &self.open else { return 0.0 };
-        let Some(laid) = &open.laid else { return 0.0 };
-        let span = (laid.total - laid.row_h * 4.0).max(1.0);
-        (frac.clamp(0.0, 1.0) * span).clamp(0.0, (laid.total - self.view_h).max(0.0))
+    /// How far down the file the page can go: the one range both directions use.
+    ///
+    /// It used to be `total - four rows` for the reading position and `total - view` for
+    /// what scrolling actually allows, which are different numbers — so the mark saturated
+    /// before the page reached its end and never arrived at the bottom.
+    fn scroll_range(&self) -> Option<(f32, f32)> {
+        let open = self.open.as_ref()?;
+        let laid = open.laid.as_ref()?;
+        let max = (laid.total - self.view_h).max(0.0);
+        Some((self.scroll, max))
     }
 
-    fn read_fraction(&self) -> f32 {
-        let Some(open) = &self.open else { return 0.0 };
-        let Some(laid) = &open.laid else { return 0.0 };
-        let span = (laid.total - laid.row_h * 4.0).max(1.0);
-        (self.scroll / span).clamp(0.0, 1.0)
+    /// A place in the file as a fraction of it, for the spine.
+    fn read_fraction(&self) -> Option<f32> {
+        let (scroll, max) = self.scroll_range()?;
+        (max > 0.0).then(|| (scroll / max).clamp(0.0, 1.0))
+    }
+
+    /// The inverse: a place on the spine is a place in the file.
+    fn frac_to_scroll(&self, frac: f32) -> f32 {
+        match self.scroll_range() {
+            Some((_, max)) => frac.clamp(0.0, 1.0) * max,
+            None => 0.0,
+        }
     }
 
     // -- overlays ----------------------------------------------------------
