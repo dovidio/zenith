@@ -88,6 +88,10 @@ impl Line {
 pub struct Document {
     pub syntax: String,
     pub lines: Vec<Line>,
+    /// For a Markdown file, a rendering of those lines: the same lines in the same order,
+    /// with the markers taken out and what each run *is* recorded. The lines above stay
+    /// exactly as the file wrote them, which is what search, motions and copying work on.
+    pub md: Option<Vec<crate::markdown::MdLine>>,
     /// True if we stopped early because of [`MAX_BYTES`]/[`MAX_LINES`].
     pub truncated: bool,
     /// True if the bytes were not valid UTF-8 and were decoded lossily.
@@ -198,6 +202,7 @@ impl Highlighter {
         Document {
             syntax: syntax.name.clone(),
             lines,
+            md: None,
             truncated,
             lossy: false,
             bytes,
@@ -663,6 +668,7 @@ fn parse_config(text: &str, bytes: usize) -> Option<Document> {
         .collect();
 
     Some(Document {
+        md: None,
         syntax: "Config (zenith)".to_string(),
         lines: if lines.is_empty() {
             vec![Line {

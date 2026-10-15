@@ -12,6 +12,7 @@ mod app;
 mod catalog;
 mod distill;
 mod fuzzy;
+mod markdown;
 mod outline;
 mod png;
 mod reader;
@@ -69,6 +70,13 @@ fn main() {
                 }
             }
             "--glyphs" => mode = Mode::Glyphs,
+            "--md" => {
+                i += 1;
+                match args.get(i) {
+                    Some(p) => mode = Mode::Md(PathBuf::from(p)),
+                    None => die("--md needs a file path"),
+                }
+            }
             "--walk" => {
                 i += 1;
                 match args.get(i) {
@@ -114,6 +122,7 @@ fn main() {
         Mode::Faces(path) => typography::print_faces(&path),
         Mode::Distill(path) => distill(&path),
         Mode::Glyphs => print_glyphs(),
+        Mode::Md(path) => print_md(&path),
         Mode::Walk(path) => walk(&path),
         Mode::Scopes(path, n) => dump_scopes(&path, n),
         Mode::Smoke(out) => app::run_smoke(target, out, theme_override, measure_override, scale_override),
@@ -135,6 +144,7 @@ enum Mode {
     Faces(PathBuf),
     Distill(PathBuf),
     Glyphs,
+    Md(PathBuf),
     Walk(PathBuf),
     Scopes(PathBuf, usize),
     Smoke(PathBuf),
@@ -181,6 +191,27 @@ fn die(msg: &str) -> ! {
     eprintln!("zenith: {msg}");
     eprintln!("try `zenith --help`");
     std::process::exit(2);
+}
+
+/// Show how a Markdown file is rendered: what each line becomes, markers and all.
+fn print_md(path: &std::path::Path) {
+    let hl = syntax::Highlighter::new();
+    let bytes = std::fs::read(path).unwrap_or_default();
+    let n = bytes.len().min(4096);
+    let head = String::from_utf8_lossy(&bytes[..n]).lines().next().unwrap_or("").to_string();
+    let syntax = hl.syntax_for(path, &head).clone();
+    let text = match syntax::read_readable(path) {
+        Ok(syntax::Readable::Text { text, .. }) => text,
+        _ => {
+            eprintln!("zenith: {} is not text", path.display());
+            return;
+        }
+    };
+    let doc = hl.parse(&syntax, &text, text.len());
+    let md = markdown::render(&doc.lines);
+    for (i, line) in md.iter().enumerate() {
+        println!("{:>4}  {:<14} {}", i + 1, format!("{:?}", line.kind), line.text());
+    }
 }
 
 /// Walk a folder the way the shelf does, and say what it cost.

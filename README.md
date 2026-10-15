@@ -100,6 +100,29 @@ hatch if a window manager disagrees about dragging or resizing. The palette also
 system whether it is light or dark, so menus and any chrome that remains agree with the
 page.
 
+### Markdown, rendered
+
+A Markdown file is rendered as the document it describes rather than set as its source.
+The markers come out: `## Notes` is a heading called *Notes*, larger, in the page's
+strongest ink, with air above it; `**strong**` is stronger; `*emphasis*` is the italic
+face; `` `code` `` is the monospace voice on a tint of the paper; a bullet is a bullet and
+a numbered item keeps its number. Quotations are italic on a band with a rule down their
+left edge, fenced blocks sit on that same band with their contents untouched — a `#` in a
+code block is not a heading — and `---` is drawn as a hairline rather than as three dashes.
+
+The rules are CommonMark's where they matter. `_` between word characters is not emphasis,
+so a document that mentions `snake_case_name` keeps its underscores; `*args` inside
+backticks is text; a fence inside a fence is text; `#hashtag` is not a heading.
+
+Not everything is rendered. Tables are shown as paragraphs rather than grids, setext
+headings (`===` under a line) are not recognised, nested lists keep their indentation but
+not their outline, and a link's destination is dropped — you get the words, not the URL.
+`zenith --md FILE` prints what each line becomes, and `x` toggles between the rendering and
+the source, because sometimes the source is what you came to read.
+
+The lines themselves are untouched: search, every motion, the outline and copying all work
+on the file's real text, and the rendering sits beside it.
+
 ### Tones, not rainbow
 
 Every editor colour scheme is a rainbow: six or seven hues at full saturation, competing

@@ -475,6 +475,7 @@ mod tests {
     fn doc(lines: &[&str]) -> Document {
         Document {
             syntax: "Test".into(),
+            md: None,
             lines: lines
                 .iter()
                 .map(|t| {

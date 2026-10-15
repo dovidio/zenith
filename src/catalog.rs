@@ -51,6 +51,8 @@ pub struct Config {
     /// Draw the window's own bar instead of the system's, so the strip along the top of
     /// the window is the theme's colour rather than the desktop's.
     pub frameless: bool,
+    /// Render Markdown as a document rather than setting its source.
+    pub markdown: bool,
     /// Extra hand-named shelves.
     pub shelves: Vec<ShelfCfg>,
 }
@@ -80,6 +82,7 @@ impl Default for Config {
             distilled: false,
             zen: false,
             frameless: true,
+            markdown: true,
             shelves: Vec::new(),
         }
     }

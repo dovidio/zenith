@@ -539,6 +539,7 @@ impl Zenith {
             serif_comments: self.store.config.serif_comments && self.palette.comment_italic,
             prose_document,
             distilled: self.store.config.distilled,
+            markdown: self.store.config.markdown,
             lang,
             wrap_mark: self.typo.marks.pick("↳"),
             tones,
@@ -634,6 +635,11 @@ impl Zenith {
                         let syntax = hl.syntax_for(&path_for_thread, &head).clone();
                         let mut doc = hl.parse(&syntax, &text_for_thread, bytes);
                         doc.lossy = lossy;
+                        if outline::family(&path_for_thread, &doc.syntax)
+                            == outline::Family::Markdown
+                        {
+                            doc.md = Some(crate::markdown::render(&doc.lines));
+                        }
                         let outline = outline::extract(&path_for_thread, &doc.syntax, &doc.lines);
                         let prose = outline::family(&path_for_thread, &doc.syntax)
                             == outline::Family::Markdown;
@@ -659,6 +665,10 @@ impl Zenith {
                     }
                     (doc, syms, false)
                 };
+                // A Markdown file gets a rendering of itself, kept beside the source.
+                if outline::family(path, &doc.syntax) == outline::Family::Markdown {
+                    doc.md = Some(crate::markdown::render(&doc.lines));
+                }
                 doc.truncated |= truncated;
                 doc.lossy = lossy;
                 let prose = outline::family(path, &doc.syntax) == outline::Family::Markdown;
@@ -1138,6 +1148,7 @@ impl Zenith {
             Key::Q => Some(Act::CloseFile),
             Key::Y => Some(Act::CopyBlock),
             Key::D => Some(Act::Distilled),
+            Key::X => Some(Act::Markdown),
             Key::Slash => Some(Act::Search),
             Key::Minus => Some(Act::Smaller),
             Key::Equals => Some(Act::Larger),
@@ -1226,6 +1237,15 @@ impl Zenith {
             Act::Focus => {
                 self.store.config.focus_lens = !self.store.config.focus_lens;
                 self.store.save_config();
+            }
+            Act::Markdown => {
+                self.store.config.markdown = !self.store.config.markdown;
+                self.store.save_config();
+                self.status = if self.store.config.markdown {
+                    "markdown: rendered".into()
+                } else {
+                    "markdown: as written".into()
+                };
             }
             Act::Distilled => {
                 self.store.config.distilled = !self.store.config.distilled;
@@ -1459,6 +1479,7 @@ enum Act {
     Zen,
     Focus,
     Distilled,
+    Markdown,
     Bookmark,
     // navigation
     Down,
@@ -2939,6 +2960,7 @@ impl Zenith {
                                         ("line numbers", &mut cfg.line_numbers),
                                         ("distilled types", &mut cfg.distilled),
                                         ("themed window bar", &mut cfg.frameless),
+                                        ("render markdown", &mut cfg.markdown),
                                     ]);
                                 });
                             });
@@ -3632,6 +3654,7 @@ fn read_head(path: &Path) -> String {
 fn empty_doc(syntax: &syntect::parsing::SyntaxReference) -> Document {
     Document {
         syntax: syntax.name.clone(),
+        md: None,
         lines: Vec::new(),
         truncated: false,
         lossy: false,
@@ -3888,6 +3911,7 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("1-6", "pick a theme"),
     ("- =", "smaller / larger type"),
     ("#", "toggle line numbers"),
+    ("x", "render markdown, or its source"),
     ("r", "re-read from disk"),
     ("q", "close the file"),
     ("{mod}Q", "quit zenith"),

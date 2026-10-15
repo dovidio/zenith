@@ -61,6 +61,9 @@ pub struct Style {
     /// The whole file is prose (a Markdown document, say). Body text and headings are
     /// then set in the reading face, while code blocks stay monospace.
     pub prose_document: bool,
+    /// Render a Markdown document rather than setting its source: markers removed,
+    /// headings sized, bullets drawn, code fenced off.
+    pub markdown: bool,
     /// Recede what a human is not reading in a strongly typed language: type
     /// annotations, modifiers, and the punctuation only the compiler needs.
     pub distilled: bool,
@@ -97,6 +100,7 @@ impl Style {
         self.line_numbers.hash(&mut h);
         self.serif_comments.hash(&mut h);
         self.prose_document.hash(&mut h);
+        self.markdown.hash(&mut h);
         self.distilled.hash(&mut h);
         (self.lang as u8).hash(&mut h);
         self.wrap_mark.hash(&mut h);
@@ -219,9 +223,11 @@ pub fn layout(
     let mut heights: Vec<f32> = Vec::with_capacity(doc.lines.len());
 
     let mut y = header_h;
-    for line in &doc.lines {
+    for (index, line) in doc.lines.iter().enumerate() {
         tops.push(y);
 
+        // A rendered blank line is not always a blank source line: a fence is a blank
+        // source line with a meaning, and it deserves its own air.
         if line.is_blank() {
             let h = if style.compress_blank { blank_h } else { row_h };
             heights.push(h);
@@ -242,7 +248,8 @@ pub fn layout(
             row_h
         };
 
-        let job = line_job(style, line, wrap_w, line_row_h);
+        let md_line = doc.md.as_ref().and_then(|m| m.get(index));
+        let job = line_job(style, line, md_line, wrap_w, line_row_h);
         // Measure once to learn how tall the line is when wrapped. The galley itself
         // is thrown away: it will be rebuilt when the line is painted.
         let h = ctx
@@ -277,7 +284,13 @@ pub fn layout(
 
 /// Build one line's job. Comments are split into their marginal mark and their
 /// prose body so the two can be set in different faces and inks.
-fn line_job(style: &Style, line: &Line, wrap_w: f32, row_h: f32) -> LayoutJob {
+fn line_job(
+    style: &Style,
+    line: &Line,
+    md: Option<&crate::markdown::MdLine>,
+    wrap_w: f32,
+    row_h: f32,
+) -> LayoutJob {
     let mut job = LayoutJob {
         break_on_newline: false, // one source line per job
         halign: Align::LEFT,
@@ -289,6 +302,14 @@ fn line_job(style: &Style, line: &Line, wrap_w: f32, row_h: f32) -> LayoutJob {
         },
         ..Default::default()
     };
+
+    // A rendered Markdown line is built from the roles the scanner found, not from the
+    // source's tokens: the markers are gone by now.
+    if style.markdown {
+        if let Some(md) = md {
+            return markdown_job(style, md, wrap_w, row_h);
+        }
+    }
 
     // Which runs are *metadata* rather than the sentence? See `crate::distill` for
     // how that is decided, per language, and why it refuses more often than it fires.
@@ -393,6 +414,103 @@ fn line_job(style: &Style, line: &Line, wrap_w: f32, row_h: f32) -> LayoutJob {
         job.append(&text, 0.0, fmt);
     }
 
+    job
+}
+
+
+/// One rendered Markdown line: the roles the scanner found, turned into faces and inks.
+///
+/// The rules worth knowing: a heading is the same serif as the body, larger, in the
+/// page's strongest ink, with air above it. Emphasis is the italic face, which the
+/// typography already resolves. `strong` has no bold face to use — fonts are chosen for
+/// reading, and a faux-bold would be a lie — so it is the body face in the strongest ink
+/// with a hair more spacing, which reads as emphasis without pretending to be a weight.
+/// Code is the monospace voice at a slightly smaller size on a tinted ground.
+fn markdown_job(style: &Style, md: &crate::markdown::MdLine, wrap_w: f32, row_h: f32) -> LayoutJob {
+    use crate::markdown::{Kind, Role};
+
+    let level = match md.kind {
+        Kind::Heading(n) => n.clamp(1, 6) as usize,
+        _ => 0,
+    };
+    // 1.7, 1.4, 1.22, 1.12, 1.06, 1.02 — a document's ladder, not a UI's.
+    const SCALE: [f32; 6] = [1.7, 1.4, 1.22, 1.12, 1.06, 1.02];
+    let body_size = style.prose.size;
+    let base = if level > 0 {
+        body_size * SCALE[level - 1]
+    } else {
+        body_size
+    };
+    let line_h = (row_h * base / body_size).max(row_h * 0.9);
+    // A heading's own row carries its air, so the page does not need a blank line to
+    // separate sections.
+    let min_h = if level > 0 { line_h * 1.5 } else { line_h };
+
+    // The faces at this line's size. `style.prose` carries the body size, so a heading
+    // needs the same family at a larger one — setting the family alone renders a heading
+    // the size of a sentence, which is what happened first.
+    let prose = FontId::new(base, style.prose.family.clone());
+    let prose_italic = FontId::new(base, style.prose_italic.family.clone());
+    let code = FontId::new(base * 0.94, style.code.family.clone());
+
+    let mut job = LayoutJob {
+        break_on_newline: false,
+        halign: Align::LEFT,
+        first_row_min_height: min_h,
+        wrap: egui::text::TextWrapping {
+            max_width: wrap_w,
+            break_anywhere: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    // A tint of the page rather than a second colour: code sits *on* the paper.
+    let band = mix(style.paper, style.ink_faint, 0.10);
+    for span in &md.spans {
+        let mut fmt = TextFormat {
+            font_id: prose.clone(),
+            color: style.color_for(Tone::Plain),
+            line_height: Some(line_h),
+            ..Default::default()
+        };
+        match span.role {
+            Role::Body => {}
+            Role::Strong => {
+                fmt.color = style.color_for(Tone::Keyword);
+                fmt.extra_letter_spacing = 0.15;
+            }
+            Role::Emphasis => fmt.font_id = prose_italic.clone(),
+            Role::Link => fmt.color = style.accent,
+            Role::Code => {
+                fmt.font_id = FontId::monospace(base * 0.94);
+                fmt.color = style.color_for(Tone::Str);
+                fmt.background = band;
+            }
+            Role::CodeLine => {
+                fmt.font_id = code.clone();
+                fmt.color = style.color_for(Tone::Plain);
+            }
+            Role::Marker => {
+                fmt.font_id = code.clone();
+                fmt.color = style.ink_faint;
+            }
+        }
+        if matches!(md.kind, Kind::Quote) && span.role == Role::Body {
+            fmt.font_id = prose_italic.clone();
+            fmt.color = style.ink_faint;
+        }
+        job.append(&span.text, 0.0, fmt);
+    }
+    if job.sections.is_empty() {
+        // Rules and empty lines carry no text; the painter draws them.
+        job.append(" ", 0.0, TextFormat {
+            font_id: prose.clone(),
+            color: style.paper,
+            line_height: Some(row_h),
+            ..Default::default()
+        });
+    }
     job
 }
 
@@ -583,6 +701,68 @@ pub fn paint(painter: &Painter, p: &Paint) {
             }
         }
         let _ = h;
+    }
+
+    // 2b. A rendered document has furniture the text cannot draw: the ground behind a
+    // fenced block or a quotation, and a rule where the source said `---`.
+    if let Some(md) = &p.doc.md {
+        if p.style.markdown {
+            let band = mix(p.style.paper, p.style.ink_faint, 0.10);
+            let mut run: Option<(usize, usize, bool)> = None;
+            let flush = |run: (usize, usize, bool), painter: &Painter| {
+                let (a, b, quoted) = run;
+                // One band per continuous run of code, and one per quotation.
+                let y0 = t(p.laid.top_of(a)) - p.laid.row_h * 0.15;
+                let y1 = t(p.laid.top_of(b) + p.laid.height_of(b)) + p.laid.row_h * 0.15;
+                let rect = Rect::from_min_max(
+                    Pos2::new(ox - p.laid.char_w * 1.6, y0),
+                    Pos2::new(ox + p.laid.measure, y1),
+                );
+                painter.rect_filled(rect, CornerRadius::same(3), band);
+                if quoted {
+                    // A quotation gets a rule down its left edge as well.
+                    let edge = Rect::from_min_max(rect.left_top(), Pos2::new(rect.left() + 2.0, rect.bottom()));
+                    painter.rect_filled(edge, CornerRadius::ZERO, p.palette.accent_soft);
+                }
+            };
+            for i in first..last {
+                let Some(line) = md.get(i) else { continue };
+                let quoted = matches!(line.kind, crate::markdown::Kind::Quote);
+                let is_band = line.in_band() || quoted;
+                match (&mut run, is_band) {
+                    (None, true) => run = Some((i, i, quoted)),
+                    (Some(r), true) => {
+                        if r.2 == quoted {
+                            r.1 = i;
+                        } else {
+                            flush(*r, painter);
+                            run = Some((i, i, quoted));
+                        }
+                    }
+                    (Some(_), false) => {
+                        flush(run.take().unwrap(), painter);
+                    }
+                    (None, false) => {}
+                }
+            }
+            if let Some(r) = run {
+                flush(r, painter);
+            }
+
+            // Rules are a hairline across the measure, not a row of dashes.
+            for i in first..last {
+                if let Some(line) = md.get(i) {
+                    if matches!(line.kind, crate::markdown::Kind::Rule) {
+                        let y = t(p.laid.top_of(i) + p.laid.height_of(i) * 0.5);
+                        painter.hline(
+                            (ox - p.laid.char_w * 1.6)..=(ox + p.laid.measure),
+                            y,
+                            Stroke::new(1.0, p.palette.edge),
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // 3. The text itself.
