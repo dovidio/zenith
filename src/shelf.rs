@@ -419,31 +419,7 @@ fn dir_touched(path: &Path) -> Option<SystemTime> {
     newest
 }
 
-/// A one-line summary for the header: how big is this body of work?
-pub fn describe(shelf: &Shelf) -> String {
-    let files = shelf.files.len();
-    let bytes: u64 = shelf.files.iter().map(|f| f.size).sum();
-    let dirs = count_dirs(&shelf.tree);
-    format!(
-        "{} file{} · {} folder{} · {}",
-        files,
-        if files == 1 { "" } else { "s" },
-        dirs,
-        if dirs == 1 { "" } else { "s" },
-        human_size(bytes)
-    )
-}
-
-fn count_dirs(entries: &[Entry]) -> usize {
-    entries
-        .iter()
-        .map(|e| match e {
-            Entry::Dir(d) => 1 + count_dirs(&d.children),
-            Entry::File(_) => 0,
-        })
-        .sum()
-}
-
+#[allow(dead_code)]
 pub fn human_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     let b = bytes as f64;

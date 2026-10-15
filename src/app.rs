@@ -15,7 +15,7 @@ use crate::distill;
 use crate::fuzzy;
 use crate::outline::{self, SymKind, Symbol};
 use crate::reader::{self, Laid, Paint, Style};
-use crate::shelf::{self, Entry, FileEntry, Shelf, human_size};
+use crate::shelf::{self, Entry, FileEntry, Shelf};
 use crate::syntax::{Document, Highlighter, Readable};
 use crate::theme::{self, Palette, Tone};
 use crate::typography::{self, Typography};
@@ -60,6 +60,8 @@ pub fn run_smoke(
             frame: 0,
             phase: 0,
             requested: false,
+            asked: 0,
+            asked_at: 0,
         }),
     });
 }
@@ -145,6 +147,9 @@ struct Smoke {
     frame: u32,
     phase: u8,
     requested: bool,
+    /// How many times a picture has been asked for, and when the last ask was.
+    asked: u32,
+    asked_at: u32,
 }
 
 /// The open document, in every sense: bytes, meaning, and place on the page.
@@ -158,8 +163,6 @@ struct Open {
     laid: Option<Laid>,
     error: Option<String>,
     note: Option<String>,
-    /// Byte size on disk.
-    size: u64,
 }
 
 pub struct Zenith {
@@ -348,9 +351,10 @@ impl Zenith {
         if target.is_dir() {
             self.open_shelf(&target, None);
         } else if target.is_file() {
+            // The file the reader asked for, now; the shelf around it can take its time.
             let root = project_root(&target);
-            let file = target.clone();
-            self.open_shelf(&root, Some(file));
+            self.open_file(&target);
+            self.open_shelf(&root, Some(target));
         }
     }
 
@@ -375,10 +379,6 @@ impl Zenith {
         self.expanded.insert(String::new());
         self.store.save_session();
 
-        // The file first: it is the thing the reader asked to see.
-        if let Some(path) = focus.clone() {
-            self.open_file(&path);
-        }
         self.status = format!("reading {name}…");
 
         let root_for_thread = root.to_path_buf();
@@ -482,8 +482,6 @@ impl Zenith {
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default()
             });
-        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-
         let head = read_head(path);
         let syntax = self.hl.syntax_for(path, &head).clone();
         let readable = match crate::syntax::read_readable(path) {
@@ -498,7 +496,6 @@ impl Zenith {
                     laid: None,
                     error: Some(format!("{e}")),
                     note: None,
-                    size,
                 });
                 return;
             }
@@ -515,7 +512,6 @@ impl Zenith {
                     laid: None,
                     error: Some(format!("{reason} — zenith only reads text")),
                     note: None,
-                    size,
                 });
             }
             Readable::Text {
@@ -606,7 +602,6 @@ impl Zenith {
                     laid: None,
                     error: None,
                     note: (!note.is_empty()).then_some(note),
-                    size,
                 });
                 self.caret = vim::Caret::default();
                 self.pending = Pending::Restore;
@@ -1474,10 +1469,7 @@ impl Zenith {
                 let line = self.caret.line + 1;
                 let col = self.caret.col + 1;
                 let lang = o.doc.syntax.clone();
-                let mut s = format!(
-                    "{lang} · line {line}:{col} of {lines} · {}",
-                    human_size(o.size)
-                );
+                let mut s = format!("{lang} · line {line}:{col} of {lines}");
                 if let Some(note) = &o.note {
                     s.push_str(" · ");
                     s.push_str(note);
@@ -1569,7 +1561,9 @@ impl Zenith {
                 if row(
                     ui,
                     &pal,
-                    &format!("TEAM · {} repositories", team.len()),
+                    // No count: the repositories are listed below, and the number was
+                    // silently capped anyway.
+                    "TEAM",
                     "",
                     0,
                     false,
@@ -1670,42 +1664,43 @@ impl Zenith {
                     pal.ink_faint,
                 );
                 if let Some(s) = &self.shelf {
-                    let mut colophon = shelf::describe(s);
-                    // Say what happened, and say it as a filter rather than a loss:
-                    // "5 skipped" read like the reader had lost five files when in fact
-                    // the "source files only" setting had hidden a README and some
-                    // screenshots. Only unreadable entries are a fault.
-                    let filtered = s.filtered;
+                    // No file count, no folder count, no total size: none of it is what
+                    // a reader came for. Only a fault gets a line of its own.
+                    let mut warn = String::new();
                     if s.truncated {
-                        colophon.push_str(" · stopped at 40,000 files");
+                        warn.push_str("stopped at 40,000 files");
                     }
                     if s.unreadable > 0 {
-                        colophon.push_str(&format!(" · {} unreadable", s.unreadable));
+                        if !warn.is_empty() {
+                            warn.push_str(" · ");
+                        }
+                        warn.push_str(&format!("{} unreadable", s.unreadable));
                     }
-                    let note = if filtered == 0 {
-                        String::new()
-                    } else {
-                        format!(
-                            "{filtered} file{} not shown: not source, hidden, or build output \
+                    if !warn.is_empty() {
+                        ui.painter().text(
+                            Pos2::new(ui.cursor().left() + 6.0, ui.cursor().top() + 22.0),
+                            Align2::LEFT_CENTER,
+                            warn,
+                            label_font.clone(),
+                            pal.accent,
+                        );
+                        ui.add_space(16.0);
+                    }
+                    // What a filter left out is worth saying once, on hover, because a
+                    // reader who cannot see a file should be able to find out why.
+                    if s.filtered > 0 {
+                        let note = format!(
+                            "{} file{} not shown: not source, hidden, or build output \
                              (settings › shelf)",
-                            if filtered == 1 { "" } else { "s" }
-                        )
-                    };
-                    let resp = ui.painter().text(
-                        Pos2::new(ui.cursor().left() + 6.0, ui.cursor().top() + 22.0),
-                        Align2::LEFT_CENTER,
-                        colophon,
-                        label_font.clone(),
-                        pal.ink_faint,
-                    );
-                    let _ = &resp;
-                    if !note.is_empty() {
+                            s.filtered,
+                            if s.filtered == 1 { "" } else { "s" }
+                        );
                         ui.interact(
                             Rect::from_min_size(
                                 Pos2::new(ui.cursor().left(), ui.cursor().top()),
-                                vec2(ui.available_width(), 30.0),
+                                vec2(ui.available_width(), 16.0),
                             ),
-                            ui.id().with("shelf-note"),
+                            ui.id().with("shelf-filter"),
                             Sense::hover(),
                         )
                         .on_hover_text(RichText::new(note).font(label_font.clone()));
@@ -2715,13 +2710,6 @@ impl Zenith {
                                     .font(small.clone())
                                     .color(pal.ink_faint),
                             );
-                            let team = self.catalog.team.len();
-                            ui.label(
-                                RichText::new(format!("{team} repositories in the team shelf"))
-                                    .font(small.clone())
-                                    .color(pal.ink_faint),
-                            );
-                            ui.add_space(4.0);
                             if ui
                                 .button(RichText::new("Open a folder…").font(font.clone()))
                                 .clicked()
@@ -2806,15 +2794,20 @@ impl Zenith {
         }
         let Some(smoke) = &mut self.smoke else { return };
         smoke.frame += 1;
-        ctx.request_repaint();
+        // Ask for the next frame on a timer rather than spinning: the renderer needs an
+        // idle moment between frames to service a screenshot request, and a frame loop
+        // that never idles drops them.
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
 
         // Wait for the layout to settle before asking for a picture.
-        if !smoke.requested && smoke.frame > 12 {
+        // Ask for the picture, and ask again if the answer does not come. The renderer
+        // drops the occasional screenshot request (it races with a frame that is already
+        // in flight), and one dropped request used to mean a failed run and no images.
+        if !smoke.requested || (smoke.frame - smoke.asked_at > 20 && smoke.asked < 12) {
             ctx.send_viewport_cmd(ViewportCommand::Screenshot(egui::UserData::default()));
             smoke.requested = true;
-            return;
-        }
-        if !smoke.requested {
+            smoke.asked += 1;
+            smoke.asked_at = smoke.frame;
             return;
         }
         let image = ctx.input(|i| {
@@ -2863,6 +2856,8 @@ impl Zenith {
                 // engine — a file with real nesting, so the lens has work to do.
                 smoke.phase = 1;
                 smoke.requested = false;
+                smoke.asked = 0;
+                smoke.asked_at = 0;
                 smoke.frame = 0;
                 self.store.config.wrap = true;
             }
