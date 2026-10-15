@@ -84,22 +84,33 @@ fn launch(opts: Startup) {
         None => "zenith".to_string(),
     };
     // The strip along the top of a window belongs to the desktop, not to the app: on macOS
-    // it is the system's grey, on Linux whatever the window manager decides. Zenith can
-    // draw its own, in the theme, so that the whole window is the page's colour on both.
+    // it is the system's material, on Linux whatever the window manager decides. Neither
+    // is the page's colour, so the window never looks like one thing.
+    //
+    // There are two honest ways to fix that, and they are different per platform.
+    //
+    // On macOS the window stays entirely the system's — its frame, its traffic lights, its
+    // dragging, resizing and window snapping — and only the *title bar* is made
+    // transparent, with the content filling the window. The system draws no background
+    // there, so the theme's bar shows through, and the buttons float above it.
+    //
+    // On Linux (and Windows) the window manager paints the frame and there is no way to
+    // ask it for a colour, so the frame is dropped and the buttons are ours.
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(title)
         .with_app_id("zenith")
         .with_inner_size([1440.0, 920.0])
         .with_min_inner_size([720.0, 480.0]);
     if opts.frameless {
-        viewport = viewport.with_decorations(false);
-        // macOS keeps its traffic lights when the title bar is hidden but the content
-        // fills the window, which is how a themed toolbar is done there.
         #[cfg(target_os = "macos")]
         {
             viewport = viewport
-                .with_titlebar_shown(false)
+                .with_titlebar_shown(false) // transparent, buttons kept
                 .with_fullsize_content_view(true);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            viewport = viewport.with_decorations(false);
         }
     }
     let options = eframe::NativeOptions {
@@ -223,6 +234,8 @@ pub struct Zenith {
     tree_moved: bool,
     /// A development affordance has been applied, once.
     tree_hook_done: bool,
+    /// Width of the macOS traffic lights over our bar, in points (0 elsewhere).
+    chrome_gutter: f32,
     tree_hook_step: u8,
     /// The places we have been, so `ctrl-o` can take us back.
     jumps: Vec<vim::Caret>,
@@ -298,6 +311,20 @@ impl Zenith {
 
         // Built once here rather than inside the literal below, so its cost is visible.
         let hl = Highlighter::new();
+        // Ask the window how wide its buttons are, for the macOS bar inset.
+        #[cfg(target_os = "macos")]
+        let chrome_gutter = {
+            use raw_window_handle::HasWindowHandle as _;
+            let zoom = cc.egui_ctx.zoom_factor();
+            cc.window_handle()
+                .ok()
+                .and_then(|h| eframe::WindowChromeMetrics::from_window_handle(&h.as_raw()))
+                .map(|m| m.traffic_lights_size.x / zoom)
+                .unwrap_or(74.0)
+        };
+        #[cfg(not(target_os = "macos"))]
+        let chrome_gutter = 0.0;
+
         let mut app = Zenith {
             scale: config.font_scale,
             char_w: 15.0 * config.font_scale * 0.6,
@@ -321,6 +348,7 @@ impl Zenith {
             tree_sel: None,
             tree_moved: false,
             tree_hook_done: false,
+            chrome_gutter,
             tree_hook_step: 0,
             jumps: Vec::new(),
             jump_pos: 0,
@@ -825,6 +853,10 @@ impl Zenith {
             // are those that need a modifier, plus Escape. Without that rule a bound
             // letter cannot be typed at all.
             if commands_allowed(key, cmd, ctrl, text_entry) {
+                if key == Key::Q && (cmd || ctrl) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    continue;
+                }
                 if cmd && key == Key::O {
                     self.pick_folder();
                     continue;
@@ -1671,18 +1703,25 @@ impl eframe::App for Zenith {
 }
 
 impl Zenith {
+    /// How much room the macOS traffic lights take, measured from the window itself.
+    ///
+    /// Guessing this number puts the app's name under the buttons on one display scale and
+    /// leaves a gap on another; the window knows, so it is asked.
+    fn traffic_light_gutter(&self) -> f32 {
+        if !cfg!(target_os = "macos") || !self.store.config.frameless {
+            return 0.0;
+        }
+        self.chrome_gutter
+    }
+
     fn top_bar(&mut self, ui: &mut Ui) {
         let pal = self.palette;
         let font = self.typo.ui_id(12.5 * self.scale);
         let strong = self.typo.prose_id(15.0 * self.scale);
         let ctx = ui.ctx().clone();
-        // On macOS the traffic lights stay where they are, over our bar: leave them room
-        // rather than drawing the app's name underneath them.
-        let gutter = if cfg!(target_os = "macos") && self.store.config.frameless {
-            78.0
-        } else {
-            0.0
-        };
+        // On macOS the traffic lights stay exactly where they were, floating over the
+        // transparent title bar, so the bar starts after them rather than under them.
+        let gutter = self.traffic_light_gutter();
         let crumbs: Vec<String> = self
             .open
             .as_ref()
@@ -1702,12 +1741,22 @@ impl Zenith {
                 // started by the backend, so it must be asked for on the frame the drag
                 // begins, not after it.
                 let bar = ui.max_rect();
+                // The buttons sit inside the bar, so the dragging area stops short of
+                // them: a press on Close must close, not start moving the window.
+                let drag_right = if own_window_buttons() {
+                    bar.right() - window_buttons_width()
+                } else {
+                    bar.right()
+                };
+                let drag_rect = Rect::from_min_max(bar.left_top(), Pos2::new(drag_right, bar.bottom()));
                 let drag = ui.interact(
-                    bar,
+                    drag_rect,
                     ui.id().with("titlebar"),
                     Sense::click_and_drag(),
                 );
-                if self.store.config.frameless {
+                // Only where the desktop's own title bar has been taken away does the app
+                // have to move the window itself. On macOS the system still does it.
+                if self.store.config.frameless && !cfg!(target_os = "macos") {
                     if drag.drag_started() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                     }
@@ -1716,7 +1765,7 @@ impl Zenith {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximised));
                     }
                 }
-                if self.store.config.frameless && !cfg!(target_os = "macos") {
+                if own_window_buttons() {
                     window_buttons(ui, &pal, &ctx, bar);
                 }
                 let y = ui.max_rect().center().y;
@@ -3332,6 +3381,19 @@ fn count_lines(text: &str) -> usize {
 }
 
 
+/// How wide three window buttons are, so the dragging area can stop before them.
+fn window_buttons_width() -> f32 {
+    3.0 * (12.0 + 10.0) + 8.0
+}
+
+/// Does the app have to draw the window's buttons itself?
+///
+/// On macOS the system keeps them, floating over the transparent title bar; everywhere
+/// else a window without a frame would have none at all, and no way to close.
+fn own_window_buttons() -> bool {
+    !cfg!(target_os = "macos")
+}
+
 /// Minimise, maximise, close — drawn by us, because on Linux and Windows a window without
 /// a system frame has no buttons at all.
 fn window_buttons(ui: &mut Ui, pal: &Palette, ctx: &egui::Context, bar: Rect) {
@@ -3797,6 +3859,7 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("#", "toggle line numbers"),
     ("r", "re-read from disk"),
     ("q", "close the file"),
+    ("{mod}Q", "quit zenith"),
     ("⌘O", "open a folder to read"),
     ("gd", "go to definition (no language server configured yet)"),
 ];

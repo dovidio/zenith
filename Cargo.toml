@@ -8,6 +8,8 @@ license = "MIT"
 authors = ["Umberto D'Ovidio"]
 
 [dependencies]
+# Only to ask the window for its traffic-light metrics on macOS (eframe links it already).
+raw-window-handle = "0.6"
 # Native shell + immediate-mode UI. 0.35 is the newest line compatible with the
 # toolchain on this machine (0.36 requires rustc 1.95).
 eframe = "0.35"

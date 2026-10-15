@@ -72,20 +72,30 @@ of a frame does not grow with the size of the file.
 
 ### The window's own bar
 
-The strip along the top of a window belongs to the desktop, not to the app: on macOS it is
-the system's material, on Linux whatever the window manager decides. Neither is `#f4f1ea`
-when the page is, so the window never quite looks like one thing.
+The strip along the top of a window belongs to the desktop: on macOS it is the system's
+material, on Linux whatever the window manager decides. Neither is the page's colour, so
+the window never quite looks like one thing. Fixing that honestly means two different
+things on the two platforms:
 
-So zenith draws its own. The window is created without system decorations and the theme's
-bar takes their place: drag it to move the window, double-click to maximise, and on macOS
-the traffic lights stay exactly where they were, over the bar, with the app's name moved
-along to make room. On Linux and Windows the buttons are drawn too, and the window's edges
-are eight thin zones that ask the compositor to resize. The palette also tells the system
-whether it is light or dark, so menus and any chrome that remains agree with the page.
+**On macOS the window stays entirely the system's.** Its frame, its traffic lights, its
+dragging, resizing, snapping and full screen all remain, and only the *title bar* is made
+transparent, with the content filling the window. The system draws no background there, so
+the theme's bar shows through and the traffic lights float above it — the app's name steps
+aside by exactly the width they occupy, measured from the window rather than guessed. This
+is the macOS pattern for a themed toolbar, and it is why zenith does not draw its own
+buttons there.
 
-It is a setting (`settings › page › themed window bar`, or `frameless` in the config), and
-turning it off hands the frame straight back to the desktop without a restart — which is
-the escape hatch if a window manager disagrees about dragging or resizing.
+**On Linux and Windows the frame is ours**, because a window manager paints its own frame
+and there is no way to ask it for a colour. The window is created without decorations, the
+theme's bar takes their place, and the app draws the minimise, maximise and close buttons
+and the eight edge zones that ask the compositor to resize. `⌘Q` (or `Ctrl+Q`) quits on
+every platform, and `esc` still closes whatever is open.
+
+It is one setting — `settings › page › themed window bar`, or `frameless` in the config —
+and turning it off hands the frame back to the desktop while running. That is the escape
+hatch if a window manager disagrees about dragging or resizing. The palette also tells the
+system whether it is light or dark, so menus and any chrome that remains agree with the
+page.
 
 ### Tones, not rainbow
 
