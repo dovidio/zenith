@@ -24,8 +24,8 @@ Navigation is vim's, as far as a reader needs it: `j k`, `w b e`, `0 ^ $`, `{ }`
 to go back and forward through everywhere you have been. The folder tree takes the
 keyboard too: `tab` to enter it, `j k` to move, `l` or `enter` to open a file or fold a
 folder, `h` to back out, `esc` to return to the page. Two finders, deliberately separate:
-`⌘P` (or `ctrl-p`) finds *a file*, `/` (or `⌘F`) searches *inside the file* you are
-reading. Press `?` in the app for the whole map.
+`⌘P` (or `ctrl-p`) finds *a file* in the open folder, `/` (or `⌘F`) searches *inside the
+file* you are reading. Press `?` in the app for the whole map.
 
 ---
 
@@ -137,22 +137,19 @@ a place, not a colour swatch:
 
 ---
 
-## The team shelf
+## Opening a project
 
-Zenith is built for reading *a team's* work, so it opens onto a catalogue rather than a
-file dialog:
+Point it at a folder — `zenith ~/code/some-project`, `⌘O`, or drag a folder onto the
+window — and the tree on the left is that folder. A file works too, and the tree shows the
+project it belongs to. With no argument it reopens the last folder, or the one you are
+standing in if that looks like a project, and otherwise it waits, quietly, for you to
+choose.
 
-- **Team** — every project under your workspace root (the first of `~/hack`, `~/projects`,
-  `~/code`, `~/dev`, `~/src`, `~/work` that exists), found from repository and manifest
-  markers and ordered by most recently touched — a team's attention is usually the thing
-  worth following.
-- **Shelves** — any folder you name by hand in the config.
-- **Open a folder…** (`⌘O`, or drag a folder onto the window) for anything else.
-
-Inside a project the tree respects the repository's own `.gitignore`, skips build output
-and dependency trees outright, and floats the doorways — README, manifests, entry points —
-to the top of each folder. Opening a project puts you in front of its README, not the first
-file alphabetically.
+The tree respects the repository's own `.gitignore`, skips build output and dependency
+trees outright, and floats the doorways — README, manifests, entry points — to the top of
+each folder. Opening a project puts you in front of its README, not the first file
+alphabetically. Nothing is catalogued or remembered beyond the folder itself: there is no
+collection to curate, no workspace to configure.
 
 ## It does not change your code
 

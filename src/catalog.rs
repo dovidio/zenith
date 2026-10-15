@@ -1,7 +1,7 @@
-//! Configuration, the team catalogue, and reading memory.
+//! Configuration, the reading memory, and where both live on disk.
 //!
 //! Two files, both outside the projects being read:
-//!   * `config.toml`  — taste: theme, measure, leading, the team's workspace root.
+//!   * `config.toml`  — taste: theme, measure, leading, typography.
 //!   * `session.toml` — memory: how far into each file you had read, favourites.
 //!
 //! Neither is ever written into a repository. Read-only means read-only.
@@ -11,13 +11,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::shelf::Repo;
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Config {
-    /// Where the team's projects live. Repositories under it form the "team shelf".
-    pub workspace: PathBuf,
     /// Name of the current theme (see theme::THEMES).
     pub theme: String,
     /// Multiplier on every type size. 1.0 is the tuned default.
@@ -53,20 +49,11 @@ pub struct Config {
     pub frameless: bool,
     /// Render Markdown as a document rather than setting its source.
     pub markdown: bool,
-    /// Extra hand-named shelves.
-    pub shelves: Vec<ShelfCfg>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ShelfCfg {
-    pub name: String,
-    pub path: PathBuf,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            workspace: default_workspace(),
             theme: "Washi".into(),
             font_scale: 1.0,
             measure: 86,
@@ -83,7 +70,6 @@ impl Default for Config {
             zen: false,
             frameless: true,
             markdown: true,
-            shelves: Vec::new(),
         }
     }
 }
@@ -203,52 +189,6 @@ pub fn home_dir() -> PathBuf {
     std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
-}
-
-/// Where a team's projects probably live. A reader should open onto a shelf, not onto
-/// a home directory, so zenith looks for the usual workshop names first.
-pub fn default_workspace() -> PathBuf {
-    let home = home_dir();
-    for candidate in [
-        "hack",
-        "projects",
-        "code",
-        "dev",
-        "src",
-        "work",
-        "Developer",
-        "Documents/GitHub",
-    ] {
-        let path = home.join(candidate);
-        if path.is_dir() {
-            return path;
-        }
-    }
-    home
-}
-
-/// The catalogue a reader chooses from: the team's repositories, plus any shelves
-/// they named by hand.
-pub struct Catalog {
-    pub workspace: PathBuf,
-    pub team: Vec<Repo>,
-    pub shelves: Vec<ShelfCfg>,
-}
-
-impl Catalog {
-    pub fn build(config: &Config) -> Self {
-        let workspace = if config.workspace.as_os_str().is_empty() {
-            home_dir()
-        } else {
-            config.workspace.clone()
-        };
-        let team = crate::shelf::discover_repos(&workspace, 120);
-        Catalog {
-            workspace,
-            team,
-            shelves: config.shelves.clone(),
-        }
-    }
 }
 
 pub fn display_path(p: &Path) -> String {

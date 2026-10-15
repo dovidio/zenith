@@ -1,4 +1,4 @@
-//! The window: a shelf on the left, a page in the middle, a table of contents on
+//! The window: a folder on the left, a page in the middle, a table of contents on
 //! the right, and a reading cursor instead of a caret.
 
 use std::collections::BTreeSet;
@@ -10,12 +10,12 @@ use egui::{
     Sense, Stroke, TextStyle, Ui, ViewportCommand, vec2,
 };
 
-use crate::catalog::{Catalog, Store, display_path};
+use crate::catalog::{Store, display_path};
 use crate::distill;
 use crate::fuzzy;
 use crate::outline::{self, SymKind, Symbol};
 use crate::reader::{self, Laid, Paint, Style};
-use crate::shelf::{self, Entry, FileEntry, Shelf};
+use crate::folder::{self, Entry, FileEntry, Folder};
 use crate::syntax::{Document, Highlighter, Readable};
 use crate::theme::{self, Palette, Tone};
 use crate::typography::{self, Typography};
@@ -157,8 +157,8 @@ struct Loading {
 }
 
 /// A folder being walked in the background.
-struct ShelfLoad {
-    rx: std::sync::mpsc::Receiver<std::io::Result<shelf::Shelf>>,
+struct FolderLoad {
+    rx: std::sync::mpsc::Receiver<std::io::Result<folder::Folder>>,
     root: PathBuf,
     focus: Option<PathBuf>,
 }
@@ -198,16 +198,14 @@ struct Open {
 
 pub struct Zenith {
     store: Store,
-    catalog: Catalog,
     hl: Highlighter,
     typo: Typography,
     palette: Palette,
     scale: f32,
     char_w: f32,
 
-    shelf: Option<Shelf>,
+    folder: Option<Folder>,
     expanded: BTreeSet<String>,
-    team_open: bool,
 
     open: Option<Open>,
     /// Where the reader is: a line and a column, so word and bracket motions mean
@@ -222,8 +220,8 @@ pub struct Zenith {
     /// A background pass over a large file, if one is running.
     loading: Option<Loading>,
     /// A background walk of a folder, if one is running.
-    shelf_load: Option<ShelfLoad>,
-    /// Every row the shelf panel is showing, in order, built once per frame so that the
+    folder_load: Option<FolderLoad>,
+    /// Every row the folder panel is showing, in order, built once per frame so that the
     /// keyboard and the drawing agree about what is on screen.
     tree_rows: Vec<TreeRow>,
     /// Whether the keyboard is in the tree rather than on the page.
@@ -245,7 +243,7 @@ pub struct Zenith {
     jump_pos: usize,
     outline_sel: Option<usize>,
 
-    show_shelf: bool,
+    show_panels: bool,
     show_outline: bool,
     zen: bool,
     show_help: bool,
@@ -296,11 +294,6 @@ impl Zenith {
             store.config.distilled = d;
         }
         let config = store.config.clone();
-        let t_walk = std::time::Instant::now();
-        let catalog = Catalog::build(&config);
-        if std::env::var("ZENITH_TIMING").is_ok() {
-            eprintln!("timing: catalogue walk {:.0?}", t_walk.elapsed());
-        }
         let palette = theme::by_name(&config.theme);
         let typo = typography::build(0, 0, 0);
         cc.egui_ctx.set_fonts(typo.defs.clone());
@@ -333,20 +326,18 @@ impl Zenith {
             scale: config.font_scale,
             char_w: 15.0 * config.font_scale * 0.6,
             store,
-            catalog,
             hl,
             typo,
             palette,
-            shelf: None,
+            folder: None,
             expanded: BTreeSet::new(),
-            team_open: false,
             open: None,
             caret: vim::Caret::default(),
             chords: vim::Chords::default(),
             hold_down: std::env::var("ZENITH_HOLD_DOWN").is_ok(),
             frame: 0,
             loading: None,
-            shelf_load: None,
+            folder_load: None,
             tree_rows: Vec::new(),
             tree_focus: false,
             tree_sel: None,
@@ -358,7 +349,7 @@ impl Zenith {
             jumps: Vec::new(),
             jump_pos: 0,
             outline_sel: None,
-            show_shelf: true,
+            show_panels: true,
             show_outline: !config.zen,
             zen: config.zen,
             show_help: false,
@@ -420,21 +411,25 @@ impl Zenith {
     /// Where does the reader begin? A file on the command line wins; otherwise the
     /// last place they were reading; otherwise the project they left open.
     fn choose_startup(&mut self, target: Option<PathBuf>) {
+        // What to open, in order: what was asked for on the command line, the last folder
+        // this reader had open, and — because running `zenith` inside a project should do
+        // the obvious thing — the working directory, if that is what it looks like.
         let target = target
             .or_else(|| self.store.session.last_root.clone())
-            .or_else(|| self.store.session.last_file.clone());
+            .or_else(|| self.store.session.last_file.clone())
+            .or_else(working_project);
 
         let Some(target) = target else {
             self.status = keys("press {mod}O to open a folder");
             return;
         };
         if target.is_dir() {
-            self.open_shelf(&target, None);
+            self.open_folder(&target, None);
         } else if target.is_file() {
-            // The file the reader asked for, now; the shelf around it can take its time.
+            // The file the reader asked for, now; the folder around it can take its time.
             let root = project_root(&target);
             self.open_file(&target);
-            self.open_shelf(&root, Some(target));
+            self.open_folder(&root, Some(target));
         }
     }
 
@@ -445,8 +440,13 @@ impl Zenith {
     /// The walk does not happen here. Reading a directory tree means a stat call per file,
     /// and on a large tree that is seconds — long enough that doing it inline held the
     /// window blank until it finished. The file the reader asked for opens at once, and
-    /// the shelf arrives on its own a moment later.
-    fn open_shelf(&mut self, root: &Path, focus: Option<PathBuf>) {
+    /// the folder arrives on its own a moment later.
+    fn open_folder(&mut self, root: &Path, focus: Option<PathBuf>) {
+        // Absolute from here on: a folder named `.` has no file name to display, and a
+        // relative path remembered in the session breaks the next time zenith is launched
+        // from somewhere else.
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let root = root.as_path();
         let name = root
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
@@ -454,7 +454,7 @@ impl Zenith {
         let cfg = self.store.config.clone();
 
         self.store.session.last_root = Some(root.to_path_buf());
-        self.shelf = None;
+        self.folder = None;
         self.expanded.clear();
         self.expanded.insert(String::new());
         self.store.save_session();
@@ -466,7 +466,7 @@ impl Zenith {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let t = std::time::Instant::now();
-            let result = shelf::open(
+            let result = folder::open(
                 &root_for_thread,
                 &name_for_thread,
                 cfg.code_only,
@@ -483,7 +483,7 @@ impl Zenith {
             }
             let _ = tx.send(result);
         });
-        self.shelf_load = Some(ShelfLoad {
+        self.folder_load = Some(FolderLoad {
             rx,
             root: root.to_path_buf(),
             focus,
@@ -491,16 +491,16 @@ impl Zenith {
     }
 
     /// The file a reader should be shown first: a README, then a manifest, then an
-    /// entry point, then the first file in the shelf.
+    /// entry point, then the first file in the folder.
     fn first_doorway(&self) -> Option<PathBuf> {
-        let shelf = self.shelf.as_ref()?;
+        let folder = self.folder.as_ref()?;
         let find = |pred: &dyn Fn(&FileEntry) -> bool| {
-            shelf.files.iter().find(|f| pred(f)).map(|f| f.path.clone())
+            folder.files.iter().find(|f| pred(f)).map(|f| f.path.clone())
         };
         find(&|f| f.name.to_ascii_lowercase().starts_with("readme"))
             .or_else(|| find(&|f| f.rel.matches('/').count() == 0 && f.doorway))
             .or_else(|| find(&|f| f.doorway))
-            .or_else(|| shelf.files.first().map(|f| f.path.clone()))
+            .or_else(|| folder.files.first().map(|f| f.path.clone()))
     }
 
     fn rebuild_metrics(&mut self, ctx: &egui::Context) {
@@ -555,7 +555,7 @@ impl Zenith {
     fn open_file(&mut self, path: &Path) {
         self.remember_position();
         let rel = self
-            .shelf
+            .folder
             .as_ref()
             .and_then(|s| s.file(path).map(|f| f.rel.clone()))
             .unwrap_or_else(|| {
@@ -730,8 +730,8 @@ impl Zenith {
 
     /// Expand every ancestor folder of `path` so the open file is visible in the tree.
     fn expand_to(&mut self, path: &Path) {
-        let Some(shelf) = &self.shelf else { return };
-        let Some(rel) = shelf.file(path).map(|f| f.rel.clone()) else {
+        let Some(folder) = &self.folder else { return };
+        let Some(rel) = folder.file(path).map(|f| f.rel.clone()) else {
             return;
         };
         let mut acc = String::new();
@@ -746,8 +746,8 @@ impl Zenith {
     }
 
     fn step_file(&mut self, forward: bool) {
-        let Some(shelf) = &self.shelf else { return };
-        let files: Vec<PathBuf> = shelf
+        let Some(folder) = &self.folder else { return };
+        let files: Vec<PathBuf> = folder
             .files
             .iter()
             .filter(|f| f.size > 0)
@@ -1001,8 +1001,6 @@ impl Zenith {
     fn tree_open(&mut self) {
         let Some(idx) = self.tree_index() else { return };
         match self.tree_rows[idx].clone() {
-            TreeRow::Team => self.team_open = !self.team_open,
-            TreeRow::Repo { path, .. } => self.open_shelf(&path, None),
             TreeRow::OpenFolder => self.pick_folder(),
             TreeRow::Dir { rel, open, .. } => {
                 if open {
@@ -1453,7 +1451,7 @@ impl Zenith {
             .set_title("Open a folder to read")
             .pick_folder()
         {
-            self.open_shelf(&dir, None);
+            self.open_folder(&dir, None);
         }
     }
 
@@ -1527,9 +1525,9 @@ impl eframe::App for Zenith {
         }
 
         // Has the background walk of a folder finished?
-        if let Some(load) = &self.shelf_load {
+        if let Some(load) = &self.folder_load {
             match load.rx.try_recv() {
-                Ok(Ok(shelf)) => {
+                Ok(Ok(folder)) => {
                     let name = load
                         .root
                         .file_name()
@@ -1537,9 +1535,9 @@ impl eframe::App for Zenith {
                         .unwrap_or_default();
                     let focus = load.focus.clone();
                     let root = load.root.clone();
-                    let files = shelf.files.len();
-                    self.shelf_load = None;
-                    self.shelf = Some(shelf);
+                    let files = folder.files.len();
+                    self.folder_load = None;
+                    self.folder = Some(folder);
                     self.status = format!("{name} — {files} files");
                     let wanted = focus
                         .filter(|p| p.starts_with(&root))
@@ -1560,14 +1558,14 @@ impl eframe::App for Zenith {
                 }
                 Ok(Err(e)) => {
                     let root = load.root.clone();
-                    self.shelf_load = None;
+                    self.folder_load = None;
                     self.status = format!("cannot read {root:?}: {e}");
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(120));
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.shelf_load = None;
+                    self.folder_load = None;
                 }
             }
         }
@@ -1668,7 +1666,7 @@ impl eframe::App for Zenith {
         }
 
         if let Some(dir) = dropped_folder(&ctx) {
-            self.open_shelf(&dir, None);
+            self.open_folder(&dir, None);
         }
 
         // Remember where we are every so often, not only on a clean exit: closing a
@@ -1690,8 +1688,8 @@ impl eframe::App for Zenith {
         if !zen {
             self.top_bar(ui);
             self.status_bar(ui);
-            if self.show_shelf {
-                self.shelf_panel(ui);
+            if self.show_panels {
+                self.folder_panel(ui);
             }
             if self.show_outline {
                 self.outline_panel(ui);
@@ -1901,39 +1899,21 @@ impl Zenith {
             });
     }
 
-    /// The shelf panel's rows, in the order they appear on screen.
+    /// The folder panel's rows, in the order they appear on screen.
     ///
     /// Built before the keyboard is read each frame, because both the navigation and the
     /// drawing have to mean the same thing by "the row below this one".
     fn build_tree_rows(&self) -> Vec<TreeRow> {
-        let mut out: Vec<TreeRow> = vec![TreeRow::Team];
-        if self.team_open {
-            for r in &self.catalog.team {
-                out.push(TreeRow::Repo {
-                    name: r.name.clone(),
-                    kind: r.kind.clone(),
-                    path: r.path.clone(),
-                    named: false,
-                });
-            }
-        }
-        for s in &self.catalog.shelves {
-            out.push(TreeRow::Repo {
-                name: s.name.clone(),
-                kind: "shelf".to_string(),
-                path: s.path.clone(),
-                named: true,
-            });
-        }
-        out.push(TreeRow::OpenFolder);
-        if let Some(shelf) = &self.shelf {
+        // One row to open something else, then the folder that is open.
+        let mut out: Vec<TreeRow> = vec![TreeRow::OpenFolder];
+        if let Some(folder) = &self.folder {
             let mut acc = String::new();
-            flatten(&shelf.tree, &self.expanded, 0, &mut acc, &mut out);
+            flatten(&folder.tree, &self.expanded, 0, &mut acc, &mut out);
         }
         out
     }
 
-    fn shelf_panel(&mut self, ui: &mut Ui) {
+    fn folder_panel(&mut self, ui: &mut Ui) {
         let pal = self.palette;
         let font = self.typo.ui_id(PANEL_ROW_FONT * self.scale);
         let label_font = self.typo.ui_id(PANEL_LABEL_FONT * self.scale);
@@ -1947,23 +1927,19 @@ impl Zenith {
             .take_while(|r| !matches!(r, TreeRow::Dir { .. } | TreeRow::File { .. }))
             .cloned()
             .collect();
-        let shelf_files: Vec<TreeRow> = rows
+        let tree_files: Vec<TreeRow> = rows
             .iter()
             .filter(|r| matches!(r, TreeRow::Dir { .. } | TreeRow::File { .. }))
             .cloned()
             .collect();
-        let workspace = display_path(&self.catalog.workspace);
-        let shelf_name = self.shelf.as_ref().map(|s| s.name.clone()).unwrap_or_default();
+        let folder_name = self.folder.as_ref().map(|s| s.name.clone()).unwrap_or_default();
         let current = self.open.as_ref().map(|o| o.path.clone());
-        let team_open = self.team_open;
 
         let mut clicked_file: Option<PathBuf> = None;
-        let mut clicked_repo: Option<PathBuf> = None;
         let mut toggled_dir: Option<String> = None;
-        let mut toggle_team = false;
         let mut open_folder = false;
 
-        egui::Panel::left("zenith-shelf")
+        egui::Panel::left("zenith-folder")
             .resizable(true)
             .default_size(266.0)
             .min_size(180.0)
@@ -1975,69 +1951,31 @@ impl Zenith {
                     .inner_margin(Margin::symmetric(PANEL_MARGIN_X, PANEL_MARGIN_Y)),
             )
             .show(ui, |ui| {
-                // -- every row above the shelf, drawn from the same list the keyboard
+                // -- one row to open something else, drawn from the same list the keyboard
                 // walks, so the two can never disagree about what is on screen.
                 for item in &top_items {
                     let key = item.key();
                     let picked = self.tree_focus && self.tree_sel.as_ref() == Some(&key);
-                    let on_shelf = match item {
-                        TreeRow::Repo { path, .. } => {
-                            self.shelf.as_ref().is_some_and(|sh| sh.root == *path)
-                        }
-                        _ => false,
-                    };
-                    let (text, glyph, right, ink) = match item {
-                        TreeRow::Team => (
-                            "TEAM".to_string(),
-                            "",
-                            Some(workspace.clone()),
-                            pal.ink_faint,
-                        ),
-                        TreeRow::Repo { name, kind, named, .. } => (
-                            name.clone(),
-                            if *named {
-                                self.typo.marks.pick("§")
-                            } else {
-                                self.typo.marks.pick("❖")
-                            },
-                            Some(kind.clone()),
-                            if picked || on_shelf { pal.ink } else { pal.ink_soft },
-                        ),
-                        TreeRow::OpenFolder => (
-                            "Open a folder to read…".to_string(),
-                            typography::mod_label(),
-                            Some(keys("{mod}O")),
-                            pal.accent,
-                        ),
-                        _ => continue,
-                    };
-                    let is_team = matches!(item, TreeRow::Team);
+                    let TreeRow::OpenFolder = item else { continue };
                     let resp = row(
                         ui,
                         &pal,
-                        &text,
-                        glyph,
-                        item.depth(),
+                        "Open a folder to read…",
+                        typography::mod_label(),
+                        0,
                         picked,
-                        ink,
-                        if is_team { &label_font } else { &font },
-                        right.as_deref(),
-                        if is_team { Some(team_open) } else { None },
+                        pal.accent,
+                        &font,
+                        Some(&keys("{mod}O")),
+                        None,
                     );
                     if self.tree_moved && picked {
                         resp.scroll_to_me(Some(egui::Align::Center));
                     }
                     if resp.clicked() {
-                        // A click means what the key would mean: one selection, moved by
-                        // a different hand.
                         self.tree_focus = true;
                         self.tree_sel = Some(key);
-                        match item {
-                            TreeRow::Team => toggle_team = true,
-                            TreeRow::Repo { path, .. } => clicked_repo = Some(path.clone()),
-                            TreeRow::OpenFolder => open_folder = true,
-                            _ => {}
-                        }
+                        open_folder = true;
                     }
                 }
                 ui.add_space(6.0);
@@ -2048,15 +1986,15 @@ impl Zenith {
                 );
                 ui.add_space(6.0);
 
-                // -- the shelf
+                // -- the folder
                 ui.painter().text(
                     Pos2::new(ui.cursor().left() + 1.0, ui.cursor().top() + PANEL_LABEL_DROP),
                     Align2::LEFT_CENTER,
-                    format!("SHELF · {shelf_name}"),
+                    format!("FOLDER · {folder_name}"),
                     label_font.clone(),
                     pal.ink_faint,
                 );
-                if let Some(s) = &self.shelf {
+                if let Some(s) = &self.folder {
                     // No file count, no folder count, no total size: none of it is what
                     // a reader came for. Only a fault gets a line of its own.
                     let mut warn = String::new();
@@ -2084,7 +2022,7 @@ impl Zenith {
                     if s.filtered > 0 {
                         let note = format!(
                             "{} file{} not shown: not source, hidden, or build output \
-                             (settings › shelf)",
+                             (settings › folder)",
                             s.filtered,
                             if s.filtered == 1 { "" } else { "s" }
                         );
@@ -2093,7 +2031,7 @@ impl Zenith {
                                 Pos2::new(ui.cursor().left(), ui.cursor().top()),
                                 vec2(ui.available_width(), 16.0),
                             ),
-                            ui.id().with("shelf-filter"),
+                            ui.id().with("folder-filter"),
                             Sense::hover(),
                         )
                         .on_hover_text(RichText::new(note).font(label_font.clone()));
@@ -2105,7 +2043,7 @@ impl Zenith {
                     .id_salt("zenith-tree")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        if shelf_files.is_empty() {
+                        if tree_files.is_empty() {
                             ui.painter().text(
                                 Pos2::new(ui.min_rect().left() + 6.0, ui.min_rect().top() + 8.0),
                                 Align2::LEFT_TOP,
@@ -2115,7 +2053,7 @@ impl Zenith {
                             );
                             return;
                         }
-                        for item in &shelf_files {
+                        for item in &tree_files {
                             let key = item.key();
                             let picked = self.tree_focus && self.tree_sel.as_ref() == Some(&key);
                             let (name, depth, doorway, empty_file, path, rel, is_open) = match item
@@ -2172,9 +2110,6 @@ impl Zenith {
                     });
             });
 
-        if toggle_team {
-            self.team_open = !self.team_open;
-        }
         if let Some(rel) = toggled_dir {
             if !self.expanded.remove(&rel) {
                 self.expanded.insert(rel);
@@ -2182,9 +2117,6 @@ impl Zenith {
         }
         if open_folder {
             self.pick_folder();
-        }
-        if let Some(path) = clicked_repo {
-            self.open_shelf(&path, None);
         }
         if let Some(path) = clicked_file {
             self.open_file(&path);
@@ -2636,7 +2568,7 @@ impl Zenith {
         let pos = Pos2::new(screen.center().x - width * 0.5, screen.top() + 96.0);
 
         // Matching files.
-        let matches: Vec<(i32, usize, Vec<usize>)> = match &self.shelf {
+        let matches: Vec<(i32, usize, Vec<usize>)> = match &self.folder {
             Some(s) => {
                 let mut v: Vec<(i32, usize, Vec<usize>)> = s
                     .files
@@ -2652,7 +2584,7 @@ impl Zenith {
             }
             None => Vec::new(),
         };
-        let file_rows: Vec<(String, bool)> = match &self.shelf {
+        let file_rows: Vec<(String, bool)> = match &self.folder {
             Some(s) => matches
                 .iter()
                 .map(|(_, i, _)| {
@@ -2693,7 +2625,7 @@ impl Zenith {
                 ui.visuals_mut().extreme_bg_color = pal.panel_deep;
                 let resp = ui.add(
                     egui::TextEdit::singleline(&mut self.query)
-                        .hint_text("find a file in this shelf")
+                        .hint_text("find a file in this folder")
                         .font(input_font.clone())
                         .desired_width(width - 24.0)
                         .frame(Frame::NONE),
@@ -2795,7 +2727,7 @@ impl Zenith {
 
         if let Some(i) = chosen {
             if let Some((_, idx, _)) = matches.get(i) {
-                if let Some(s) = &self.shelf {
+                if let Some(s) = &self.folder {
                     let path = s.files[*idx].path.clone();
                     self.open_file(&path);
                 }
@@ -2963,7 +2895,7 @@ impl Zenith {
             .show(ctx, |ui| {
                 // ---- section tabs ----
                 ui.horizontal(|ui| {
-                    for (i, name) in ["Page", "Type", "Theme", "Shelf"].iter().enumerate() {
+                    for (i, name) in ["Page", "Type", "Theme", "Folder"].iter().enumerate() {
                         let selected = self.settings_tab == i;
                         let text = RichText::new(*name)
                             .font(head.clone())
@@ -3137,7 +3069,7 @@ impl Zenith {
                                 });
                             }
                         }
-                        // ------------------------------------------------ shelf
+                        // ------------------------------------------------ folder
                         _ => {
                             let cfg = &mut self.store.config;
                             changed |= toggles(
@@ -3150,8 +3082,13 @@ impl Zenith {
                                 ],
                             );
                             ui.add_space(6.0);
+                            let where_ = self
+                                .folder
+                                .as_ref()
+                                .map(|f| display_path(&f.root))
+                                .unwrap_or_else(|| "no folder open".to_string());
                             ui.label(
-                                RichText::new(display_path(&self.catalog.workspace))
+                                RichText::new(where_)
                                     .font(small.clone())
                                     .color(pal.ink_faint),
                             );
@@ -3229,7 +3166,7 @@ impl Zenith {
                     self.zen = true;
                     self.store.config.focus_lens = true;
                     let nested = self
-                        .shelf
+                        .folder
                         .as_ref()
                         .map(|s| s.root.join("src/reader.rs"))
                         .filter(|p| p.is_file());
@@ -3321,17 +3258,9 @@ impl Zenith {
 // Small helpers
 // ---------------------------------------------------------------------------
 
-/// One visible line of the shelf tree.
+/// One visible line of the folder tree.
 #[derive(Clone)]
 enum TreeRow {
-    Team,
-    Repo {
-        name: String,
-        kind: String,
-        path: PathBuf,
-        /// A folder named by hand in the config, rather than found in the workspace.
-        named: bool,
-    },
     OpenFolder,
     Dir {
         name: String,
@@ -3355,8 +3284,6 @@ enum TreeRow {
 /// is exactly the kind of quiet misbehaviour a keyboard interface cannot afford.
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum TreeKey {
-    Team,
-    Repo(PathBuf),
     OpenFolder,
     Dir(String),
     File(PathBuf),
@@ -3365,34 +3292,25 @@ enum TreeKey {
 impl TreeRow {
     fn key(&self) -> TreeKey {
         match self {
-            TreeRow::Team => TreeKey::Team,
-            TreeRow::Repo { path, .. } => TreeKey::Repo(path.clone()),
             TreeRow::OpenFolder => TreeKey::OpenFolder,
             TreeRow::Dir { rel, .. } => TreeKey::Dir(rel.clone()),
             TreeRow::File { path, .. } => TreeKey::File(path.clone()),
         }
     }
 
-    /// How far to indent, in steps.
-    fn depth(&self) -> usize {
-        match self {
-            TreeRow::Team | TreeRow::OpenFolder => 0,
-            TreeRow::Repo { .. } => 1,
-            TreeRow::Dir { depth, .. } | TreeRow::File { depth, .. } => *depth,
-        }
-    }
-
     /// For `h`: which row is this row's parent, if it has one on screen?
     fn is_child_of(&self, other: &TreeRow) -> bool {
         match (self, other) {
-            (TreeRow::Repo { .. }, TreeRow::Team) => true,
-            (TreeRow::Dir { depth, .. } | TreeRow::File { depth, .. }, parent) => match parent {
+            (
+                TreeRow::Dir { depth, .. } | TreeRow::File { depth, .. },
                 TreeRow::Dir {
                     depth: pd, open, ..
-                } => *open && *pd + 1 == *depth,
-                TreeRow::Repo { .. } => *depth == 0,
-                _ => false,
-            },
+                },
+            ) => *open && *pd + 1 == *depth,
+            // A top-level row belongs to the folder itself.
+            (TreeRow::Dir { depth, .. } | TreeRow::File { depth, .. }, TreeRow::OpenFolder) => {
+                *depth == 0
+            }
             _ => false,
         }
     }
@@ -3412,7 +3330,7 @@ fn walk_index(len: usize, current: Option<usize>, delta: i32) -> usize {
 /// The row that the row at `idx` belongs to, for `h`.
 ///
 /// Not simply "the row above": a folder's children are its own, and a repository belongs
-/// to the team. Walking up means finding the nearest row above that this one is inside.
+/// it belongs to. Walking up means finding the nearest row above that contains it.
 fn parent_index(rows: &[TreeRow], idx: usize) -> Option<usize> {
     let row = rows.get(idx)?;
     (0..idx).rev().find(|i| row.is_child_of(&rows[*i]))
@@ -3668,6 +3586,29 @@ fn truncate(s: &str, max_chars: usize) -> String {
 }
 
 /// Walk up from a file to the repository (or project) that contains it.
+/// The directory zenith was launched from, if it looks like a project.
+///
+/// With no argument and no memory of a last folder, a reader who typed `zenith` inside a
+/// repository means that repository. Anywhere else — a home directory, a desktop icon,
+/// `/` — the reading room opens empty instead of walking something enormous.
+fn working_project() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    let markers = [
+        ".git",
+        "Cargo.toml",
+        "package.json",
+        "go.mod",
+        "pyproject.toml",
+        "pom.xml",
+        "Gemfile",
+        "CMakeLists.txt",
+    ];
+    markers
+        .iter()
+        .any(|m| cwd.join(m).exists())
+        .then_some(cwd)
+}
+
 fn project_root(file: &Path) -> PathBuf {
     let parent = file.parent().map(|p| p.to_path_buf());
     let markers = [
@@ -3698,7 +3639,7 @@ fn project_root(file: &Path) -> PathBuf {
         dir = d.parent().map(|p| p.to_path_buf());
         hops += 1;
     }
-    // No marker anywhere above it: the file's own folder is the shelf.
+    // No marker anywhere above it: the file's own folder is the folder.
     parent.unwrap_or_else(|| PathBuf::from("."))
 }
 
@@ -3955,10 +3896,10 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("n N", "next and previous search match"),
     ("[ ]", "previous / next chapter (the outline)"),
     ("ctrl-o ctrl-i", "back and forward through where you have been"),
-    ("J K", "next / previous file in the shelf"),
+    ("J K", "next / previous file in the folder"),
     ("j k l h", "in the tree: move, open, and back out"),
     ("enter, G, gg", "in the tree: open, last row, first row"),
-    ("⌘P or ⌘K or ctrl-p", "find a file in the shelf"),
+    ("⌘P or ⌘K or ctrl-p", "find a file in the folder"),
     ("/ or ⌘F", "search inside this file"),
     ("tab", "move the keyboard into the tree"),
     ("o", "contents panel"),
@@ -4091,7 +4032,6 @@ mod tree_tests {
     #[test]
     fn going_back_finds_the_folder_you_came_from() {
         let rows = vec![
-            TreeRow::Team,
             TreeRow::OpenFolder,
             dir("src", 0, true),
             file("src/main.rs", 1),
@@ -4101,26 +4041,16 @@ mod tree_tests {
             dir("docs", 0, false),
         ];
         // A nested file belongs to its folder, not to the row above it.
-        assert_eq!(parent_index(&rows, 5), Some(4));
-        // A file at the top of the shelf belongs to the shelf itself, which is depth 0.
-        assert_eq!(parent_index(&rows, 3), Some(2));
-        // A closed folder's children are not on screen, so there is nothing to go back to.
-        assert_eq!(parent_index(&rows, 3).map(|i| i != 7), Some(true));
-        // The first row has no parent.
+        assert_eq!(parent_index(&rows, 4), Some(3));
+        // A file at the top of the folder belongs to the folder itself, which is depth 0.
+        assert_eq!(parent_index(&rows, 2), Some(1));
+        // The open-folder row has no parent.
         assert_eq!(parent_index(&rows, 0), None);
     }
 
     #[test]
-    fn a_repository_belongs_to_the_team() {
-        let rows = vec![
-            TreeRow::Team,
-            TreeRow::Repo {
-                name: "zenith".into(),
-                kind: "rust".into(),
-                path: std::path::PathBuf::from("/tmp/zenith"),
-                named: false,
-            },
-        ];
+    fn a_top_level_folder_belongs_to_the_open_folder_row() {
+        let rows = vec![TreeRow::OpenFolder, dir("src", 0, true)];
         assert_eq!(parent_index(&rows, 1), Some(0));
     }
 }

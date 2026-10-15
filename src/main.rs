@@ -16,7 +16,7 @@ mod markdown;
 mod outline;
 mod png;
 mod reader;
-mod shelf;
+mod folder;
 mod syntax;
 mod theme;
 mod typography;
@@ -166,9 +166,9 @@ USAGE:
 
 READING KEYS:
     j / k, space, ⇧space      move the reading cursor / page
-    n / p                     next / previous file in the shelf
+    n / p                     next / previous file in the folder
     enter                     jump to the outline entry under the cursor line
-    /  or ⌘K                  find a file in the shelf
+    /  or ⌘K                  find a file in the folder
     o                         outline panel
     y                         zen mode (hide all chrome)
     f                         focus lens — dim everything but the block you read
@@ -214,7 +214,7 @@ fn print_md(path: &std::path::Path) {
     }
 }
 
-/// Walk a folder the way the shelf does, and say what it cost.
+/// Walk a folder the way the reader does, and say what it cost.
 ///
 /// Reading a large tree is the slowest thing zenith does, and the reasons are not
 /// obvious: a stat call per file, plus the repository's own ignore rules. This is the
@@ -225,7 +225,7 @@ fn walk(root: &std::path::Path) {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
     let t = std::time::Instant::now();
-    match shelf::open(root, &name, true, false) {
+    match folder::open(root, &name, true, false) {
         Ok(s) => {
             println!("{}\n", root.display());
             println!("  files              {}", s.files.len());
@@ -234,7 +234,7 @@ fn walk(root: &std::path::Path) {
             println!("  stopped at the cap {}", s.truncated);
             println!("  took               {:.2?}", t.elapsed());
             if s.truncated {
-                println!("\n  the shelf stops at 40,000 files; this tree is larger");
+                println!("\n  the folder stops at 40,000 files; this tree is larger");
             }
         }
         Err(e) => eprintln!("zenith: cannot read {}: {e}", root.display()),
@@ -427,7 +427,7 @@ fn dump(path: &std::path::Path) {
     println!(
         "lines   : {} ({}{})",
         doc.lines.len(),
-        shelf::human_size(doc.bytes as u64),
+        folder::human_size(doc.bytes as u64),
         if truncated || doc.truncated {
             ", truncated"
         } else {

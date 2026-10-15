@@ -1,11 +1,10 @@
 //! Opening a folder for reading.
 //!
 //! Nothing here ever writes, creates, or touches a file's mtime. We walk with the
-//! `ignore` crate so a repository's own .gitignore decides what is source and what
-//! is noise — the same judgment the team already made.
+//! `ignore` crate so a repository's own .gitignore decides what is source and what is
+//! noise — the same judgment the project already made.
 
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use ignore::WalkBuilder;
 
@@ -125,7 +124,7 @@ pub struct Dir {
     pub children: Vec<Entry>,
 }
 
-pub struct Shelf {
+pub struct Folder {
     pub name: String,
     pub root: PathBuf,
     pub tree: Vec<Entry>,
@@ -141,7 +140,7 @@ pub struct Shelf {
     pub truncated: bool,
 }
 
-impl Shelf {
+impl Folder {
     pub fn file(&self, path: &Path) -> Option<&FileEntry> {
         self.files.iter().find(|f| f.path == path)
     }
@@ -158,7 +157,7 @@ fn is_noise_dir(name: &str) -> bool {
 
 /// Open `root` for reading. `code_only` hides things like images, archives, and
 /// lockfiles; `show_hidden` lets dotfiles in.
-pub fn open(root: &Path, name: &str, code_only: bool, show_hidden: bool) -> std::io::Result<Shelf> {
+pub fn open(root: &Path, name: &str, code_only: bool, show_hidden: bool) -> std::io::Result<Folder> {
     let mut files: Vec<FileEntry> = Vec::new();
     let mut filtered = 0usize;
     let mut unreadable = 0usize;
@@ -250,7 +249,7 @@ pub fn open(root: &Path, name: &str, code_only: bool, show_hidden: bool) -> std:
     files.sort_by(|a, b| a.rel.cmp(&b.rel));
     let tree = build_tree(&files);
 
-    Ok(Shelf {
+    Ok(Folder {
         name: name.to_string(),
         root: root.to_path_buf(),
         tree,
@@ -323,103 +322,6 @@ fn sort_entries(entries: &mut [Entry]) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Team discovery
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Debug)]
-pub struct Repo {
-    pub name: String,
-    pub path: PathBuf,
-    pub touched: Option<SystemTime>,
-    /// Language hint for the shelf entry, derived from manifests present.
-    pub kind: String,
-}
-
-/// Find the team's repositories: every directory under `workspace` that looks like
-/// a project. Recency of modification is the ordering, because a team's attention
-/// is what a reader usually wants to follow.
-pub fn discover_repos(workspace: &Path, max: usize) -> Vec<Repo> {
-    let mut out: Vec<Repo> = Vec::new();
-    let Ok(rd) = std::fs::read_dir(workspace) else {
-        return out;
-    };
-    for entry in rd.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') || is_noise_dir(&name) {
-            continue;
-        }
-        let mut kinds: Vec<&str> = Vec::new();
-        for m in MANIFESTS {
-            if path.join(m).exists() {
-                kinds.push(match *m {
-                    "Cargo.toml" => "rust",
-                    "package.json" => "js",
-                    "go.mod" => "go",
-                    "pyproject.toml" | "setup.py" | "requirements.txt" => "python",
-                    "pom.xml" | "build.gradle" | "build.gradle.kts" => "java",
-                    "Gemfile" => "ruby",
-                    "composer.json" => "php",
-                    "CMakeLists.txt" => "c/c++",
-                    "Package.swift" => "swift",
-                    "pubspec.yaml" => "dart",
-                    "mix.exs" => "elixir",
-                    _ => "project",
-                });
-            }
-        }
-        let is_repo = path.join(".git").exists();
-        if kinds.is_empty() && !is_repo {
-            continue;
-        }
-        let touched = dir_touched(&path);
-        out.push(Repo {
-            name,
-            path,
-            touched,
-            kind: dedup_kinds(&kinds, is_repo),
-        });
-        if out.len() >= max {
-            break;
-        }
-    }
-    out.sort_by(|a, b| b.touched.cmp(&a.touched).then(a.name.cmp(&b.name)));
-    out
-}
-
-fn dedup_kinds(kinds: &[&str], is_repo: bool) -> String {
-    let mut seen: Vec<&str> = Vec::new();
-    for k in kinds {
-        if !seen.contains(k) {
-            seen.push(k);
-        }
-    }
-    if seen.is_empty() {
-        return if is_repo { "repository".into() } else { "folder".into() };
-    }
-    seen.join(" · ")
-}
-
-fn dir_touched(path: &Path) -> Option<SystemTime> {
-    let mut newest: Option<SystemTime> = None;
-    for probe in [path.join(".git"), path.to_path_buf()] {
-        if let Ok(md) = std::fs::metadata(&probe) {
-            if let Ok(t) = md.modified() {
-                newest = Some(match newest {
-                    Some(n) if n > t => n,
-                    _ => t,
-                });
-            }
-        }
-    }
-    newest
-}
-
-#[allow(dead_code)]
 pub fn human_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     let b = bytes as f64;
