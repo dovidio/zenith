@@ -2455,6 +2455,10 @@ impl Zenith {
 
         let mut area = ScrollArea::vertical()
             .id_salt("zenith-page")
+            // The reading pane has its own indicator — the spine at the edge of the paper —
+            // so egui's floating scrollbar is a second bar at a second x, and the two never
+            // lined up. The spine is draggable instead, which is what the bar was for.
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
             .auto_shrink([false, false]);
         if let Some(y) = target {
             area = area.vertical_scroll_offset(y.max(0.0));
@@ -2560,16 +2564,49 @@ impl Zenith {
         }
 
         // The spine stays with the page, not with the text: it is a bookmark, not a
-        // scrollbar, so it lives at the edge of the paper.
+        // scrollbar, so it lives at the edge of the paper. It is also draggable, which is
+        // what a scrollbar was for — so there is one indicator here rather than two.
+        let spine_x = page_rect.right() - 16.0;
+        let spine_top = page_rect.top() + 10.0;
+        let spine_h = page_rect.height() - 20.0;
+        let grab = Rect::from_min_max(
+            Pos2::new(spine_x - 7.0, spine_top),
+            Pos2::new(spine_x + 7.0, spine_top + spine_h),
+        );
+        let handle = ui.interact(grab, ui.id().with("zenith-spine"), Sense::click_and_drag());
+        if handle.dragged() || handle.clicked() {
+            if let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
+                let frac = ((pos.y - spine_top) / spine_h).clamp(0.0, 1.0);
+                let y = self.frac_to_scroll(frac);
+                let landing = self
+                    .open
+                    .as_ref()
+                    .and_then(|o| o.laid.as_ref().map(|l| l.line_at(y)));
+                if let Some(line) = landing {
+                    if let Some(open) = self.open.as_ref() {
+                        let caret = vim::landing(&open.doc, line);
+                        self.jump_to(caret);
+                    }
+                }
+            }
+        }
         let frac = self.read_fraction();
         reader::paint_spine(
             ui.painter(),
-            page_rect.right() - 16.0,
-            page_rect.top() + 10.0,
-            page_rect.height() - 20.0,
+            spine_x,
+            spine_top,
+            spine_h,
             &pal,
             frac,
         );
+    }
+
+    /// The inverse of [`Self::read_fraction`]: a place on the spine is a place in the file.
+    fn frac_to_scroll(&self, frac: f32) -> f32 {
+        let Some(open) = &self.open else { return 0.0 };
+        let Some(laid) = &open.laid else { return 0.0 };
+        let span = (laid.total - laid.row_h * 4.0).max(1.0);
+        (frac.clamp(0.0, 1.0) * span).clamp(0.0, (laid.total - self.view_h).max(0.0))
     }
 
     fn read_fraction(&self) -> f32 {
