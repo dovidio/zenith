@@ -1935,8 +1935,8 @@ impl Zenith {
 
     fn shelf_panel(&mut self, ui: &mut Ui) {
         let pal = self.palette;
-        let font = self.typo.ui_id(12.5 * self.scale);
-        let label_font = self.typo.ui_id(10.5 * self.scale);
+        let font = self.typo.ui_id(PANEL_ROW_FONT * self.scale);
+        let label_font = self.typo.ui_id(PANEL_LABEL_FONT * self.scale);
 
         // Collect what we need before mutating. The rows come from the one list the
         // keyboard walks, so a row and its key action can never disagree about which row
@@ -1972,7 +1972,7 @@ impl Zenith {
             .frame(
                 Frame::NONE
                     .fill(pal.panel)
-                    .inner_margin(Margin::symmetric(8, 8)),
+                    .inner_margin(Margin::symmetric(PANEL_MARGIN_X, PANEL_MARGIN_Y)),
             )
             .show(ui, |ui| {
                 // -- every row above the shelf, drawn from the same list the keyboard
@@ -2050,7 +2050,7 @@ impl Zenith {
 
                 // -- the shelf
                 ui.painter().text(
-                    Pos2::new(ui.cursor().left() + 6.0, ui.cursor().top() + 7.0),
+                    Pos2::new(ui.cursor().left() + 1.0, ui.cursor().top() + PANEL_LABEL_DROP),
                     Align2::LEFT_CENTER,
                     format!("SHELF · {shelf_name}"),
                     label_font.clone(),
@@ -2099,7 +2099,7 @@ impl Zenith {
                         .on_hover_text(RichText::new(note).font(label_font.clone()));
                     }
                 }
-                ui.add_space(30.0);
+                ui.add_space(PANEL_LABEL_GAP);
 
                 ScrollArea::vertical()
                     .id_salt("zenith-tree")
@@ -2195,8 +2195,8 @@ impl Zenith {
 
     fn outline_panel(&mut self, ui: &mut Ui) {
         let pal = self.palette;
-        let font = self.typo.ui_id(12.0 * self.scale);
-        let label_font = self.typo.ui_id(10.5 * self.scale);
+        let font = self.typo.ui_id(PANEL_ROW_FONT * self.scale);
+        let label_font = self.typo.ui_id(PANEL_LABEL_FONT * self.scale);
         let glyph_font = self.typo.code_id(11.0 * self.scale);
 
         let items: Vec<(String, String, usize, usize, String, SymKind)> = self
@@ -2241,17 +2241,17 @@ impl Zenith {
             .frame(
                 Frame::NONE
                     .fill(pal.panel)
-                    .inner_margin(Margin::symmetric(10, 8)),
+                    .inner_margin(Margin::symmetric(PANEL_MARGIN_X, PANEL_MARGIN_Y)),
             )
             .show(ui, |ui| {
                 ui.painter().text(
-                    Pos2::new(ui.cursor().left() + 4.0, ui.cursor().top() + 7.0),
+                    Pos2::new(ui.cursor().left() + 1.0, ui.cursor().top() + PANEL_LABEL_DROP),
                     Align2::LEFT_CENTER,
                     "CONTENTS",
                     label_font.clone(),
                     pal.ink_faint,
                 );
-                ui.add_space(18.0);
+                ui.add_space(PANEL_LABEL_GAP);
                 if !some_open {
                     return;
                 }
@@ -3434,6 +3434,18 @@ fn count_lines(text: &str) -> usize {
 }
 
 
+// The two sidebars are one system, so they share a frame and a rhythm: the same inner
+// margin, the same drop for the label, the same gap between that label and the list, the
+// same row height and the same type size. Otherwise the eye reads them as two unrelated
+// columns that happen to be adjacent — which is what "not vertically aligned" means.
+const PANEL_MARGIN_X: i8 = 8;
+const PANEL_MARGIN_Y: i8 = 8;
+const PANEL_LABEL_DROP: f32 = 7.0;
+const PANEL_LABEL_GAP: f32 = 30.0;
+const PANEL_ROW_H: f32 = 21.0;
+const PANEL_ROW_FONT: f32 = 12.5;
+const PANEL_LABEL_FONT: f32 = 10.5;
+
 /// How wide three window buttons are, so the dragging area can stop before them.
 fn window_buttons_width() -> f32 {
     3.0 * (12.0 + 10.0) + 8.0
@@ -3546,7 +3558,8 @@ fn row(
     // distribution happens to ship, and on some machines the tree had no carets at all.
     caret_open: Option<bool>,
 ) -> egui::Response {
-    let (_rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 21.0), Sense::click());
+    let (_rect, resp) =
+        ui.allocate_exact_size(vec2(ui.available_width(), PANEL_ROW_H), Sense::click());
     let rect = resp.rect;
     if selected {
         ui.painter()
