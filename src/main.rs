@@ -68,6 +68,14 @@ fn main() {
                     None => die("--smoke needs an output path"),
                 }
             }
+            "--glyphs" => mode = Mode::Glyphs,
+            "--walk" => {
+                i += 1;
+                match args.get(i) {
+                    Some(p) => mode = Mode::Walk(PathBuf::from(p)),
+                    None => die("--walk needs a folder"),
+                }
+            }
             "--distill" => {
                 i += 1;
                 match args.get(i) {
@@ -105,6 +113,8 @@ fn main() {
         Mode::Grammars => grammars(),
         Mode::Faces(path) => typography::print_faces(&path),
         Mode::Distill(path) => distill(&path),
+        Mode::Glyphs => print_glyphs(),
+        Mode::Walk(path) => walk(&path),
         Mode::Scopes(path, n) => dump_scopes(&path, n),
         Mode::Smoke(out) => app::run_smoke(target, out, theme_override, measure_override, scale_override),
         Mode::Run => app::run(
@@ -124,6 +134,8 @@ enum Mode {
     Grammars,
     Faces(PathBuf),
     Distill(PathBuf),
+    Glyphs,
+    Walk(PathBuf),
     Scopes(PathBuf, usize),
     Smoke(PathBuf),
 }
@@ -169,6 +181,62 @@ fn die(msg: &str) -> ! {
     eprintln!("zenith: {msg}");
     eprintln!("try `zenith --help`");
     std::process::exit(2);
+}
+
+/// Walk a folder the way the shelf does, and say what it cost.
+///
+/// Reading a large tree is the slowest thing zenith does, and the reasons are not
+/// obvious: a stat call per file, plus the repository's own ignore rules. This is the
+/// measurement, so "it is slow" becomes a number and a cause.
+fn walk(root: &std::path::Path) {
+    let name = root
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let t = std::time::Instant::now();
+    match shelf::open(root, &name, true, false) {
+        Ok(s) => {
+            println!("{}\n", root.display());
+            println!("  files              {}", s.files.len());
+            println!("  filtered           {}", s.filtered);
+            println!("  unreadable         {}", s.unreadable);
+            println!("  stopped at the cap {}", s.truncated);
+            println!("  took               {:.2?}", t.elapsed());
+            if s.truncated {
+                println!("\n  the shelf stops at 40,000 files; this tree is larger");
+            }
+        }
+        Err(e) => eprintln!("zenith: cannot read {}: {e}", root.display()),
+    }
+}
+
+/// Which of the interface's marks this machine can actually draw.
+///
+/// The interface draws triangles, diamonds and arrows as text, and system fonts disagree
+/// about them: Apple's have all of these, a bare Linux install may have none. This is how
+/// to tell which ones degraded, and to what.
+fn print_glyphs() {
+    let typo = typography::build(0, 0, 0);
+    let marks = typography::Marks::of(&typo.defs, &typo.ui);
+    println!("marks (what the interface draws as icons):\n");
+    for (what, fallback, missing) in marks.describe() {
+        println!(
+            "  {what:<14} {}",
+            if missing {
+                format!("missing — using {fallback:?}")
+            } else {
+                "drawable".to_string()
+            }
+        );
+    }
+    println!(
+        "\nmodifier label: {:?}   shift: {:?}",
+        typography::mod_label(),
+        typography::shift_label()
+    );
+    if typo.bundled_fallback {
+        println!("note: no system fonts were found; egui's bundled faces are in use");
+    }
 }
 
 /// Show exactly what distilled mode would recede, so the claim is checkable rather
@@ -343,7 +411,7 @@ fn dump(path: &std::path::Path) {
             "  {:>6}  {}{} {} {}",
             s.line + 1,
             "  ".repeat(s.depth.min(6)),
-            s.kind.glyph(),
+            s.kind.glyph(&typography::build(0, 0, 0).marks),
             s.name,
             if s.detail.is_empty() {
                 String::new()

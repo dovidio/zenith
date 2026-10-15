@@ -66,6 +66,8 @@ pub struct Style {
     pub distilled: bool,
     /// How this language writes its types, which is what [`crate::distill`] needs.
     pub lang: crate::distill::Lang,
+    /// The margin mark for a wrapped line, if this machine can draw it.
+    pub wrap_mark: &'static str,
 
     pub tones: [Color32; Tone::COUNT],
     pub ink_faint: Color32,
@@ -97,6 +99,7 @@ impl Style {
         self.prose_document.hash(&mut h);
         self.distilled.hash(&mut h);
         (self.lang as u8).hash(&mut h);
+        self.wrap_mark.hash(&mut h);
         for t in self.tones {
             t.to_array().hash(&mut h);
         }
@@ -572,7 +575,7 @@ pub fn paint(painter: &Painter, p: &Paint) {
                     painter.text(
                         Pos2::new(ox - p.laid.char_w * 1.15, top + row.pos.y),
                         Align2::LEFT_TOP,
-                        "↳",
+                        p.style.wrap_mark,
                         small.clone(),
                         mix(p.style.paper, p.style.ink_faint, 0.7),
                     );
@@ -671,7 +674,7 @@ pub fn paint_header(
     top: f32,
     title: &str,
     path: &str,
-    badge: Option<(&str, Color32)>,
+    badge: Option<(String, Color32)>,
 ) {
     let size = style.code.size;
     let title_font = FontId::new(size * 1.85, style.prose.family.clone());

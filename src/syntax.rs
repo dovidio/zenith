@@ -52,6 +52,23 @@ pub struct Line {
 }
 
 impl Line {
+    /// A line whose text is known but whose tones are not — yet.
+    ///
+    /// Reading a large file happens in two passes: the first screenful is toned
+    /// immediately, and the rest of the file arrives as lines like this, so that search,
+    /// motions, wrapping and scrolling all work at once while the tones are still being
+    /// worked out in the background. This is why lowering a file of a few megabytes no
+    /// longer stops the window.
+    pub fn plain(text: &str) -> Line {
+        finish_line(
+            text,
+            vec![Token {
+                text: text.to_string(),
+                tone: Tone::Plain,
+            }],
+        )
+    }
+
     pub fn is_blank(&self) -> bool {
         self.flow == Flow::Blank
     }
@@ -141,7 +158,10 @@ impl Highlighter {
                 return doc;
             }
         }
+        let t_runs = std::time::Instant::now();
         let (runs, truncated) = self.runs(syntax, text, MAX_LINES, false);
+        let runs_ms = t_runs.elapsed();
+        let t_finish = std::time::Instant::now();
         let mut lines: Vec<Line> = runs
             .into_iter()
             .map(|line| {
@@ -156,6 +176,15 @@ impl Highlighter {
                 finish_line(&joined, toks)
             })
             .collect();
+
+        if std::env::var("ZENITH_TIMING").is_ok() {
+            eprintln!(
+                "timing:   runs (syntect) {:.0?}, finish_line {} lines {:.0?}",
+                runs_ms,
+                lines.len(),
+                t_finish.elapsed()
+            );
+        }
 
         if lines.is_empty() {
             lines.push(Line {
@@ -857,6 +886,26 @@ pub enum Readable {
     Binary { bytes: usize, reason: &'static str },
 }
 
+/// Byte offset just past the first `n` lines of `text`, always on a line boundary.
+///
+/// Used to tone the first screenful of a large file immediately, while the rest of it is
+/// toned in the background.
+pub fn prefix_end(text: &str, n: usize) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    let mut seen = 0usize;
+    for (i, ch) in text.char_indices() {
+        if ch == '\n' {
+            seen += 1;
+            if seen >= n {
+                return i + 1;
+            }
+        }
+    }
+    text.len()
+}
+
 pub fn read_readable(path: &Path) -> std::io::Result<Readable> {
     let data = std::fs::read(path)?;
     let bytes = data.len();
@@ -986,4 +1035,29 @@ mod tests {
         assert_eq!(tone_for_stack(&stack(&["source.rust"]), "MAX_LIMIT"), Tone::Plain);
     }
 
+}
+
+#[cfg(test)]
+mod loader_tests {
+    use super::*;
+
+    #[test]
+    fn plain_lines_keep_their_text_and_lose_their_indentation() {
+        // Reading a large file shows these before the tones arrive, so search, motions
+        // and wrapping have to work on them exactly as on a toned line.
+        let l = Line::plain("        let total = 1;");
+        assert_eq!(l.text(), "let total = 1;");
+        assert_eq!(l.indent, 8);
+        assert!(!l.is_blank());
+        assert!(Line::plain("   ").is_blank());
+    }
+
+    #[test]
+    fn prefix_end_stops_on_a_line_boundary() {
+        let text = "one\ntwo\nthree\nfour\n";
+        assert_eq!(prefix_end(text, 2), 8); // "one\ntwo\n"
+        assert!(&text[..prefix_end(text, 2)].ends_with('\n'));
+        assert_eq!(prefix_end(text, 99), text.len());
+        assert_eq!(prefix_end(text, 0), 0);
+    }
 }

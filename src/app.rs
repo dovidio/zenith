@@ -64,7 +64,15 @@ pub fn run_smoke(
     });
 }
 
+/// When the process started, for the timing report.
+static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+fn timing() -> bool {
+    std::env::var("ZENITH_TIMING").is_ok()
+}
+
 fn launch(opts: Startup) {
+    let _ = STARTED.set(std::time::Instant::now());
     let title = match &opts.target {
         Some(p) => format!("zenith — {}", p.file_name().unwrap_or_default().to_string_lossy()),
         None => "zenith".to_string(),
@@ -77,19 +85,51 @@ fn launch(opts: Startup) {
             .with_min_inner_size([720.0, 480.0]),
         ..Default::default()
     };
+    let t_run = std::time::Instant::now();
     if let Err(e) = eframe::run_native(
         "zenith",
         options,
-        Box::new(move |cc| Ok(Box::new(Zenith::new(cc, opts)))),
+        Box::new(move |cc| {
+            let t_new = std::time::Instant::now();
+            let app = Zenith::new(cc, opts);
+            if timing() {
+                eprintln!("timing: Zenith::new took {:.1?}", t_new.elapsed());
+            }
+            Ok(Box::new(app))
+        }),
     ) {
         eprintln!("zenith: could not open a window: {e}");
         std::process::exit(1);
+    }
+    if timing() {
+        eprintln!("timing: the window loop ran for {:.1?}", t_run.elapsed());
     }
 }
 
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
+
+/// What the background read of a large file sends back.
+struct Loaded {
+    doc: crate::syntax::Document,
+    outline: Vec<outline::Symbol>,
+    prose: bool,
+}
+
+/// A file being toned in the background. The first screenful is already on screen; this
+/// completes the rest.
+struct Loading {
+    rx: std::sync::mpsc::Receiver<Loaded>,
+    path: PathBuf,
+}
+
+/// A folder being walked in the background.
+struct ShelfLoad {
+    rx: std::sync::mpsc::Receiver<std::io::Result<shelf::Shelf>>,
+    root: PathBuf,
+    focus: Option<PathBuf>,
+}
 
 struct Startup {
     target: Option<PathBuf>,
@@ -141,6 +181,14 @@ pub struct Zenith {
     caret: vim::Caret,
     /// Two-key sequences (`gg`, `zz`), which live across frames.
     chords: vim::Chords,
+    /// Test hook: pretend the reader is holding `j` down (see `ZENITH_HOLD_DOWN`).
+    hold_down: bool,
+    /// Frames drawn so far, for the test hooks.
+    frame: usize,
+    /// A background pass over a large file, if one is running.
+    loading: Option<Loading>,
+    /// A background walk of a folder, if one is running.
+    shelf_load: Option<ShelfLoad>,
     /// The places we have been, so `ctrl-o` can take us back.
     jumps: Vec<vim::Caret>,
     jump_pos: usize,
@@ -197,18 +245,24 @@ impl Zenith {
             store.config.distilled = d;
         }
         let config = store.config.clone();
+        let t_walk = std::time::Instant::now();
         let catalog = Catalog::build(&config);
+        if std::env::var("ZENITH_TIMING").is_ok() {
+            eprintln!("timing: catalogue walk {:.0?}", t_walk.elapsed());
+        }
         let palette = theme::by_name(&config.theme);
         let typo = typography::build(0, 0, 0);
         cc.egui_ctx.set_fonts(typo.defs.clone());
         apply_style(&cc.egui_ctx, &palette, &typo, config.font_scale);
 
+        // Built once here rather than inside the literal below, so its cost is visible.
+        let hl = Highlighter::new();
         let mut app = Zenith {
             scale: config.font_scale,
             char_w: 15.0 * config.font_scale * 0.6,
             store,
             catalog,
-            hl: Highlighter::new(),
+            hl,
             typo,
             palette,
             shelf: None,
@@ -217,6 +271,10 @@ impl Zenith {
             open: None,
             caret: vim::Caret::default(),
             chords: vim::Chords::default(),
+            hold_down: std::env::var("ZENITH_HOLD_DOWN").is_ok(),
+            frame: 0,
+            loading: None,
+            shelf_load: None,
             jumps: Vec::new(),
             jump_pos: 0,
             outline_sel: None,
@@ -248,6 +306,13 @@ impl Zenith {
         app.choose_startup(startup.target);
         // A development affordance: open an overlay without a keyboard, so the
         // screenshot harness can see it.
+        if let Ok(n) = std::env::var("ZENITH_START_LINE") {
+            if let (Some(open), Ok(n)) = (app.open.as_ref(), n.parse::<usize>()) {
+                let caret = vim::landing(&open.doc, n.saturating_sub(1));
+                app.caret = caret;
+                app.jump_to(caret);
+            }
+        }
         if std::env::var("ZENITH_FORCE_PALETTE").is_ok() {
             app.open_palette();
             if let Ok(q) = std::env::var("ZENITH_PALETTE_QUERY") {
@@ -277,7 +342,7 @@ impl Zenith {
             .or_else(|| self.store.session.last_file.clone());
 
         let Some(target) = target else {
-            self.status = "press ⌘O to open a folder".into();
+            self.status = keys("press {mod}O to open a folder");
             return;
         };
         if target.is_dir() {
@@ -291,32 +356,58 @@ impl Zenith {
 
     // -- shelves -----------------------------------------------------------
 
+    /// Open a folder, and the file in it the reader wants.
+    ///
+    /// The walk does not happen here. Reading a directory tree means a stat call per file,
+    /// and on a large tree that is seconds — long enough that doing it inline held the
+    /// window blank until it finished. The file the reader asked for opens at once, and
+    /// the shelf arrives on its own a moment later.
     fn open_shelf(&mut self, root: &Path, focus: Option<PathBuf>) {
         let name = root
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| root.to_string_lossy().to_string());
         let cfg = self.store.config.clone();
-        match shelf::open(root, &name, cfg.code_only, cfg.show_hidden) {
-            Ok(shelf) => {
-                let files = shelf.files.len();
-                self.status = format!("{name} — {files} files");
-                self.shelf = Some(shelf);
-                self.store.session.last_root = Some(root.to_path_buf());
-                self.expanded.clear();
-                self.expanded.insert(String::new());
-                let wanted = focus
-                    .or_else(|| self.store.session.last_file.clone())
-                    .filter(|p| p.starts_with(root))
-                    .or_else(|| self.first_doorway());
-                if let Some(path) = wanted {
-                    self.open_file(&path);
-                }
-            }
-            Err(e) => {
-                self.status = format!("cannot read {root:?}: {e}");
-            }
+
+        self.store.session.last_root = Some(root.to_path_buf());
+        self.shelf = None;
+        self.expanded.clear();
+        self.expanded.insert(String::new());
+        self.store.save_session();
+
+        // The file first: it is the thing the reader asked to see.
+        if let Some(path) = focus.clone() {
+            self.open_file(&path);
         }
+        self.status = format!("reading {name}…");
+
+        let root_for_thread = root.to_path_buf();
+        let name_for_thread = name.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let t = std::time::Instant::now();
+            let result = shelf::open(
+                &root_for_thread,
+                &name_for_thread,
+                cfg.code_only,
+                cfg.show_hidden,
+            );
+            if let Ok(s) = &result {
+                eprintln!(
+                    "timing: walk of {} took {:.2?} ({} files, {} unreadable)",
+                    root_for_thread.display(),
+                    t.elapsed(),
+                    s.files.len(),
+                    s.unreadable
+                );
+            }
+            let _ = tx.send(result);
+        });
+        self.shelf_load = Some(ShelfLoad {
+            rx,
+            root: root.to_path_buf(),
+            focus,
+        });
     }
 
     /// The file a reader should be shown first: a README, then a manifest, then an
@@ -369,6 +460,7 @@ impl Zenith {
             prose_document,
             distilled: self.store.config.distilled,
             lang,
+            wrap_mark: self.typo.marks.pick("↳"),
             tones,
             ink_faint: self.palette.ink_faint,
             guide_ink: self.palette.guide,
@@ -432,10 +524,67 @@ impl Zenith {
                 lossy,
                 truncated,
             } => {
-                let mut doc = self.hl.parse(&syntax, &text, bytes);
+                // A reader should be reading, not waiting. Toning a megabyte of source
+                // takes seconds of grammar work, so a large file is read in two passes:
+                // the first screenful now, the rest in the background, with the text of
+                // every line already present so that search, motions and wrapping work
+                // from the first frame.
+                const FIRST_PASS_LINES: usize = 400;
+                let big = text.len() > 256 * 1024 || count_lines(&text) > 1_500;
+                let t_open = std::time::Instant::now();
+                let (mut doc, syms, _background) = if big {
+                    let end = crate::syntax::prefix_end(&text, FIRST_PASS_LINES);
+                    let mut doc = self.hl.parse(&syntax, &text[..end], bytes);
+                    let t_plain = std::time::Instant::now();
+                    for line in text[end..].lines() {
+                        doc.lines.push(crate::syntax::Line::plain(line));
+                    }
+                    let syms = outline::extract(path, &doc.syntax, &doc.lines);
+                    if std::env::var("ZENITH_TIMING").is_ok() {
+                        eprintln!(
+                            "timing: prefix {} lines {:.0?}, plain fill {:.0?}, outline {:.0?}",
+                            FIRST_PASS_LINES,
+                            t_plain.duration_since(t_open),
+                            t_plain.elapsed(),
+                            t_open.elapsed()
+                        );
+                    }
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let path_for_thread = path.to_path_buf();
+                    let text_for_thread = text.clone();
+                    std::thread::spawn(move || {
+                        let hl = crate::syntax::Highlighter::new();
+                        let head = read_head(&path_for_thread);
+                        let syntax = hl.syntax_for(&path_for_thread, &head).clone();
+                        let mut doc = hl.parse(&syntax, &text_for_thread, bytes);
+                        doc.lossy = lossy;
+                        let outline = outline::extract(&path_for_thread, &doc.syntax, &doc.lines);
+                        let prose = outline::family(&path_for_thread, &doc.syntax)
+                            == outline::Family::Markdown;
+                        let _ = tx.send(Loaded { doc, outline, prose });
+                    });
+                    let loading = Loading {
+                        rx,
+                        path: path.to_path_buf(),
+                    };
+                    self.loading = Some(loading);
+                    (doc, syms, true)
+                } else {
+                    let t_small = std::time::Instant::now();
+                    let doc = self.hl.parse(&syntax, &text, bytes);
+                    let t_o = std::time::Instant::now();
+                    let syms = outline::extract(path, &doc.syntax, &doc.lines);
+                    if std::env::var("ZENITH_TIMING").is_ok() {
+                        eprintln!(
+                            "timing:   small file — parse {:.1?}, outline {:.1?}",
+                            t_o.duration_since(t_small),
+                            t_o.elapsed()
+                        );
+                    }
+                    (doc, syms, false)
+                };
                 doc.truncated |= truncated;
                 doc.lossy = lossy;
-                let syms = outline::extract(path, &doc.syntax, &doc.lines);
                 let prose = outline::family(path, &doc.syntax) == outline::Family::Markdown;
                 let mut note = String::new();
                 if doc.truncated {
@@ -568,6 +717,7 @@ impl Zenith {
     /// Typeset the open document for a page of this width, if it is not already
     /// typeset. Re-running is guarded by a hash of everything that affects layout.
     fn ensure_layout(&mut self, ctx: &egui::Context, page: Rect) {
+        let t_layout = std::time::Instant::now();
         let gutter = self.char_w * 3.4;
         let style = {
             let mut s = self.style();
@@ -589,6 +739,9 @@ impl Zenith {
             }
             _ => {
                 open.laid = Some(reader::layout(ctx, &open.doc, &style, col_x, header_h));
+                if std::env::var("ZENITH_TIMING").is_ok() {
+                    eprintln!("timing: layout {:.0?}", t_layout.elapsed());
+                }
             }
         }
     }
@@ -1109,6 +1262,89 @@ enum Act {
 impl eframe::App for Zenith {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.frame += 1;
+        if self.frame == 1 && timing() {
+            if let Some(t0) = STARTED.get() {
+                eprintln!("timing: first frame at {:.1?}", t0.elapsed());
+            }
+        }
+
+        // Has the background walk of a folder finished?
+        if let Some(load) = &self.shelf_load {
+            match load.rx.try_recv() {
+                Ok(Ok(shelf)) => {
+                    let name = load
+                        .root
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let focus = load.focus.clone();
+                    let root = load.root.clone();
+                    let files = shelf.files.len();
+                    self.shelf_load = None;
+                    self.shelf = Some(shelf);
+                    self.status = format!("{name} — {files} files");
+                    let wanted = focus
+                        .filter(|p| p.starts_with(&root))
+                        .or_else(|| {
+                            self.open
+                                .as_ref()
+                                .map(|o| o.path.clone())
+                                .filter(|p| p.starts_with(&root))
+                        })
+                        .or_else(|| self.first_doorway());
+                    match wanted {
+                        Some(path) if self.open.as_ref().map(|o| &o.path) != Some(&path) => {
+                            self.open_file(&path)
+                        }
+                        Some(path) => self.expand_to(&path),
+                        None => {}
+                    }
+                }
+                Ok(Err(e)) => {
+                    let root = load.root.clone();
+                    self.shelf_load = None;
+                    self.status = format!("cannot read {root:?}: {e}");
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(120));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.shelf_load = None;
+                }
+            }
+        }
+
+        // Has the background pass over a large file finished?
+        if let Some(loading) = &self.loading {
+            match loading.rx.try_recv() {
+                Ok(loaded) => {
+                    let path = loading.path.clone();
+                    self.loading = None;
+                    if let Some(open) = self.open.as_mut() {
+                        if open.path == path {
+                            if std::env::var("ZENITH_TIMING").is_ok() {
+                                eprintln!(
+                                    "timing: background tones landed ({} lines)",
+                                    loaded.doc.lines.len()
+                                );
+                            }
+                            open.doc = loaded.doc;
+                            open.outline = loaded.outline;
+                            open.prose = loaded.prose;
+                            open.laid = None;
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // Keep the frames coming while the tones are still arriving.
+                    ctx.request_repaint_after(std::time::Duration::from_millis(120));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.loading = None;
+                }
+            }
+        }
 
         if self.style_dirty {
             apply_style(&ctx, &self.palette, &self.typo, self.scale);
@@ -1219,7 +1455,7 @@ impl Zenith {
                         let s = painter.text(
                             Pos2::new(x, y),
                             Align2::LEFT_CENTER,
-                            "›",
+                            self.typo.marks.pick("›"),
                             font.clone(),
                             pal.ink_faint,
                         );
@@ -1250,7 +1486,7 @@ impl Zenith {
             }
             None => self.status.clone(),
         };
-        let hint = "⌘P find file · / search in file · Z zen · f focus · ? keys";
+        let hint = keys("{mod}P find file · / search in file · Z zen · f focus · ? keys");
         egui::Panel::bottom("zenith-status")
             .resizable(false)
             .exact_size(26.0)
@@ -1334,12 +1570,13 @@ impl Zenith {
                     ui,
                     &pal,
                     &format!("TEAM · {} repositories", team.len()),
-                    if team_open { "▾" } else { "▸" },
+                    "",
                     0,
                     false,
                     pal.ink_faint,
                     &label_font,
                     Some(&workspace),
+                            None,
                 )
                 .clicked()
                 {
@@ -1361,12 +1598,13 @@ impl Zenith {
                                     ui,
                                     &pal,
                                     name,
-                                    "❖",
+                                    self.typo.marks.pick("❖"),
                                     1,
                                     selected,
                                     if selected { pal.ink } else { pal.ink_soft },
                                     &font,
                                     Some(kind),
+                            None,
                                 )
                                 .clicked()
                                 {
@@ -1391,6 +1629,7 @@ impl Zenith {
                         if selected { pal.ink } else { pal.ink_soft },
                         &font,
                         Some("shelf"),
+                            None,
                     )
                     .clicked()
                     {
@@ -1402,12 +1641,13 @@ impl Zenith {
                     ui,
                     &pal,
                     "Open a folder to read…",
-                    "⌘",
+                    typography::mod_label(),
                     0,
                     false,
                     pal.accent,
                     &font,
-                    Some("⌘O"),
+                    Some(&keys("{mod}O")),
+                            None,
                 )
                 .clicked()
                 {
@@ -1431,19 +1671,45 @@ impl Zenith {
                 );
                 if let Some(s) = &self.shelf {
                     let mut colophon = shelf::describe(s);
+                    // Say what happened, and say it as a filter rather than a loss:
+                    // "5 skipped" read like the reader had lost five files when in fact
+                    // the "source files only" setting had hidden a README and some
+                    // screenshots. Only unreadable entries are a fault.
+                    let filtered = s.filtered;
                     if s.truncated {
-                        colophon.push_str(" · cut short");
+                        colophon.push_str(" · stopped at 40,000 files");
                     }
-                    if s.skipped > 0 {
-                        colophon.push_str(&format!(" · {} skipped", s.skipped));
+                    if s.unreadable > 0 {
+                        colophon.push_str(&format!(" · {} unreadable", s.unreadable));
                     }
-                    ui.painter().text(
+                    let note = if filtered == 0 {
+                        String::new()
+                    } else {
+                        format!(
+                            "{filtered} file{} not shown: not source, hidden, or build output \
+                             (settings › shelf)",
+                            if filtered == 1 { "" } else { "s" }
+                        )
+                    };
+                    let resp = ui.painter().text(
                         Pos2::new(ui.cursor().left() + 6.0, ui.cursor().top() + 22.0),
                         Align2::LEFT_CENTER,
                         colophon,
                         label_font.clone(),
                         pal.ink_faint,
                     );
+                    let _ = &resp;
+                    if !note.is_empty() {
+                        ui.interact(
+                            Rect::from_min_size(
+                                Pos2::new(ui.cursor().left(), ui.cursor().top()),
+                                vec2(ui.available_width(), 30.0),
+                            ),
+                            ui.id().with("shelf-note"),
+                            Sense::hover(),
+                        )
+                        .on_hover_text(RichText::new(note).font(label_font.clone()));
+                    }
                 }
                 ui.add_space(30.0);
 
@@ -1468,12 +1734,13 @@ impl Zenith {
                                         ui,
                                         &pal,
                                         name,
-                                        if *open { "▾" } else { "▸" },
+                                        "",
                                         *depth,
                                         false,
                                         if *open { pal.ink } else { pal.ink_soft },
                                         &font,
                                         None,
+                                        Some(*open),
                                     )
                                     .clicked()
                                     {
@@ -1499,12 +1766,13 @@ impl Zenith {
                                         ui,
                                         &pal,
                                         name,
-                                        if *doorway { "◦" } else { "" },
+                                        if *doorway { self.typo.marks.pick("◦") } else { "" },
                                         *depth,
                                         selected,
                                         ink,
                                         &font,
                                         None,
+                            None,
                                     )
                                     .clicked()
                                     {
@@ -1553,7 +1821,7 @@ impl Zenith {
                             s.detail.clone(),
                             s.line,
                             s.depth,
-                            s.kind.glyph().to_string(),
+                            s.kind.glyph(&self.typo.marks).to_string(),
                             s.kind,
                         )
                     })
@@ -1635,6 +1903,7 @@ impl Zenith {
                                 ink,
                                 &font,
                                 None,
+                            None,
                             );
                             if resp.clicked() {
                                 jump = Some(*_line);
@@ -1664,6 +1933,13 @@ impl Zenith {
     fn page(&mut self, ui: &mut Ui) {
         let pal = self.palette;
         let ctx = ui.ctx().clone();
+        if self.hold_down && self.frame > 3 {
+            let lines = self.open.as_ref().map(|o| o.doc.lines.len()).unwrap_or(0);
+            if self.caret.line + 1 < lines {
+                self.motion(vim::Motion::Down(1));
+            }
+
+        }
         let pending = std::mem::replace(&mut self.pending, Pending::None);
 
         // Typeset for this page width before borrowing the document.
@@ -1693,7 +1969,7 @@ impl Zenith {
             ui.painter().text(
                 rect.center() + vec2(0.0, 40.0),
                 Align2::CENTER_CENTER,
-                "⌘O  open a folder      /  find a file",
+                keys("{mod}O  open a folder      /  find a file"),
                 small,
                 pal.ink_faint,
             );
@@ -1735,7 +2011,7 @@ impl Zenith {
         let badge = self
             .store
             .is_favorite(&open.path)
-            .then_some(("✦ bookmarked", pal.accent));
+            .then_some((format!("{} bookmarked", self.typo.marks.pick("✦")), pal.accent));
 
         let content_w = ui
             .available_width()
@@ -1745,6 +2021,13 @@ impl Zenith {
         let view_top = self.scroll;
         let view_h = self.view_h;
         let mut cursor_hint: Option<usize> = None;
+        // The furthest the page can scroll, which is a fact about the content, not about
+        // what some motion would like. Asking for more than this is how the page ended up
+        // straining against the end of the file: the request is granted for a frame (the
+        // content is drawn shifted) and then corrected, so the bottom flickers. Nothing
+        // below may exceed this.
+        let max_scroll = (laid.total - view_h).max(0.0);
+
         let target: Option<f32> = match pending {
             Pending::None => None,
             Pending::Restore => {
@@ -1773,7 +2056,12 @@ impl Zenith {
                     None // already in view: do not move the page under the reader
                 }
             }
-        };
+        }
+        // Clamp, then ignore a request that would move the page by less than a pixel:
+        // a sub-pixel nudge per frame reads as a shimmer, and it also keeps the app
+        // repainting forever at the end of a file.
+        .map(|y| y.clamp(0.0, max_scroll))
+        .filter(|y| view_h > 1.0 && (y - self.scroll).abs() >= 0.75);
 
         let mut area = ScrollArea::vertical()
             .id_salt("zenith-page")
@@ -2046,7 +2334,7 @@ impl Zenith {
                         ui.painter().text(
                             Pos2::new(rect.right() - 2.0, rect.center().y),
                             Align2::RIGHT_CENTER,
-                            "✦",
+                            self.typo.marks.pick("✦"),
                             font.clone(),
                             pal.accent,
                         );
@@ -2663,6 +2951,35 @@ fn toggles(
     changed
 }
 
+
+/// How many lines does this text have? Cheap enough to ask once when opening.
+fn count_lines(text: &str) -> usize {
+    text.lines().count()
+}
+
+/// A disclosure triangle, drawn rather than typed.
+///
+/// The file tree used to put `▸` and `▾` in a text run. Those exist in Apple's fonts and
+/// in whichever symbol font a Linux distribution happens to ship — so on some machines
+/// the tree had no carets at all. A path is 10 lines and cannot go missing.
+fn caret(painter: &egui::Painter, centre: Pos2, open: bool, colour: Color32) {
+    let r = 4.0;
+    let pts = if open {
+        vec![
+            centre + vec2(-r, -r * 0.5),
+            centre + vec2(r, -r * 0.5),
+            centre + vec2(0.0, r * 0.8),
+        ]
+    } else {
+        vec![
+            centre + vec2(-r * 0.5, -r),
+            centre + vec2(-r * 0.5, r),
+            centre + vec2(r * 0.8, 0.0),
+        ]
+    };
+    painter.add(egui::Shape::convex_polygon(pts, colour, Stroke::NONE));
+}
+
 /// One clickable line in a panel. Zenith draws its own rows so the interface can be
 /// typeset (faint marks, hairline selection) rather than widgeted.
 #[allow(clippy::too_many_arguments)]
@@ -2676,6 +2993,10 @@ fn row(
     ink: Color32,
     font: &FontId,
     right: Option<&str>,
+    // `Some(open)` draws a disclosure caret as a triangle. Typed `▸`/`▾` are not
+    // dependable: they are in Apple's fonts and in whichever symbol font a Linux
+    // distribution happens to ship, and on some machines the tree had no carets at all.
+    caret_open: Option<bool>,
 ) -> egui::Response {
     let (_rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 21.0), Sense::click());
     let rect = resp.rect;
@@ -2692,7 +3013,10 @@ fn row(
     let clip = rect.shrink(2.0);
     let painter = ui.painter().with_clip_rect(clip);
 
-    if !glyph.is_empty() {
+    if let Some(open) = caret_open {
+        caret(&painter, Pos2::new(x + 5.0, y), open, pal.ink_faint);
+        x += 16.0;
+    } else if !glyph.is_empty() {
         let g = painter.text(
             Pos2::new(x, y),
             Align2::LEFT_CENTER,
@@ -2736,7 +3060,7 @@ fn truncate(s: &str, max_chars: usize) -> String {
 
 /// Walk up from a file to the repository (or project) that contains it.
 fn project_root(file: &Path) -> PathBuf {
-    let mut dir = file.parent().map(|p| p.to_path_buf());
+    let parent = file.parent().map(|p| p.to_path_buf());
     let markers = [
         ".git",
         "Cargo.toml",
@@ -2746,7 +3070,8 @@ fn project_root(file: &Path) -> PathBuf {
         "pom.xml",
         "Gemfile",
     ];
-    let mut last = dir.clone();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut dir = parent.clone();
     let mut hops = 0;
     while let Some(d) = dir {
         if hops > 8 {
@@ -2755,11 +3080,17 @@ fn project_root(file: &Path) -> PathBuf {
         if markers.iter().any(|m| d.join(m).exists()) {
             return d;
         }
-        last = Some(d.clone());
+        // Stop at the home directory or the root of the filesystem. A "project" is
+        // something a reader would recognise; climbing past home is how opening a lone
+        // file in /tmp used to hand the walker the whole disk.
+        if home.as_deref() == Some(d.as_path()) || d.parent().is_none() {
+            break;
+        }
         dir = d.parent().map(|p| p.to_path_buf());
         hops += 1;
     }
-    last.unwrap_or_else(|| PathBuf::from("."))
+    // No marker anywhere above it: the file's own folder is the shelf.
+    parent.unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn read_head(path: &Path) -> String {
@@ -2799,6 +3130,15 @@ fn survives_text_entry(key: Key, cmd: bool, ctrl: bool) -> bool {
 /// opened, and `?` closes the help.
 fn commands_allowed(key: Key, cmd: bool, ctrl: bool, text_entry: bool) -> bool {
     !text_entry || survives_text_entry(key, cmd, ctrl)
+}
+
+/// Fill in the modifier keys for this platform.
+///
+/// `⌘` and `⇧` live in Apple's fonts and in almost no others, and a reader on Linux has
+/// a Ctrl key anyway — so the labels are written once, here, and translated per platform.
+fn keys(text: &str) -> String {
+    text.replace("{mod}", typography::mod_label())
+        .replace("{shift}", typography::shift_label())
 }
 
 /// The character a key stands for, for two-key sequences. Only the keys that can

@@ -131,7 +131,13 @@ pub struct Shelf {
     pub tree: Vec<Entry>,
     /// Every readable file, sorted by path — the fuzzy finder's index.
     pub files: Vec<FileEntry>,
-    pub skipped: usize,
+    /// Files left out on purpose: not source (when "source files only" is on), hidden,
+    /// inside build output, or empty placeholders. This is the setting doing its job, so
+    /// it is reported as a filter and not as a problem.
+    pub filtered: usize,
+    /// Entries the walker could not read at all — the only number here that is a fault.
+    pub unreadable: usize,
+    /// Set when the walk stopped at [`MAX_FILES`].
     pub truncated: bool,
 }
 
@@ -154,7 +160,8 @@ fn is_noise_dir(name: &str) -> bool {
 /// lockfiles; `show_hidden` lets dotfiles in.
 pub fn open(root: &Path, name: &str, code_only: bool, show_hidden: bool) -> std::io::Result<Shelf> {
     let mut files: Vec<FileEntry> = Vec::new();
-    let mut skipped = 0usize;
+    let mut filtered = 0usize;
+    let mut unreadable = 0usize;
     let mut truncated = false;
     const MAX_FILES: usize = 40_000;
 
@@ -181,7 +188,7 @@ pub fn open(root: &Path, name: &str, code_only: bool, show_hidden: bool) -> std:
     let walker = builder.build();
     for result in walker {
         let Ok(entry) = result else {
-            skipped += 1;
+            unreadable += 1;
             continue;
         };
         let path = entry.path();
@@ -196,7 +203,7 @@ pub fn open(root: &Path, name: &str, code_only: bool, show_hidden: bool) -> std:
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         if is_dir {
             if is_noise_dir(&fname) {
-                skipped += 1;
+                filtered += 1;
             }
             // Directories are reconstructed from file paths below; nothing to do.
             continue;
@@ -208,13 +215,13 @@ pub fn open(root: &Path, name: &str, code_only: bool, show_hidden: bool) -> std:
             .unwrap_or("")
             .to_ascii_lowercase();
         if code_only && !is_code_ext(&ext) {
-            skipped += 1;
+            filtered += 1;
             continue;
         }
         let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
         if size == 0 && ext.is_empty() && !is_known_name(&fname) {
             // Empty, extensionless, unknown: almost certainly a placeholder.
-            skipped += 1;
+            filtered += 1;
             continue;
         }
         if files.len() >= MAX_FILES {
@@ -248,7 +255,8 @@ pub fn open(root: &Path, name: &str, code_only: bool, show_hidden: bool) -> std:
         root: root.to_path_buf(),
         tree,
         files,
-        skipped,
+        filtered,
+        unreadable,
         truncated,
     })
 }
@@ -417,9 +425,11 @@ pub fn describe(shelf: &Shelf) -> String {
     let bytes: u64 = shelf.files.iter().map(|f| f.size).sum();
     let dirs = count_dirs(&shelf.tree);
     format!(
-        "{} files · {} folders · {}",
+        "{} file{} · {} folder{} · {}",
         files,
+        if files == 1 { "" } else { "s" },
         dirs,
+        if dirs == 1 { "" } else { "s" },
         human_size(bytes)
     )
 }

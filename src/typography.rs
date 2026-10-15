@@ -120,7 +120,20 @@ static FAMILIES: &[(Role, Family)] = &[
 
 /// Fallback faces for glyphs the chosen voices do not have (box drawing, marks).
 /// These are looked for by name like everything else; absence is not an error.
-static SYMBOL_STEMS: &[&str] = &["applesymbols", "symbola", "notosanssymbols"];
+/// Faces worth appending to every chain purely for their symbol coverage. The marks the
+/// interface draws — triangles, diamonds, arrows — are in nobody's idea of a coding font,
+/// and Linux distributions differ on which of these they install. DejaVu is the one that
+/// is nearly always present.
+static SYMBOL_STEMS: &[&str] = &[
+    "applesymbols",
+    "symbola",
+    "notosanssymbols",
+    "dejavusans",
+    "freeserif",
+    "freesans",
+    "unifont",
+    "segoeuisymbol",
+];
 
 #[derive(Clone, Debug)]
 pub struct Voice {
@@ -571,6 +584,8 @@ fn resolve(voices: &[Voice], wanted: usize) -> Option<(usize, Voice)> {
 
 /// Everything the UI needs to know about type.
 pub struct Typography {
+    /// What this machine can actually draw, out of [`MARKS`].
+    pub marks: Marks,
     pub defs: FontDefinitions,
 
     /// The candidates this machine actually has, in preference order.
@@ -754,7 +769,10 @@ pub fn build(mono_idx: usize, prose_idx: usize, ui_idx: usize) -> Typography {
         eprintln!("zenith: no usable system typeface; egui's bundled fonts will set the page");
     }
 
+    // The marks are drawn in the interface voice, so that is the chain to ask.
+    let marks = Marks::of(&defs, &ui_named);
     Typography {
+        marks,
         defs,
         mono_voices,
         prose_voices,
@@ -915,5 +933,121 @@ mod tests {
             }
         }
         assert_eq!(winner, "DejaVu Sans Mono");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Marks: can this machine actually draw the interface's punctuation?
+// ---------------------------------------------------------------------------
+
+/// The marks the interface draws as icons, with a plain-text stand-in for each.
+///
+/// egui falls back through the font chain for a glyph the chosen face lacks, but if *no*
+/// face in the chain has it the reader gets a tofu box. System fonts disagree wildly here:
+/// Apple's have all of these, a minimal Linux install often has none of the dingbats. So
+/// the interface asks what this machine can draw, once, and uses letters where it cannot.
+pub const MARKS: &[(&str, &str)] = &[
+    ("✦", "*"),   // bookmarked
+    ("▾", "v"),   // an open folder
+    ("▸", ">"),   // a closed folder
+    ("❖", "*"),   // a module
+    ("◆", "+"),   // a type
+    ("◇", "-"),   // a trait
+    ("○", "o"),   // a constant
+    ("≡", "="),   // an enum
+    ("ƒ", "f"),   // a function
+    ("§", "#"),   // a heading
+    ("↳", "~"),   // a wrapped line
+    ("◦", "-"),   // a doorway file
+    ("›", "/"),   // a breadcrumb
+];
+
+/// What this machine can draw, out of [`MARKS`].
+#[derive(Clone, Debug, Default)]
+pub struct Marks {
+    missing: std::collections::BTreeSet<char>,
+}
+
+impl Marks {
+    /// Which of the pretty forms can be drawn by *this chain*?
+    ///
+    /// The chain matters, not the set of installed fonts: egui only looks through the
+    /// fallback list of the family it was asked for, so a mark is drawable only if some
+    /// face in that list has it.
+    pub fn of(defs: &FontDefinitions, family: &FontFamily) -> Marks {
+        let mut missing = std::collections::BTreeSet::new();
+        let chain = defs.families.get(family).cloned().unwrap_or_default();
+        let charmaps: Vec<skrifa::charmap::Charmap> = chain
+            .iter()
+            .filter_map(|name| defs.font_data.get(name))
+            .filter_map(|data| skrifa::FontRef::new(data.font.as_ref()).ok())
+            .map(|f| f.charmap())
+            .collect();
+        for (pretty, _) in MARKS {
+            for ch in pretty.chars() {
+                let covered = charmaps.iter().any(|cm| cm.map(ch as u32).is_some());
+                if !covered {
+                    missing.insert(ch);
+                }
+            }
+        }
+        Marks { missing }
+    }
+
+    /// The pretty form, or its plain stand-in when no face here can draw it.
+    pub fn pick(&self, pretty: &'static str) -> &'static str {
+        let usable = pretty.chars().all(|c| !self.missing.contains(&c));
+        if usable {
+            return pretty;
+        }
+        MARKS
+            .iter()
+            .find(|(p, _)| *p == pretty)
+            .map(|(_, plain)| *plain)
+            .unwrap_or(pretty)
+    }
+
+    /// One line per mark: what it is, whether it can be drawn, and what will be used.
+    pub fn describe(&self) -> Vec<(String, String, bool)> {
+        MARKS
+            .iter()
+            .flat_map(|(pretty, _)| pretty.chars())
+            .map(|c| {
+                (
+                    format!("U+{:04X}  {c}", c as u32),
+                    self.pick_str(c),
+                    self.missing.contains(&c),
+                )
+            })
+            .collect()
+    }
+
+    fn pick_str(&self, c: char) -> String {
+        let pretty: String = c.to_string();
+        MARKS
+            .iter()
+            .find(|(p, _)| *p == pretty)
+            .map(|(_, plain)| (*plain).to_string())
+            .unwrap_or(pretty)
+    }
+}
+
+/// The modifier key label for this platform, and its shift key.
+///
+/// `⌘` exists in Apple's fonts and in very few others, so a Linux reader would see a
+/// missing glyph — and would not expect a Command key anyway.
+pub fn mod_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "\u{2318}"
+    } else {
+        "Ctrl"
+    }
+}
+
+pub fn shift_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "\u{21E7}"
+    } else {
+        "Shift"
     }
 }

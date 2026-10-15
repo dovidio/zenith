@@ -111,6 +111,19 @@ and headings are set in the serif while its fenced code blocks stay monospace an
 `**emphasis**` and `` `code` `` markers are demoted to faint marginal signs. A source file
 is code, so only its comments get the reading face.
 
+### Reading something enormous
+
+A file is read in two passes. The first screenful is toned immediately — reading is what
+the reader came to do — and the rest of the file arrives as plain text with its tones
+following in the background, so search, motions, wrapping and scrolling all work from the
+first frame. Opening a 4.7 MB source file costs about half a second to first paint instead
+of six seconds of a frozen window, and the tones land a few seconds later without anyone
+waiting for them.
+
+Folding a folder works the same way, and for the same reason: reading a directory tree
+means a syscall per file, so the walk happens off the frame path and the tree fills in
+when it arrives.
+
 ### Distilled reading
 
 `d` recedes what a human is not reading in a strongly typed language: the type
@@ -217,6 +230,12 @@ Nothing is hidden inside the project to make this true: it is a property of the 
   face was refused.
 - `zenith --distill FILE` — which tokens distilled mode would recede, and which it
   refuses, per file.
+- `zenith --glyphs` — which of the marks the interface draws (triangles, diamonds, the
+  bookmark star) this machine's fonts can actually render, and what is used instead when
+  they cannot. Apple's fonts have all of them; a bare Linux install may have none, and a
+  mark that is missing would otherwise be a tofu box.
+- `zenith --walk FOLDER` — walk a folder the way the shelf does and report what it cost,
+  how many files were filtered and why that count is not a loss.
 - `zenith --smoke OUT.png` — renders the app, saves a self-portrait of both the normal
   view and zen mode with the focus lens, then exits. The screenshots in `docs/` were
   produced by it, and are written as uncompressed PNGs by `src/png.rs` (zenith links no
