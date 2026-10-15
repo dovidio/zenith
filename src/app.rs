@@ -192,6 +192,18 @@ pub struct Zenith {
     loading: Option<Loading>,
     /// A background walk of a folder, if one is running.
     shelf_load: Option<ShelfLoad>,
+    /// Every row the shelf panel is showing, in order, built once per frame so that the
+    /// keyboard and the drawing agree about what is on screen.
+    tree_rows: Vec<TreeRow>,
+    /// Whether the keyboard is in the tree rather than on the page.
+    tree_focus: bool,
+    /// The selected row, held by identity rather than by position.
+    tree_sel: Option<TreeKey>,
+    /// Set when a key just moved the selection, so the panel can scroll it into view.
+    tree_moved: bool,
+    /// A development affordance has been applied, once.
+    tree_hook_done: bool,
+    tree_hook_step: u8,
     /// The places we have been, so `ctrl-o` can take us back.
     jumps: Vec<vim::Caret>,
     jump_pos: usize,
@@ -278,6 +290,12 @@ impl Zenith {
             frame: 0,
             loading: None,
             shelf_load: None,
+            tree_rows: Vec::new(),
+            tree_focus: false,
+            tree_sel: None,
+            tree_moved: false,
+            tree_hook_done: false,
+            tree_hook_step: 0,
             jumps: Vec::new(),
             jump_pos: 0,
             outline_sel: None,
@@ -330,6 +348,9 @@ impl Zenith {
         }
         if std::env::var("ZENITH_FORCE_SETTINGS").is_ok() {
             app.show_settings = true;
+        }
+        if std::env::var("ZENITH_FORCE_TREE").is_ok() {
+            app.tree_focus = true;
         }
         if let Ok(tab) = std::env::var("ZENITH_SETTINGS_TAB") {
             app.settings_tab = tab.parse().unwrap_or(0);
@@ -800,6 +821,7 @@ impl Zenith {
                     self.palette_open = false;
                     self.search_open = false;
                     self.chords.clear();
+                    self.tree_focus = false;
                     // Escape is the way back from everything, zen mode included: it is
                     // the one key a reader should never have to think about.
                     if self.zen {
@@ -838,6 +860,26 @@ impl Zenith {
                 }
             }
 
+            // ---- the tree owns the keyboard while it has focus ----
+            if self.tree_focus {
+                // Tab is also how you get *in*, so it has to be handled here as well as
+                // in the command block, where it would be read as a page key.
+                if key == Key::Tab {
+                    self.tree_focus = false;
+                } else {
+                    self.tree_key(key, shift, ctrl);
+                }
+                continue;
+            }
+            if key == Key::Tab && !self.tree_rows.is_empty() {
+                self.tree_focus = true;
+                if self.tree_sel.is_none() {
+                    self.tree_sel = self.tree_index().map(|i| self.tree_rows[i].key());
+                }
+                self.tree_moved = true;
+                continue;
+            }
+
             // ---- ordinary keys ----
             if let Some(act) = self.action_for(key, shift, ctrl, ctx) {
                 self.run_action(act, ctx);
@@ -848,7 +890,135 @@ impl Zenith {
         }
     }
 
+    /// The index of the selected row, falling back to the file being read.
+    ///
+    /// Opening the tree should put you where you already are, not at the top of a list of
+    /// twenty folders.
+    fn tree_index(&self) -> Option<usize> {
+        let rows = &self.tree_rows;
+        if rows.is_empty() {
+            return None;
+        }
+        if let Some(key) = &self.tree_sel {
+            if let Some(i) = rows.iter().position(|r| &r.key() == key) {
+                return Some(i);
+            }
+        }
+        let here = self.open.as_ref().map(|o| o.path.clone());
+        here.and_then(|p| {
+            rows.iter()
+                .position(|r| matches!(r.key(), TreeKey::File(q) if q == p))
+        })
+    }
+
+    fn tree_move(&mut self, delta: i32) -> bool {
+        let len = self.tree_rows.len();
+        if len == 0 {
+            return false;
+        }
+        let idx = walk_index(len, self.tree_index(), delta);
+        let key = self.tree_rows[idx].key();
+        let changed = self.tree_sel.as_ref() != Some(&key);
+        self.tree_sel = Some(key);
+        changed
+    }
+
+    /// `l`, Right or Enter: go in, or open.
+    fn tree_open(&mut self) {
+        let Some(idx) = self.tree_index() else { return };
+        match self.tree_rows[idx].clone() {
+            TreeRow::Team => self.team_open = !self.team_open,
+            TreeRow::Repo { path, .. } => self.open_shelf(&path, None),
+            TreeRow::OpenFolder => self.pick_folder(),
+            TreeRow::Dir { rel, open, .. } => {
+                if open {
+                    // Already open: step into it, the way a file manager does.
+                    self.tree_move(1);
+                } else {
+                    self.expanded.insert(rel);
+                }
+            }
+            TreeRow::File { path, .. } => {
+                // The page follows the tree, but the keyboard stays here: browsing a
+                // folder should not throw you back to the text on every file.
+                self.open_file(&path);
+            }
+        }
+    }
+
+    /// `h` or Left: out of a folder, or up to whatever this row belongs to.
+    fn tree_back(&mut self) {
+        let Some(idx) = self.tree_index() else { return };
+        if let TreeRow::Dir {
+            rel,
+            open: true,
+            ..
+        } = &self.tree_rows[idx]
+        {
+            let rel = rel.clone();
+            self.expanded.remove(&rel);
+            return;
+        }
+        if let Some(parent) = parent_index(&self.tree_rows, idx) {
+            let key = self.tree_rows[parent].key();
+            self.tree_sel = Some(key);
+            self.tree_moved = true;
+        }
+    }
+
+    /// The keyboard while the tree has focus. Every key is accounted for, so the page
+    /// never moves behind the reader's back.
+    fn tree_key(&mut self, key: Key, shift: bool, ctrl: bool) {
+        let page = ((self.view_h / 21.0) as i32).max(4);
+        let moved = match key {
+            Key::J | Key::ArrowDown => self.tree_move(1),
+            Key::K | Key::ArrowUp => self.tree_move(-1),
+            Key::PageDown | Key::Space if !shift => self.tree_move(page),
+            Key::PageUp | Key::Space => self.tree_move(-page),
+            Key::D if ctrl => self.tree_move(page / 2),
+            Key::U if ctrl => self.tree_move(-page / 2),
+            Key::G if shift => {
+                let last = self.tree_rows.len().saturating_sub(1);
+                let key = self.tree_rows.get(last).map(|r| r.key());
+                let changed = key.is_some() && self.tree_sel != key;
+                self.tree_sel = key;
+                changed
+            }
+            Key::L | Key::ArrowRight | Key::Enter => {
+                self.tree_open();
+                false
+            }
+            Key::H | Key::ArrowLeft => {
+                self.tree_back();
+                false
+            }
+            Key::Tab => {
+                self.tree_focus = false;
+                false
+            }
+            // `/` is how a reader looks for a file, and this is the file list.
+            Key::Slash => {
+                self.open_palette();
+                false
+            }
+            _ => false,
+        };
+        if moved {
+            self.tree_moved = true;
+        }
+    }
+
     fn run_chord(&mut self, done: vim::Chord) {
+        // Two-key sequences mean the same thing in the tree as on the page: `gg` is the
+        // top of what you are looking at.
+        if self.tree_focus {
+            if done == vim::Chord::FileTop {
+                let first = self.tree_rows.first().map(|r| r.key());
+                self.tree_sel = first;
+                self.tree_moved = true;
+            }
+            return;
+        }
         match done {
             vim::Chord::FileTop => self.motion(vim::Motion::FileTop),
             vim::Chord::Centre => self.centre_on_caret(),
@@ -1341,6 +1511,57 @@ impl eframe::App for Zenith {
             }
         }
 
+        // The rows first: both the keyboard and the panel read this list, and they have to
+        // agree about what "the row below this one" means.
+        self.tree_rows = self.build_tree_rows();
+        self.tree_moved = false;
+
+        // A development affordance: move the tree selection without a keyboard, so a
+        // screenshot can show the focused tree with something selected.
+        if !self.tree_hook_done {
+            if let Ok(n) = std::env::var("ZENITH_TREE_DOWN") {
+                if self.tree_hook_step == 0 {
+                    // First open the folders, so there is somewhere to go.
+                    let dirs: Vec<String> = self
+                        .tree_rows
+                        .iter()
+                        .filter_map(|r| match r {
+                            TreeRow::Dir { rel, .. } => Some(rel.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    for d in dirs {
+                        self.expanded.insert(d);
+                    }
+                    self.tree_hook_step = 1;
+                } else {
+                    let n: i32 = n.parse().unwrap_or(0);
+                    self.tree_focus = true;
+                    if self.tree_sel.is_none() {
+                        self.tree_sel = self.tree_index().map(|i| self.tree_rows[i].key());
+                    }
+                    for _ in 0..n.abs() {
+                        self.tree_key(if n < 0 { Key::K } else { Key::J }, false, false);
+                    }
+                    self.tree_moved = true;
+                    self.tree_hook_done = true;
+                    if debug() {
+                        eprintln!(
+                            "zenith[tree]: moved {n} in {} rows, sel={:?}",
+                            self.tree_rows.len(),
+                            self.tree_sel
+                        );
+                    }
+                }
+            } else if std::env::var("ZENITH_FORCE_TREE").is_ok() && !self.tree_rows.is_empty() {
+                if self.tree_sel.is_none() {
+                    self.tree_sel = self.tree_index().map(|i| self.tree_rows[i].key());
+                }
+                self.tree_moved = true;
+                self.tree_hook_done = true;
+            }
+        }
+
         if self.style_dirty {
             apply_style(&ctx, &self.palette, &self.typo, self.scale);
             self.rebuild_metrics(&ctx);
@@ -1478,7 +1699,11 @@ impl Zenith {
             }
             None => self.status.clone(),
         };
-        let hint = keys("{mod}P find file · / search in file · Z zen · f focus · ? keys");
+        let hint = if self.tree_focus {
+            keys("tree: j k move · l open · h back · G end · / find · esc to the page").to_string()
+        } else {
+            keys("{mod}P find file · / search in file · Z zen · f focus · tab tree · ? keys")
+        };
         egui::Panel::bottom("zenith-status")
             .resizable(false)
             .exact_size(26.0)
@@ -1507,34 +1732,58 @@ impl Zenith {
             });
     }
 
+    /// The shelf panel's rows, in the order they appear on screen.
+    ///
+    /// Built before the keyboard is read each frame, because both the navigation and the
+    /// drawing have to mean the same thing by "the row below this one".
+    fn build_tree_rows(&self) -> Vec<TreeRow> {
+        let mut out: Vec<TreeRow> = vec![TreeRow::Team];
+        if self.team_open {
+            for r in &self.catalog.team {
+                out.push(TreeRow::Repo {
+                    name: r.name.clone(),
+                    kind: r.kind.clone(),
+                    path: r.path.clone(),
+                    named: false,
+                });
+            }
+        }
+        for s in &self.catalog.shelves {
+            out.push(TreeRow::Repo {
+                name: s.name.clone(),
+                kind: "shelf".to_string(),
+                path: s.path.clone(),
+                named: true,
+            });
+        }
+        out.push(TreeRow::OpenFolder);
+        if let Some(shelf) = &self.shelf {
+            let mut acc = String::new();
+            flatten(&shelf.tree, &self.expanded, 0, &mut acc, &mut out);
+        }
+        out
+    }
+
     fn shelf_panel(&mut self, ui: &mut Ui) {
         let pal = self.palette;
         let font = self.typo.ui_id(12.5 * self.scale);
         let label_font = self.typo.ui_id(10.5 * self.scale);
 
-        // Collect what we need before mutating.
-        let team: Vec<(String, String, PathBuf)> = self
-            .catalog
-            .team
+        // Collect what we need before mutating. The rows come from the one list the
+        // keyboard walks, so a row and its key action can never disagree about which row
+        // is which.
+        let rows: Vec<TreeRow> = self.tree_rows.clone();
+        let top_items: Vec<TreeRow> = rows
             .iter()
-            .map(|r| (r.name.clone(), r.kind.clone(), r.path.clone()))
+            .take_while(|r| !matches!(r, TreeRow::Dir { .. } | TreeRow::File { .. }))
+            .cloned()
+            .collect();
+        let shelf_files: Vec<TreeRow> = rows
+            .iter()
+            .filter(|r| matches!(r, TreeRow::Dir { .. } | TreeRow::File { .. }))
+            .cloned()
             .collect();
         let workspace = display_path(&self.catalog.workspace);
-        let named: Vec<(String, PathBuf)> = self
-            .catalog
-            .shelves
-            .iter()
-            .map(|s| (s.name.clone(), s.path.clone()))
-            .collect();
-        let shelf_files: Vec<TreeRow> = match &self.shelf {
-            Some(s) => {
-                let mut out = Vec::new();
-                let mut acc = String::new();
-                flatten(&s.tree, &self.expanded, 0, &mut acc, &mut out);
-                out
-            }
-            None => Vec::new(),
-        };
         let shelf_name = self.shelf.as_ref().map(|s| s.name.clone()).unwrap_or_default();
         let current = self.open.as_ref().map(|o| o.path.clone());
         let team_open = self.team_open;
@@ -1557,95 +1806,70 @@ impl Zenith {
                     .inner_margin(Margin::symmetric(8, 8)),
             )
             .show(ui, |ui| {
-                // -- the team's repositories
-                if row(
-                    ui,
-                    &pal,
-                    // No count: the repositories are listed below, and the number was
-                    // silently capped anyway.
-                    "TEAM",
-                    "",
-                    0,
-                    false,
-                    pal.ink_faint,
-                    &label_font,
-                    Some(&workspace),
-                            None,
-                )
-                .clicked()
-                {
-                    toggle_team = true;
-                }
-                if team_open {
-                    ScrollArea::vertical()
-                        .id_salt("team")
-                        .max_height(180.0)
-                        .auto_shrink([false, true])
-                        .show(ui, |ui| {
-                            for (name, kind, path) in &team {
-                                let selected = self
-                                    .shelf
-                                    .as_ref()
-                                    .map(|s| s.root == *path)
-                                    .unwrap_or(false);
-                                if row(
-                                    ui,
-                                    &pal,
-                                    name,
-                                    self.typo.marks.pick("❖"),
-                                    1,
-                                    selected,
-                                    if selected { pal.ink } else { pal.ink_soft },
-                                    &font,
-                                    Some(kind),
-                            None,
-                                )
-                                .clicked()
-                                {
-                                    clicked_repo = Some(path.clone());
-                                }
-                            }
-                        });
-                }
-                for (name, path) in &named {
-                    let selected = self
-                        .shelf
-                        .as_ref()
-                        .map(|s| s.root == *path)
-                        .unwrap_or(false);
-                    if row(
+                // -- every row above the shelf, drawn from the same list the keyboard
+                // walks, so the two can never disagree about what is on screen.
+                for item in &top_items {
+                    let key = item.key();
+                    let picked = self.tree_focus && self.tree_sel.as_ref() == Some(&key);
+                    let on_shelf = match item {
+                        TreeRow::Repo { path, .. } => {
+                            self.shelf.as_ref().is_some_and(|sh| sh.root == *path)
+                        }
+                        _ => false,
+                    };
+                    let (text, glyph, right, ink) = match item {
+                        TreeRow::Team => (
+                            "TEAM".to_string(),
+                            "",
+                            Some(workspace.clone()),
+                            pal.ink_faint,
+                        ),
+                        TreeRow::Repo { name, kind, named, .. } => (
+                            name.clone(),
+                            if *named {
+                                self.typo.marks.pick("§")
+                            } else {
+                                self.typo.marks.pick("❖")
+                            },
+                            Some(kind.clone()),
+                            if picked || on_shelf { pal.ink } else { pal.ink_soft },
+                        ),
+                        TreeRow::OpenFolder => (
+                            "Open a folder to read…".to_string(),
+                            typography::mod_label(),
+                            Some(keys("{mod}O")),
+                            pal.accent,
+                        ),
+                        _ => continue,
+                    };
+                    let is_team = matches!(item, TreeRow::Team);
+                    let resp = row(
                         ui,
                         &pal,
-                        name,
-                        "§",
-                        1,
-                        selected,
-                        if selected { pal.ink } else { pal.ink_soft },
-                        &font,
-                        Some("shelf"),
-                            None,
-                    )
-                    .clicked()
-                    {
-                        clicked_repo = Some(path.clone());
+                        &text,
+                        glyph,
+                        item.depth(),
+                        picked,
+                        ink,
+                        if is_team { &label_font } else { &font },
+                        right.as_deref(),
+                        if is_team { Some(team_open) } else { None },
+                    );
+                    if self.tree_moved && picked {
+                        resp.scroll_to_me(Some(egui::Align::Center));
                     }
-                }
-                ui.add_space(3.0);
-                if row(
-                    ui,
-                    &pal,
-                    "Open a folder to read…",
-                    typography::mod_label(),
-                    0,
-                    false,
-                    pal.accent,
-                    &font,
-                    Some(&keys("{mod}O")),
-                            None,
-                )
-                .clicked()
-                {
-                    open_folder = true;
+                    if resp.clicked() {
+                        // A click means what the key would mean: one selection, moved by
+                        // a different hand.
+                        self.tree_focus = true;
+                        self.tree_sel = Some(key);
+                        match item {
+                            TreeRow::Team => toggle_team = true,
+                            TreeRow::Repo { path, .. } => clicked_repo = Some(path.clone()),
+                            TreeRow::OpenFolder => open_folder = true,
+                            _ => {}
+                        }
+                    }
                 }
                 ui.add_space(6.0);
                 ui.painter().hline(
@@ -1723,56 +1947,56 @@ impl Zenith {
                             return;
                         }
                         for item in &shelf_files {
-                            match item {
-                                TreeRow::Dir { name, rel, depth, open } => {
-                                    if row(
-                                        ui,
-                                        &pal,
-                                        name,
-                                        "",
-                                        *depth,
-                                        false,
-                                        if *open { pal.ink } else { pal.ink_soft },
-                                        &font,
-                                        None,
-                                        Some(*open),
-                                    )
-                                    .clicked()
-                                    {
-                                        toggled_dir = Some(rel.clone());
-                                    }
+                            let key = item.key();
+                            let picked = self.tree_focus && self.tree_sel.as_ref() == Some(&key);
+                            let (name, depth, doorway, empty_file, path, rel, is_open) = match item
+                            {
+                                TreeRow::Dir { name, depth, rel, open } => {
+                                    (name, *depth, false, false, None, Some(rel.clone()), *open)
                                 }
-                                TreeRow::File {
+                                TreeRow::File { name, path, depth, doorway, empty } => (
                                     name,
-                                    path,
-                                    depth,
-                                    doorway,
-                                    empty,
-                                } => {
-                                    let selected = current.as_deref() == Some(path.as_path());
-                                    let ink = if *empty {
-                                        pal.ink_faint
-                                    } else if selected || *doorway {
-                                        pal.ink
-                                    } else {
-                                        pal.ink_soft
-                                    };
-                                    if row(
-                                        ui,
-                                        &pal,
-                                        name,
-                                        if *doorway { self.typo.marks.pick("◦") } else { "" },
-                                        *depth,
-                                        selected,
-                                        ink,
-                                        &font,
-                                        None,
-                            None,
-                                    )
-                                    .clicked()
-                                    {
-                                        clicked_file = Some(path.clone());
-                                    }
+                                    *depth,
+                                    *doorway,
+                                    *empty,
+                                    Some(path.clone()),
+                                    None,
+                                    false,
+                                ),
+                                _ => continue,
+                            };
+                            let on_current = path
+                                .as_ref()
+                                .is_some_and(|p| current.as_ref() == Some(p));
+                            let ink = if empty_file {
+                                pal.ink_faint
+                            } else if picked || on_current || doorway {
+                                pal.ink
+                            } else {
+                                pal.ink_soft
+                            };
+                            let resp = row(
+                                ui,
+                                &pal,
+                                name,
+                                if doorway { self.typo.marks.pick("◦") } else { "" },
+                                depth,
+                                picked,
+                                ink,
+                                &font,
+                                None,
+                                if rel.is_some() { Some(is_open) } else { None },
+                            );
+                            if self.tree_moved && picked {
+                                resp.scroll_to_me(Some(egui::Align::Center));
+                            }
+                            if resp.clicked() {
+                                self.tree_focus = true;
+                                self.tree_sel = Some(key);
+                                match item {
+                                    TreeRow::Dir { .. } => toggled_dir = rel,
+                                    TreeRow::File { path, .. } => clicked_file = Some(path.clone()),
+                                    _ => {}
                                 }
                             }
                         }
@@ -1797,6 +2021,8 @@ impl Zenith {
             self.open_file(&path);
         }
     }
+
+
 
     fn outline_panel(&mut self, ui: &mut Ui) {
         let pal = self.palette;
@@ -2873,7 +3099,17 @@ impl Zenith {
 // ---------------------------------------------------------------------------
 
 /// One visible line of the shelf tree.
+#[derive(Clone)]
 enum TreeRow {
+    Team,
+    Repo {
+        name: String,
+        kind: String,
+        path: PathBuf,
+        /// A folder named by hand in the config, rather than found in the workspace.
+        named: bool,
+    },
+    OpenFolder,
     Dir {
         name: String,
         rel: String,
@@ -2887,6 +3123,76 @@ enum TreeRow {
         doorway: bool,
         empty: bool,
     },
+}
+
+/// What a row *is*, independent of where it currently sits in the list.
+///
+/// The selection is kept as one of these rather than as an index, because expanding a
+/// folder inserts rows above the selection: an index would slide to another file, which
+/// is exactly the kind of quiet misbehaviour a keyboard interface cannot afford.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum TreeKey {
+    Team,
+    Repo(PathBuf),
+    OpenFolder,
+    Dir(String),
+    File(PathBuf),
+}
+
+impl TreeRow {
+    fn key(&self) -> TreeKey {
+        match self {
+            TreeRow::Team => TreeKey::Team,
+            TreeRow::Repo { path, .. } => TreeKey::Repo(path.clone()),
+            TreeRow::OpenFolder => TreeKey::OpenFolder,
+            TreeRow::Dir { rel, .. } => TreeKey::Dir(rel.clone()),
+            TreeRow::File { path, .. } => TreeKey::File(path.clone()),
+        }
+    }
+
+    /// How far to indent, in steps.
+    fn depth(&self) -> usize {
+        match self {
+            TreeRow::Team | TreeRow::OpenFolder => 0,
+            TreeRow::Repo { .. } => 1,
+            TreeRow::Dir { depth, .. } | TreeRow::File { depth, .. } => *depth,
+        }
+    }
+
+    /// For `h`: which row is this row's parent, if it has one on screen?
+    fn is_child_of(&self, other: &TreeRow) -> bool {
+        match (self, other) {
+            (TreeRow::Repo { .. }, TreeRow::Team) => true,
+            (TreeRow::Dir { depth, .. } | TreeRow::File { depth, .. }, parent) => match parent {
+                TreeRow::Dir {
+                    depth: pd, open, ..
+                } => *open && *pd + 1 == *depth,
+                TreeRow::Repo { .. } => *depth == 0,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+}
+
+/// Where does the selection go? Clamped, so the ends of the list are the ends of the list.
+fn walk_index(len: usize, current: Option<usize>, delta: i32) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    match current {
+        None => 0,
+        Some(i) => (i as i32 + delta).clamp(0, len as i32 - 1) as usize,
+    }
+}
+
+/// The row that the row at `idx` belongs to, for `h`.
+///
+/// Not simply "the row above": a folder's children are its own, and a repository belongs
+/// to the team. Walking up means finding the nearest row above that this one is inside.
+fn parent_index(rows: &[TreeRow], idx: usize) -> Option<usize> {
+    let row = rows.get(idx)?;
+    (0..idx).rev().find(|i| row.is_child_of(&rows[*i]))
 }
 
 /// Flatten the parts of the tree the reader has opened, and only those.
@@ -3341,8 +3647,11 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("[ ]", "previous / next chapter (the outline)"),
     ("ctrl-o ctrl-i", "back and forward through where you have been"),
     ("J K", "next / previous file in the shelf"),
+    ("j k l h", "in the tree: move, open, and back out"),
+    ("enter, G, gg", "in the tree: open, last row, first row"),
     ("⌘P or ⌘K or ctrl-p", "find a file in the shelf"),
     ("/ or ⌘F", "search inside this file"),
+    ("tab", "move the keyboard into the tree"),
     ("o", "contents panel"),
     ("Z", "zen mode — no chrome at all"),
     ("f", "focus lens — dim everything but this block"),
@@ -3430,5 +3739,77 @@ mod key_tests {
         assert!(!survives_text_entry(Key::O, false, false));
         assert!(!survives_text_entry(Key::K, false, false));
         assert!(!survives_text_entry(Key::F, false, false));
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::{parent_index, walk_index, TreeRow};
+
+    fn dir(rel: &str, depth: usize, open: bool) -> TreeRow {
+        TreeRow::Dir {
+            name: rel.rsplit('/').next().unwrap_or(rel).to_string(),
+            rel: rel.to_string(),
+            depth,
+            open,
+        }
+    }
+
+    fn file(name: &str, depth: usize) -> TreeRow {
+        TreeRow::File {
+            name: name.to_string(),
+            path: std::path::PathBuf::from(name),
+            depth,
+            doorway: false,
+            empty: false,
+        }
+    }
+
+    #[test]
+    fn movement_stops_at_both_ends() {
+        // The reader should be able to lean on `j` without the selection escaping.
+        assert_eq!(walk_index(5, None, 1), 0, "nothing selected starts at the top");
+        assert_eq!(walk_index(5, Some(0), -1), 0);
+        assert_eq!(walk_index(5, Some(4), 1), 4);
+        assert_eq!(walk_index(5, Some(2), 1), 3);
+        assert_eq!(walk_index(5, Some(2), -1), 1);
+        assert_eq!(walk_index(5, Some(3), 10), 4);
+        assert_eq!(walk_index(0, None, 1), 0);
+    }
+
+    #[test]
+    fn going_back_finds_the_folder_you_came_from() {
+        let rows = vec![
+            TreeRow::Team,
+            TreeRow::OpenFolder,
+            dir("src", 0, true),
+            file("src/main.rs", 1),
+            dir("src/app", 1, true),
+            file("src/app/ui.rs", 2),
+            file("src/lib.rs", 1),
+            dir("docs", 0, false),
+        ];
+        // A nested file belongs to its folder, not to the row above it.
+        assert_eq!(parent_index(&rows, 5), Some(4));
+        // A file at the top of the shelf belongs to the shelf itself, which is depth 0.
+        assert_eq!(parent_index(&rows, 3), Some(2));
+        // A closed folder's children are not on screen, so there is nothing to go back to.
+        assert_eq!(parent_index(&rows, 3).map(|i| i != 7), Some(true));
+        // The first row has no parent.
+        assert_eq!(parent_index(&rows, 0), None);
+    }
+
+    #[test]
+    fn a_repository_belongs_to_the_team() {
+        let rows = vec![
+            TreeRow::Team,
+            TreeRow::Repo {
+                name: "zenith".into(),
+                kind: "rust".into(),
+                path: std::path::PathBuf::from("/tmp/zenith"),
+                named: false,
+            },
+        ];
+        assert_eq!(parent_index(&rows, 1), Some(0));
     }
 }

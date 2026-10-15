@@ -25,6 +25,12 @@ Navigation is vim's, as far as a reader needs it: `j k`, `w b e`, `0 ^ $`, `{ }`
 to go back and forward through everywhere you have been. `gd` is reserved for *go to
 definition*.
 
+The folder tree is navigable with the keyboard too: `tab` moves the keyboard into it
+(landing on the file you are reading), `j`/`k` move, `l` or `enter` opens a file or goes
+into a folder, `h` goes back out, `gg`/`G` are the ends, and `esc` or `tab` returns to the
+page. Moving the selection does not open anything — you browse, then commit. Clicking works
+the same way, because it is the same selection, moved by a different hand.
+
 There are two finders and they are deliberately separate: **`⌘P`** (or `⌘K`, or `ctrl-p`)
 finds *a file* in the shelf, and **`/`** (or `⌘F`) searches *inside the file* you are
 reading, with `n` and `N` to walk the matches. Opening either closes the other. The status
