@@ -48,6 +48,9 @@ pub struct Config {
     pub distilled: bool,
     /// Chrome-free reading.
     pub zen: bool,
+    /// Draw the window's own bar instead of the system's, so the strip along the top of
+    /// the window is the theme's colour rather than the desktop's.
+    pub frameless: bool,
     /// Extra hand-named shelves.
     pub shelves: Vec<ShelfCfg>,
 }
@@ -76,6 +79,7 @@ impl Default for Config {
             focus_lens: false,
             distilled: false,
             zen: false,
+            frameless: true,
             shelves: Vec::new(),
         }
     }

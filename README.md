@@ -70,6 +70,23 @@ change in the text, so the fade literally looks like the page coming forward —
 layout cache survives unbroken. Only the visible lines are laid out per frame, so the cost
 of a frame does not grow with the size of the file.
 
+### The window's own bar
+
+The strip along the top of a window belongs to the desktop, not to the app: on macOS it is
+the system's material, on Linux whatever the window manager decides. Neither is `#f4f1ea`
+when the page is, so the window never quite looks like one thing.
+
+So zenith draws its own. The window is created without system decorations and the theme's
+bar takes their place: drag it to move the window, double-click to maximise, and on macOS
+the traffic lights stay exactly where they were, over the bar, with the app's name moved
+along to make room. On Linux and Windows the buttons are drawn too, and the window's edges
+are eight thin zones that ask the compositor to resize. The palette also tells the system
+whether it is light or dark, so menus and any chrome that remains agree with the page.
+
+It is a setting (`settings › page › themed window bar`, or `frameless` in the config), and
+turning it off hands the frame straight back to the desktop without a restart — which is
+the escape hatch if a window manager disagrees about dragging or resizing.
+
 ### Tones, not rainbow
 
 Every editor colour scheme is a rainbow: six or seven hues at full saturation, competing

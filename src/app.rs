@@ -38,6 +38,9 @@ pub fn run(
         measure: measure_override,
         scale: scale_override,
         distilled,
+        // The window asks for its own frame; the config can say otherwise, and the
+        // settings panel can change it while running.
+        frameless: true,
         smoke: None,
     });
 }
@@ -55,6 +58,7 @@ pub fn run_smoke(
         measure: measure_override,
         scale: scale_override,
         distilled: None,
+        frameless: true,
         smoke: Some(Smoke {
             out,
             frame: 0,
@@ -79,12 +83,27 @@ fn launch(opts: Startup) {
         Some(p) => format!("zenith — {}", p.file_name().unwrap_or_default().to_string_lossy()),
         None => "zenith".to_string(),
     };
+    // The strip along the top of a window belongs to the desktop, not to the app: on macOS
+    // it is the system's grey, on Linux whatever the window manager decides. Zenith can
+    // draw its own, in the theme, so that the whole window is the page's colour on both.
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_app_id("zenith")
+        .with_inner_size([1440.0, 920.0])
+        .with_min_inner_size([720.0, 480.0]);
+    if opts.frameless {
+        viewport = viewport.with_decorations(false);
+        // macOS keeps its traffic lights when the title bar is hidden but the content
+        // fills the window, which is how a themed toolbar is done there.
+        #[cfg(target_os = "macos")]
+        {
+            viewport = viewport
+                .with_titlebar_shown(false)
+                .with_fullsize_content_view(true);
+        }
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(title)
-            .with_app_id("zenith")
-            .with_inner_size([1440.0, 920.0])
-            .with_min_inner_size([720.0, 480.0]),
+        viewport,
         ..Default::default()
     };
     let t_run = std::time::Instant::now();
@@ -139,6 +158,7 @@ struct Startup {
     measure: Option<usize>,
     scale: Option<f32>,
     distilled: Option<bool>,
+    frameless: bool,
     smoke: Option<Smoke>,
 }
 
@@ -269,6 +289,12 @@ impl Zenith {
         let typo = typography::build(0, 0, 0);
         cc.egui_ctx.set_fonts(typo.defs.clone());
         apply_style(&cc.egui_ctx, &palette, &typo, config.font_scale);
+        cc.egui_ctx
+            .send_viewport_cmd(egui::ViewportCommand::SetTheme(if palette.is_dark() {
+                egui::SystemTheme::Dark
+            } else {
+                egui::SystemTheme::Light
+            }));
 
         // Built once here rather than inside the literal below, so its cost is visible.
         let hl = Highlighter::new();
@@ -1337,11 +1363,18 @@ impl Zenith {
         self.store.save_config();
     }
 
-    fn set_theme(&mut self, idx: usize) {
+    fn set_theme(&mut self, ctx: &egui::Context, idx: usize) {
         if let Some(p) = theme::THEMES.get(idx) {
             self.palette = *p;
             self.store.config.theme = p.name.to_string();
             self.store.save_config();
+            // Whatever the system still draws — menus, the title bar if it is visible, a
+            // window manager's own preferences — should agree with the page.
+            ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(if p.is_dark() {
+                egui::SystemTheme::Dark
+            } else {
+                egui::SystemTheme::Light
+            }));
         }
     }
 
@@ -1617,6 +1650,12 @@ impl eframe::App for Zenith {
         if self.show_settings {
             self.settings_overlay(&ctx);
         }
+
+        // A window without a frame has no edges of its own; these are ours. Last, so they
+        // sit on top of the content they border.
+        if self.store.config.frameless && !cfg!(target_os = "macos") {
+            resize_handles(ui);
+        }
         if zen {
             self.zen_hint(&ctx);
         }
@@ -1636,6 +1675,14 @@ impl Zenith {
         let pal = self.palette;
         let font = self.typo.ui_id(12.5 * self.scale);
         let strong = self.typo.prose_id(15.0 * self.scale);
+        let ctx = ui.ctx().clone();
+        // On macOS the traffic lights stay where they are, over our bar: leave them room
+        // rather than drawing the app's name underneath them.
+        let gutter = if cfg!(target_os = "macos") && self.store.config.frameless {
+            78.0
+        } else {
+            0.0
+        };
         let crumbs: Vec<String> = self
             .open
             .as_ref()
@@ -1651,10 +1698,31 @@ impl Zenith {
                     .inner_margin(Margin::symmetric(14, 6)),
             )
             .show(ui, |ui| {
+                // The whole bar moves the window, the way a title bar does. Dragging is
+                // started by the backend, so it must be asked for on the frame the drag
+                // begins, not after it.
+                let bar = ui.max_rect();
+                let drag = ui.interact(
+                    bar,
+                    ui.id().with("titlebar"),
+                    Sense::click_and_drag(),
+                );
+                if self.store.config.frameless {
+                    if drag.drag_started() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
+                    if drag.double_clicked() {
+                        let maximised = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximised));
+                    }
+                }
+                if self.store.config.frameless && !cfg!(target_os = "macos") {
+                    window_buttons(ui, &pal, &ctx, bar);
+                }
                 let y = ui.max_rect().center().y;
                 let painter = ui.painter();
                 let mark = painter.text(
-                    Pos2::new(ui.max_rect().left() + 1.0, y),
+                    Pos2::new(ui.max_rect().left() + 1.0 + gutter, y),
                     Align2::LEFT_CENTER,
                     "ZENITH",
                     self.typo.prose_id(13.0 * self.scale),
@@ -2790,6 +2858,7 @@ impl Zenith {
                                         ("compress blank lines", &mut cfg.compress_blank),
                                         ("line numbers", &mut cfg.line_numbers),
                                         ("distilled types", &mut cfg.distilled),
+                                        ("themed window bar", &mut cfg.frameless),
                                     ]);
                                 });
                             });
@@ -2951,12 +3020,16 @@ impl Zenith {
             self.apply_typography(ctx, new_mono, new_prose);
         }
         if let Some(i) = theme_choice {
-            self.set_theme(i);
+            self.set_theme(ctx, i);
         }
         if changed {
             self.store.config.font_scale = self.scale;
             self.store.save_config();
             self.rebuild_metrics(ctx);
+            // The frame can be handed back to the desktop, or taken away, while running.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(
+                !self.store.config.frameless,
+            ));
         }
         if open_folder {
             self.pick_folder();
@@ -3256,6 +3329,65 @@ fn toggles(
 /// How many lines does this text have? Cheap enough to ask once when opening.
 fn count_lines(text: &str) -> usize {
     text.lines().count()
+}
+
+
+/// Minimise, maximise, close — drawn by us, because on Linux and Windows a window without
+/// a system frame has no buttons at all.
+fn window_buttons(ui: &mut Ui, pal: &Palette, ctx: &egui::Context, bar: Rect) {
+    let size = 12.0;
+    let gap = 10.0;
+    let mut x = bar.right() - 16.0;
+    let y = bar.center().y;
+    let mut button = |glyph: &str, colour: Color32, action: egui::ViewportCommand| {
+        let rect = Rect::from_center_size(Pos2::new(x, y), vec2(size + gap, size + gap));
+        let resp = ui.interact(rect, ui.id().with(glyph), Sense::click());
+        let ink = if resp.hovered() { pal.ink } else { colour };
+        let painter = ui.painter().with_clip_rect(rect);
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            glyph,
+            FontId::proportional(11.0),
+            ink,
+        );
+        if resp.clicked() {
+            ctx.send_viewport_cmd(action);
+        }
+        x -= size + gap;
+    };
+    button("✕", pal.ink_soft, egui::ViewportCommand::Close);
+    button("＋", pal.ink_soft, egui::ViewportCommand::Maximized(true));
+    button("—", pal.ink_soft, egui::ViewportCommand::Minimized(true));
+}
+
+/// The window's edges, for a window with no system frame: eight thin zones that ask the
+/// backend to begin a resize when one of them is dragged.
+///
+/// Drawn last, on top of everything, so a press near the edge resizes the window rather
+/// than clicking whatever happened to be underneath.
+fn resize_handles(ui: &mut Ui) {
+    use egui::viewport::ResizeDirection as Dir;
+    let edge = 6.0;
+    let r = ui.ctx().content_rect();
+    let zones: [(Dir, Rect); 8] = [
+        (Dir::North, Rect::from_min_max(r.left_top(), Pos2::new(r.right(), r.top() + edge))),
+        (Dir::South, Rect::from_min_max(Pos2::new(r.left(), r.bottom() - edge), r.right_bottom())),
+        (Dir::West, Rect::from_min_max(r.left_top(), Pos2::new(r.left() + edge, r.bottom()))),
+        (Dir::East, Rect::from_min_max(Pos2::new(r.right() - edge, r.top()), r.right_bottom())),
+        (Dir::NorthWest, Rect::from_min_max(r.left_top(), Pos2::new(r.left() + edge, r.top() + edge))),
+        (Dir::NorthEast, Rect::from_min_max(Pos2::new(r.right() - edge, r.top()), Pos2::new(r.right(), r.top() + edge))),
+        (Dir::SouthWest, Rect::from_min_max(Pos2::new(r.left(), r.bottom() - edge), Pos2::new(r.left() + edge, r.bottom()))),
+        (Dir::SouthEast, Rect::from_min_max(Pos2::new(r.right() - edge, r.bottom() - edge), r.right_bottom())),
+    ];
+    for (dir, rect) in zones {
+        let id = egui::Id::new(("zenith-resize", dir as u8));
+        let resp = ui.interact(rect, id, Sense::click_and_drag());
+        if resp.drag_started() {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+        }
+    }
 }
 
 /// A disclosure triangle, drawn rather than typed.
