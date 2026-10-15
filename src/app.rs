@@ -234,8 +234,11 @@ pub struct Zenith {
     tree_moved: bool,
     /// A development affordance has been applied, once.
     tree_hook_done: bool,
-    /// Width of the macOS traffic lights over our bar, in points (0 elsewhere).
-    chrome_gutter: f32,
+    /// The window's title needs telling what is open.
+    title_dirty: bool,
+    /// Height of the system's title strip on macOS, in points (0 elsewhere). Our own bar
+    /// sits below it, so the system's title and traffic lights have the room they expect.
+    chrome_strip: f32,
     tree_hook_step: u8,
     /// The places we have been, so `ctrl-o` can take us back.
     jumps: Vec<vim::Caret>,
@@ -313,17 +316,18 @@ impl Zenith {
         let hl = Highlighter::new();
         // Ask the window how wide its buttons are, for the macOS bar inset.
         #[cfg(target_os = "macos")]
-        let chrome_gutter = {
+        let chrome_strip = {
             use raw_window_handle::HasWindowHandle as _;
             let zoom = cc.egui_ctx.zoom_factor();
             cc.window_handle()
                 .ok()
                 .and_then(|h| eframe::WindowChromeMetrics::from_window_handle(&h.as_raw()))
-                .map(|m| m.traffic_lights_size.x / zoom)
-                .unwrap_or(74.0)
+                // The traffic lights' own height is the height of the strip they live in.
+                .map(|m| (m.traffic_lights_size.y / zoom).max(22.0))
+                .unwrap_or(28.0)
         };
         #[cfg(not(target_os = "macos"))]
-        let chrome_gutter = 0.0;
+        let chrome_strip = 0.0;
 
         let mut app = Zenith {
             scale: config.font_scale,
@@ -348,7 +352,8 @@ impl Zenith {
             tree_sel: None,
             tree_moved: false,
             tree_hook_done: false,
-            chrome_gutter,
+            title_dirty: true,
+            chrome_strip,
             tree_hook_step: 0,
             jumps: Vec::new(),
             jump_pos: 0,
@@ -667,6 +672,7 @@ impl Zenith {
                     }
                     note.push_str("decoded lossily (not UTF-8)");
                 }
+                self.title_dirty = true;
                 self.outline_sel = None;
                 self.open = Some(Open {
                     path: path.to_path_buf(),
@@ -1576,6 +1582,13 @@ impl eframe::App for Zenith {
             }
         }
 
+        // The window's title, once the file it names has settled.
+        if self.title_dirty {
+            let rel = self.open.as_ref().map(|o| o.rel.clone());
+            self.set_window_title(&ctx, rel.as_deref());
+            self.title_dirty = false;
+        }
+
         // The rows first: both the keyboard and the panel read this list, and they have to
         // agree about what "the row below this one" means.
         self.tree_rows = self.build_tree_rows();
@@ -1703,15 +1716,30 @@ impl eframe::App for Zenith {
 }
 
 impl Zenith {
-    /// How much room the macOS traffic lights take, measured from the window itself.
+    /// Tell the window what it is showing.
     ///
-    /// Guessing this number puts the app's name under the buttons on one display scale and
-    /// leaves a gap on another; the window knows, so it is asked.
-    fn traffic_light_gutter(&self) -> f32 {
-        if !cfg!(target_os = "macos") || !self.store.config.frameless {
-            return 0.0;
+    /// On macOS the system draws this in the strip above our bar, and a window manager
+    /// shows it in its frame elsewhere, so it should say where the reader is rather than
+    /// only where they started.
+    fn set_window_title(&self, ctx: &egui::Context, file: Option<&str>) {
+        let title = match file {
+            Some(rel) => format!("zenith — {rel}"),
+            None => "zenith".to_string(),
+        };
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+    }
+
+    /// How much room the system's title strip needs above our own bar, measured from the
+    /// window itself.
+    ///
+    /// Guessing this number puts our text under the title on one display scale and leaves
+    /// a gap on another; the window knows, so it is asked.
+    fn title_strip(&self) -> f32 {
+        if cfg!(target_os = "macos") && self.store.config.frameless {
+            self.chrome_strip
+        } else {
+            0.0
         }
-        self.chrome_gutter
     }
 
     fn top_bar(&mut self, ui: &mut Ui) {
@@ -1719,9 +1747,11 @@ impl Zenith {
         let font = self.typo.ui_id(12.5 * self.scale);
         let strong = self.typo.prose_id(15.0 * self.scale);
         let ctx = ui.ctx().clone();
-        // On macOS the traffic lights stay exactly where they were, floating over the
-        // transparent title bar, so the bar starts after them rather than under them.
-        let gutter = self.traffic_light_gutter();
+        // On macOS the system still draws its title and its traffic lights over the top of
+        // the window, and a transparent title bar does not stop it — the title is drawn
+        // over our content, twice over. So the strip belongs to the system and our own bar
+        // begins underneath it, which is also what a system toolbar looks like.
+        let strip = self.title_strip();
         let crumbs: Vec<String> = self
             .open
             .as_ref()
@@ -1729,7 +1759,7 @@ impl Zenith {
             .unwrap_or_default();
         egui::Panel::top("zenith-top")
             .resizable(false)
-            .exact_size(40.0)
+            .exact_size(40.0 + strip)
             .show_separator_line(false)
             .frame(
                 Frame::NONE
@@ -1768,10 +1798,11 @@ impl Zenith {
                 if own_window_buttons() {
                     window_buttons(ui, &pal, &ctx, bar);
                 }
-                let y = ui.max_rect().center().y;
+                let bar_rect = ui.max_rect();
+                let y = bar_rect.top() + strip + (bar_rect.height() - strip) * 0.5;
                 let painter = ui.painter();
                 let mark = painter.text(
-                    Pos2::new(ui.max_rect().left() + 1.0 + gutter, y),
+                    Pos2::new(bar_rect.left() + 1.0, y),
                     Align2::LEFT_CENTER,
                     "ZENITH",
                     self.typo.prose_id(13.0 * self.scale),

@@ -80,10 +80,13 @@ things on the two platforms:
 **On macOS the window stays entirely the system's.** Its frame, its traffic lights, its
 dragging, resizing, snapping and full screen all remain, and only the *title bar* is made
 transparent, with the content filling the window. The system draws no background there, so
-the theme's bar shows through and the traffic lights float above it — the app's name steps
-aside by exactly the width they occupy, measured from the window rather than guessed. This
-is the macOS pattern for a themed toolbar, and it is why zenith does not draw its own
-buttons there.
+the theme's bar shows through and the traffic lights float above it. The system still draws
+its *title* there — a transparent title bar does not remove it — so zenith's own bar begins
+below that strip rather than underneath it, and the band belongs to the window: the
+traffic lights on the left, the title in the middle, and the theme's colour behind both.
+The strip's height is measured from the window rather than guessed, and the title follows
+the file being read instead of naming the folder zenith was launched on. This is the macOS
+pattern for a themed toolbar, and it is why zenith does not draw its own buttons there.
 
 **On Linux and Windows the frame is ours**, because a window manager paints its own frame
 and there is no way to ask it for a colour. The window is created without decorations, the
