@@ -57,6 +57,10 @@ pub enum Kind {
     Fence,
     /// A horizontal rule: drawn as a hairline, not as text.
     Rule,
+    /// The front matter at the top of the file: metadata for a build, not prose for a
+    /// reader. The lines are still there — searching and every motion still see the file
+    /// as it is written — but nothing of them is drawn.
+    Meta,
 }
 
 #[derive(Clone, Debug)]
@@ -85,9 +89,20 @@ impl MdLine {
 pub fn render(lines: &[Line]) -> Vec<MdLine> {
     let mut out = Vec::with_capacity(lines.len());
     let mut fence: Option<char> = None;
-    for line in lines {
+    let meta = front_matter(lines);
+    for (index, line) in lines.iter().enumerate() {
         let text = line.text();
         let source = text.trim_end();
+
+        // The front matter is a build's business. It is not drawn, and it does not
+        // interrupt the document: the reader opens a page and sees a page.
+        if meta.is_some_and(|(a, b)| index >= a && index <= b) {
+            out.push(MdLine {
+                kind: Kind::Meta,
+                spans: Vec::new(),
+            });
+            continue;
+        }
 
         // Inside a fence, nothing is markdown: not a bullet, not a heading, not emphasis.
         if let Some(fence_char) = fence {
@@ -177,6 +192,29 @@ pub fn render(lines: &[Line]) -> Vec<MdLine> {
         });
     }
     out
+}
+
+/// The front matter at the top of a document: the lines from an opening `---` or `+++`
+/// to its match, if that block is closed.
+///
+/// Only at the very top, and only when closed. A file that begins with a horizontal rule
+/// and never says `---` again is a rule, not metadata, and a document whose metadata is
+/// never closed is better read as the text it is than silently swallowed.
+fn front_matter(lines: &[Line]) -> Option<(usize, usize)> {
+    let first = lines.iter().position(|l| !l.text().trim().is_empty())?;
+    let mark = lines[first].text();
+    let mark = mark.trim();
+    if mark != "---" && mark != "+++" {
+        return None;
+    }
+    let close = lines
+        .iter()
+        .enumerate()
+        .skip(first + 1)
+        .take(400)
+        .find(|(_, l)| l.text().trim() == mark)
+        .map(|(i, _)| i)?;
+    Some((first, close))
 }
 
 fn heading(source: &str) -> Option<(u8, &str)> {
@@ -427,6 +465,29 @@ mod tests {
 
     fn kinds(text: &str) -> Vec<Kind> {
         doc(text).iter().map(|l| l.kind).collect()
+    }
+
+    #[test]
+    fn front_matter_is_metadata_and_is_not_drawn() {
+        let out = doc("---\ntitle: \"A post\"\ntags: [\"x\"]\n---\n\nThe text.\n");
+        assert_eq!(out[0].kind, Kind::Meta, "the opening delimiter");
+        assert_eq!(out[1].kind, Kind::Meta);
+        assert_eq!(out[2].kind, Kind::Meta);
+        assert_eq!(out[3].kind, Kind::Meta, "the closing delimiter");
+        assert_eq!(out[4].kind, Kind::Blank);
+        assert_eq!(out[5].kind, Kind::Body);
+        assert_eq!(out[5].text(), "The text.");
+        // TOML front matter too.
+        assert_eq!(doc("+++\ntitle = \"x\"\n+++\nbody\n")[0].kind, Kind::Meta);
+    }
+
+    #[test]
+    fn a_rule_at_the_top_is_still_a_rule() {
+        // One `---` and no second: not metadata, and not to be swallowed.
+        let out = doc("---\n\nA paragraph after a rule.\n");
+        assert_eq!(out[0].kind, Kind::Rule);
+        assert_eq!(out[2].kind, Kind::Body);
+        assert_eq!(out[2].text(), "A paragraph after a rule.");
     }
 
     #[test]

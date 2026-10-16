@@ -247,16 +247,23 @@ pub fn layout(
         } else {
             row_h
         };
-
         let md_line = doc.md.as_ref().and_then(|m| m.get(index));
-        let job = line_job(style, line, md_line, wrap_w, line_row_h);
+        // Front matter is not drawn, so it takes no room. The lines are still there — the
+        // cursor walks them, search finds them, the status bar counts them — they simply
+        // are not part of the page. A reader who wants the file's true geometry turns
+        // "compress blank lines" off, which is the same question asked once.
+        let metadata = matches!(md_line.map(|m| m.kind), Some(crate::markdown::Kind::Meta));
+        let job = line_job(style, line, md_line, wrap_w, if metadata { blank_h } else { line_row_h });
         // Measure once to learn how tall the line is when wrapped. The galley itself
         // is thrown away: it will be rebuilt when the line is painted.
-        let h = ctx
-            .fonts_mut(|f| f.layout_job(job.clone()))
-            .size()
-            .y
-            .max(line_row_h);
+        let h = if metadata && style.compress_blank {
+            0.0
+        } else {
+            ctx.fonts_mut(|f| f.layout_job(job.clone()))
+                .size()
+                .y
+                .max(line_row_h)
+        };
         heights.push(h);
         jobs.push(Some(job));
         y += h;
@@ -503,7 +510,7 @@ fn markdown_job(style: &Style, md: &crate::markdown::MdLine, wrap_w: f32, row_h:
         job.append(&span.text, 0.0, fmt);
     }
     if job.sections.is_empty() {
-        // Rules and empty lines carry no text; the painter draws them.
+        // Rules, empty lines and front matter carry no text.
         job.append(" ", 0.0, TextFormat {
             font_id: prose.clone(),
             color: style.paper,
