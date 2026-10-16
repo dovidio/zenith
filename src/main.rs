@@ -69,6 +69,7 @@ fn main() {
                     None => die("--smoke needs an output path"),
                 }
             }
+            "--css" => mode = Mode::Css,
             "--glyphs" => mode = Mode::Glyphs,
             "--md" => {
                 i += 1;
@@ -122,6 +123,7 @@ fn main() {
         Mode::Faces(path) => typography::print_faces(&path),
         Mode::Distill(path) => distill(&path),
         Mode::Glyphs => print_glyphs(),
+        Mode::Css => print!("{}", theme::css()),
         Mode::Md(path) => print_md(&path),
         Mode::Walk(path) => walk(&path),
         Mode::Scopes(path, n) => dump_scopes(&path, n),
@@ -144,6 +146,7 @@ enum Mode {
     Faces(PathBuf),
     Distill(PathBuf),
     Glyphs,
+    Css,
     Md(PathBuf),
     Walk(PathBuf),
     Scopes(PathBuf, usize),
@@ -158,6 +161,7 @@ USAGE:
     zenith --fonts            list available typefaces
     zenith --dump FILE        print parsed tones for a file, headlessly
     zenith --grammars         list the grammars zenith can set text in
+    zenith --css              print the themes as CSS, for a site in the same ink
     zenith --distill FILE     show which tokens --distilled would recede, per file
     zenith --distilled        fade types and punctuation (strongly typed languages)
     zenith --faces FILE       list the faces inside a font file, and their coverage
