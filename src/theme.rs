@@ -331,43 +331,47 @@ pub const BIBIONE: Palette = pal(
     ],
 );
 
-/// **Kununurra** — pindan red earth, the Ord's turquoise, spinifex, a sunset.
+/// **Kununurra** — red rock at dusk: pindan earth, sandstone, spinifex, the Ord.
 ///
-/// The ground is red rather than black, which is what makes this a Kimberley night
-/// and not a generic dark theme. Turquoise is reserved for keywords, so it always
-/// reads as water against the dirt.
+/// The rock *is* the ink here. Keywords are the brightest vermilion in the set, types are
+/// sandstone, constants are the deeper red of the escarpment, and the ground is warm
+/// enough to read as earth rather than as a dark theme that happens to be brown. Turquoise
+/// appears once — the accent, for links and the cursor — because in the Kimberley the
+/// water is the thing you see *between* the rock, and that is how it should land: a
+/// counterpoint, never the signature. An earlier version had this the other way round,
+/// with turquoise keywords on a near-black ground, and it read as teal, not as country.
 pub const KUNUNURRA: Palette = pal(
     "Kununurra",
-    "pindan red, turquoise water, spinifex",
+    "red rock, sunset ochre, the Ord's turquoise",
     Mood::Lamplight,
-    rgb(0x1C, 0x13, 0x10), // paper: pindan
-    rgb(0x17, 0x0F, 0x0D), // panel
-    rgb(0x12, 0x0B, 0x09), // panel_deep
-    rgb(0x3A, 0x24, 0x1B), // edge
-    rgb(0xED, 0xE0, 0xCB), // ink: sand
-    rgb(0xA0, 0x8C, 0x74), // ink_soft
-    rgb(0x74, 0x62, 0x4E), // ink_faint
-    rgb(0x4F, 0xB3, 0xA8), // accent: the Ord
-    rgb(0x2C, 0x6A, 0x66), // accent_soft
-    rgb(0x2A, 0x1D, 0x16), // selection
-    rgb(0x33, 0x23, 0x1A), // guide
+    rgb(0x34, 0x1A, 0x12), // paper: pindan at dusk
+    rgb(0x2B, 0x14, 0x0D), // panel
+    rgb(0x22, 0x10, 0x0A), // panel_deep
+    rgb(0x5A, 0x32, 0x20), // edge
+    rgb(0xF2, 0xDE, 0xC4), // ink: warm sand
+    rgb(0xC9, 0xA9, 0x8B), // ink_soft
+    rgb(0x8E, 0x76, 0x60), // ink_faint
+    rgb(0x4F, 0xB3, 0xA8), // accent: the Ord, and the only cool thing here
+    rgb(0x2C, 0x6A, 0x63), // accent_soft
+    rgb(0x4A, 0x27, 0x18), // selection
+    rgb(0x43, 0x26, 0x1A), // guide
     true,
     [
-        rgb(0xE4, 0xD6, 0xC0), // Plain
-        rgb(0x8E, 0x7A, 0x61), // Comment
-        rgb(0xAC, 0x96, 0x7A), // Doc
-        rgb(0x5F, 0xC9, 0xBA), // Keyword: turquoise
-        rgb(0x46, 0x96, 0x8C), // KeywordSoft
-        rgb(0xD9, 0xA5, 0x66), // Type: sand ochre
-        rgb(0xE5, 0x9A, 0x5C), // Call: sunset
-        rgb(0xE0, 0x7A, 0x5F), // Constant: red rock
-        rgb(0xA8, 0xC0, 0x6A), // Str: spinifex
-        rgb(0xC0, 0xA0, 0xD8), // Number: sky violet
-        rgb(0xA7, 0x90, 0x76), // Operator
-        rgb(0x6E, 0x5B, 0x48), // Punct
-        rgb(0xE8, 0xB9, 0x5E), // Meta: gold
-        rgb(0xE4, 0xD6, 0xC0), // Raw (code in prose)
-        rgb(0xF0, 0x68, 0x5A), // Invalid
+        rgb(0xF2, 0xDE, 0xC4), // Plain
+        rgb(0x9E, 0x81, 0x68), // Comment
+        rgb(0xC0, 0xA1, 0x83), // Doc
+        rgb(0xF4, 0x79, 0x4A), // Keyword: rock in the sun
+        rgb(0xC2, 0x5B, 0x36), // KeywordSoft
+        rgb(0xE8, 0xA1, 0x65), // Type: sandstone
+        rgb(0xFF, 0x9E, 0x5C), // Call: a sunlit face
+        rgb(0xE2, 0x63, 0x3F), // Constant: the escarpment
+        rgb(0xA9, 0xC0, 0x6A), // Str: spinifex
+        rgb(0xF0, 0xC0, 0x70), // Number: gold
+        rgb(0xC3, 0x9C, 0x7A), // Operator
+        rgb(0x8A, 0x6C, 0x55), // Punct
+        rgb(0xFF, 0xE0, 0xA0), // Meta: a lit edge
+        rgb(0xF2, 0xDE, 0xC4), // Raw (code in prose)
+        rgb(0xFF, 0x6B, 0x5A), // Invalid
     ],
 );
 

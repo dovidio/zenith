@@ -127,7 +127,7 @@ a place, not a colour swatch:
 | **Lugano** | the lake at midday | pale stone paper, lake-blue keywords, cypress types, terracotta calls |
 | **Maionese** | a jar of the stuff | butter paper, dark olive ink, yolk-gold accents, gherkin green |
 | **Bibione** | sand, pine shade, the Adriatic | warm sand paper, deep-sea keywords, pine types, umbrella orange |
-| **Kununurra** | pindan red earth and the Ord | red-brown ground, turquoise keywords, sand ochre types, spinifex green |
+| **Kununurra** | red rock at dusk | warm rock ground, vermilion keywords, sandstone types, turquoise only as the accent |
 | **Panittha** | temple gold, jade, teak | dark teak ground, gold-leaf keywords, jade types, lotus-pink numbers |
 | **Newsprint** | cold type, cheap stock | cool grey, no warmth in it at all |
 

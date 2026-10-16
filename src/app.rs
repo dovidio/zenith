@@ -414,7 +414,13 @@ impl Zenith {
         // What to open, in order: what was asked for on the command line, the last folder
         // this reader had open, and — because running `zenith` inside a project should do
         // the obvious thing — the working directory, if that is what it looks like.
+        //
+        // Made absolute first. `zenith src/app.rs` from a repository root is the most
+        // natural way to ask for a file, and a relative path breaks the walk: climbing out
+        // of `src` by popping components reaches the empty path, and then the tree is
+        // walking nothing at all while the page shows the file.
         let target = target
+            .map(|p| p.canonicalize().unwrap_or(p))
             .or_else(|| self.store.session.last_root.clone())
             .or_else(|| self.store.session.last_file.clone())
             .or_else(working_project);
@@ -2139,14 +2145,9 @@ impl Zenith {
                     .id_salt("outline")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        // A file with no outline gets an empty panel, not a note about
+                        // being empty: the reader can see there is nothing there.
                         if items.is_empty() {
-                            ui.painter().text(
-                                Pos2::new(ui.min_rect().left() + 4.0, ui.min_rect().top() + 6.0),
-                                Align2::LEFT_TOP,
-                                "no outline for this file",
-                                font.clone(),
-                                pal.ink_faint,
-                            );
                             return;
                         }
                         // Which symbol is the cursor inside?
