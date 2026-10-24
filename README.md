@@ -93,9 +93,11 @@ stronger; emphasis is the italic face; `` `code` `` is the monospace voice on a 
 paper. Quotations are italic on a band with a rule down their left edge, fenced blocks sit
 on that band with their contents untouched — a `#` in a code block is not a heading — and
 `---` is a hairline rather than three dashes. `_` between word characters is not emphasis,
-so a document that mentions `snake_case_name` keeps its underscores. Tables are shown as
-paragraphs rather than grids, and `x` toggles back to the source, because sometimes the
-source is what you came to read.
+so a document that mentions `snake_case_name` keeps its underscores. `~~struck~~` gets a
+line through it, `- [x]` keeps its box, and a table is drawn as a grid: the column widths
+measured across the whole block and every cell padded to its column, in the code face, so
+the padding actually lines up. `x` toggles back to the source, because sometimes the source
+is what you came to read.
 
 ### Distilled reading
 

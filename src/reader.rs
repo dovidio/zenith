@@ -488,6 +488,10 @@ fn markdown_job(style: &Style, md: &crate::markdown::MdLine, wrap_w: f32, row_h:
                 fmt.extra_letter_spacing = 0.15;
             }
             Role::Emphasis => fmt.font_id = prose_italic.clone(),
+            Role::Strike => {
+                fmt.color = style.ink_faint;
+                fmt.strikethrough = Stroke::new(1.0, style.ink_faint);
+            }
             Role::Link => fmt.color = style.accent,
             Role::Code => {
                 fmt.font_id = FontId::monospace(base * 0.94);
@@ -502,6 +506,11 @@ fn markdown_job(style: &Style, md: &crate::markdown::MdLine, wrap_w: f32, row_h:
                 fmt.font_id = code.clone();
                 fmt.color = style.ink_faint;
             }
+        }
+        // A table's cells are padded to their column in characters, which only aligns
+        // in a face where every character has the same width.
+        if matches!(md.kind, Kind::TableHead | Kind::TableRow) {
+            fmt.font_id = code.clone();
         }
         if matches!(md.kind, Kind::Quote) && span.role == Role::Body {
             fmt.font_id = prose_italic.clone();
@@ -759,7 +768,10 @@ pub fn paint(painter: &Painter, p: &Paint) {
             // Rules are a hairline across the measure, not a row of dashes.
             for i in first..last {
                 if let Some(line) = md.get(i) {
-                    if matches!(line.kind, crate::markdown::Kind::Rule) {
+                    if matches!(
+                        line.kind,
+                        crate::markdown::Kind::Rule | crate::markdown::Kind::TableRule
+                    ) {
                         let y = t(p.laid.top_of(i) + p.laid.height_of(i) * 0.5);
                         painter.hline(
                             (ox - p.laid.char_w * 1.6)..=(ox + p.laid.measure),

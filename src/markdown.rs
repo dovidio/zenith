@@ -11,10 +11,15 @@
 //! and it is tested, because the interesting failures are all in the parsing: a `*` inside
 //! `snake_case`, a fence inside a fence, a bullet after a blank line.
 //!
-//! What it deliberately does not do: tables, footnotes, reference links, setext headings
-//! (`===` under a line) and nested lists beyond their indentation. A reader sees the text
-//! of a table as a paragraph rather than as a grid, which is a loss, and the one to fix
-//! next.
+//! Tables are the exception to "one line, one row", and they are handled by looking at the
+//! block rather than the line: a header row, a delimiter row, then body rows, with the
+//! column widths measured across all of them and every cell padded to its column. The page
+//! is drawn in the code face, so the padding actually aligns; a table too wide for the
+//! measure wraps like any other text, which is the price of not owning the font metrics
+//! here, and turning wrapping off (`w`) shows it whole.
+//!
+//! What it still does not do: footnotes, reference links, setext headings (`===` under a
+//! line), indented code blocks, and nesting inside list items beyond their indentation.
 
 use crate::syntax::Line;
 
@@ -30,6 +35,8 @@ pub enum Role {
     Code,
     /// A link's text; the destination is dropped.
     Link,
+    /// `~~struck through~~`
+    Strike,
     /// A list's bullet or number.
     Marker,
     /// A line inside a fenced block.
@@ -57,10 +64,26 @@ pub enum Kind {
     Fence,
     /// A horizontal rule: drawn as a hairline, not as text.
     Rule,
+    /// A table's header row: the cells, aligned, in the stronger ink, with a hairline
+    /// under them.
+    TableHead,
+    /// The `|---|---|` line itself: it decides the columns and is not drawn. The hairline
+    /// the reader sees is this row's.
+    TableRule,
+    /// A table's body row.
+    TableRow,
     /// The front matter at the top of the file: metadata for a build, not prose for a
     /// reader. The lines are still there — searching and every motion still see the file
     /// as it is written — but nothing of them is drawn.
     Meta,
+}
+
+/// How a table column is aligned, read from its delimiter cell: `:--`, `--:`, `:-:`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Align {
+    Left,
+    Right,
+    Centre,
 }
 
 #[derive(Clone, Debug)]
@@ -90,7 +113,12 @@ pub fn render(lines: &[Line]) -> Vec<MdLine> {
     let mut out = Vec::with_capacity(lines.len());
     let mut fence: Option<char> = None;
     let meta = front_matter(lines);
+    // A table is the one thing here that is read as a block; this is the line after it.
+    let mut consumed = 0usize;
     for (index, line) in lines.iter().enumerate() {
+        if index < consumed {
+            continue;
+        }
         let text = line.text();
         let source = text.trim_end();
 
@@ -149,6 +177,30 @@ pub fn render(lines: &[Line]) -> Vec<MdLine> {
                 kind: Kind::Fence,
                 spans: Vec::new(),
             });
+            continue;
+        }
+
+        // A table: a row of cells, then a delimiter row with the same number of columns.
+        // Every cell is padded to its column, so the code face lines the grid up.
+        if let Some(align) = table_at(lines, index) {
+            let (rows, end) = table_block(lines, index);
+            let widths = column_widths(&rows);
+            for (row_index, row) in rows.iter().enumerate() {
+                let kind = match row_index {
+                    0 => Kind::TableHead,
+                    1 => Kind::TableRule,
+                    _ => Kind::TableRow,
+                };
+                // The dashes are how the grid is described, not something to read: the
+                // reader draws their hairline, and this line says nothing.
+                let spans = if kind == Kind::TableRule {
+                    Vec::new()
+                } else {
+                    table_spans(row, &align, &widths, row_index == 0)
+                };
+                out.push(MdLine { kind, spans });
+            }
+            consumed = end;
             continue;
         }
 
@@ -217,6 +269,165 @@ fn front_matter(lines: &[Line]) -> Option<(usize, usize)> {
     Some((first, close))
 }
 
+
+/// The cells of a table row, or `None` if the line is not one.
+///
+/// A row needs a pipe somewhere. One leading and one trailing pipe are dropped, then the
+/// rest is split on the pipes that are not escaped, and every cell is trimmed.
+fn table_row(source: &str) -> Option<Vec<String>> {
+    let t = source.trim();
+    if !t.contains('|') {
+        return None;
+    }
+    let t = t.strip_prefix('|').unwrap_or(t);
+    let t = t.strip_suffix('|').unwrap_or(t);
+    let mut cells = Vec::new();
+    let mut cell = String::new();
+    let mut chars = t.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.peek() == Some(&'|') => {
+                chars.next();
+                cell.push('|');
+            }
+            '|' => {
+                cells.push(std::mem::take(&mut cell).trim().to_string());
+            }
+            _ => cell.push(c),
+        }
+    }
+    cells.push(cell.trim().to_string());
+    Some(cells)
+}
+
+/// The alignment row: `|---|---|`, `|:--|--:|`, `|:-:|`.
+fn table_delimiter(source: &str) -> Option<Vec<Align>> {
+    let cells = table_row(source)?;
+    let mut out = Vec::with_capacity(cells.len());
+    for cell in &cells {
+        let t = cell.trim();
+        if t.is_empty() || !t.chars().all(|c| c == '-' || c == ':') {
+            return None;
+        }
+        let left = t.starts_with(':');
+        let right = t.ends_with(':');
+        let dashes = t.trim_start_matches(':').trim_end_matches(':').chars().count();
+        if dashes == 0 {
+            return None;
+        }
+        out.push(match (left, right) {
+            (true, true) => Align::Centre,
+            (false, true) => Align::Right,
+            _ => Align::Left,
+        });
+    }
+    Some(out)
+}
+
+/// Is a table here? The header must be a row, the line under it a delimiter row of the
+/// same width, and there must be at least one column.
+fn table_at(lines: &[Line], index: usize) -> Option<Vec<Align>> {
+    let head = table_row(&lines.get(index)?.text())?;
+    let align = table_delimiter(&lines.get(index + 1)?.text())?;
+    if head.is_empty() || head.len() != align.len() {
+        return None;
+    }
+    Some(align)
+}
+
+/// Every row of the table, and the index of the line after it. The delimiter row is
+/// included: it is what tells the renderer to stop drawing text for that line.
+fn table_block(lines: &[Line], start: usize) -> (Vec<Vec<String>>, usize) {
+    let mut rows = Vec::new();
+    let mut i = start;
+    while let Some(row) = lines.get(i).and_then(|l| table_row(&l.text())) {
+        if row.is_empty() {
+            break;
+        }
+        rows.push(row);
+        i += 1;
+    }
+    (rows, i)
+}
+
+/// How wide each column is, in characters, across the whole table. The delimiter row is
+/// not measured: its dashes say how to align a column, not how wide it is.
+fn column_widths(rows: &[Vec<String>]) -> Vec<usize> {
+    let mut widths: Vec<usize> = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        if i == 1 {
+            continue;
+        }
+        for (c, cell) in row.iter().enumerate() {
+            let w = cell.chars().count();
+            match widths.get_mut(c) {
+                Some(slot) => *slot = (*slot).max(w),
+                None => widths.push(w),
+            }
+        }
+    }
+    widths
+}
+
+/// One row, every cell padded to its column so the code face aligns the grid.
+///
+/// Cells are separated by two spaces rather than by a drawn bar: a bar is a glyph some
+/// font somewhere will not have, and the padding already does the work.
+fn table_spans(row: &[String], align: &[Align], widths: &[usize], head: bool) -> Vec<Span> {
+    let mut spans: Vec<Span> = Vec::with_capacity(widths.len() * 3);
+    for (c, width) in widths.iter().enumerate() {
+        if c > 0 {
+            spans.push(Span {
+                text: "  ".to_string(),
+                role: Role::Body,
+            });
+        }
+        // A cell is a line of prose in miniature: `` `code` `` and `**strong**` work
+        // inside it, because a table about a program is mostly made of both.
+        let mut cell = inline(row.get(c).map(String::as_str).unwrap_or(""));
+        if head {
+            for span in &mut cell {
+                if span.role == Role::Body {
+                    span.role = Role::Strong;
+                }
+            }
+        }
+        // Padding is measured on what the cell will draw, not on its source: `**bold**`
+        // is four characters narrower than it looks.
+        let drawn: usize = cell.iter().map(|s| s.text.chars().count()).sum();
+        let pad = width.saturating_sub(drawn);
+        let (before, after) = match align.get(c).copied().unwrap_or(Align::Left) {
+            Align::Left => (0, pad),
+            Align::Right => (pad, 0),
+            Align::Centre => (pad / 2, pad - pad / 2),
+        };
+        if before > 0 {
+            spans.push(Span {
+                text: " ".repeat(before),
+                role: Role::Body,
+            });
+        }
+        spans.extend(cell);
+        if after > 0 {
+            spans.push(Span {
+                text: " ".repeat(after),
+                role: Role::Body,
+            });
+        }
+    }
+    // The last column's padding is there to align nothing; in the text it is noise.
+    while let Some(last) = spans.last_mut() {
+        let trimmed = last.text.trim_end().to_string();
+        if trimmed.is_empty() && !last.text.is_empty() {
+            spans.pop();
+            continue;
+        }
+        last.text = trimmed;
+        break;
+    }
+    spans
+}
+
 fn heading(source: &str) -> Option<(u8, &str)> {
     let t = source.trim_start();
     let hashes = t.chars().take_while(|c| *c == '#').count();
@@ -272,6 +483,15 @@ fn item(indent: usize, source: &str) -> Option<(usize, String, &str)> {
     let t = source.trim_start();
     for bullet in ["- ", "* ", "+ "] {
         if let Some(rest) = t.strip_prefix(bullet) {
+            // A task list keeps its box visible: an item that says it is done should say
+            // so, and `[ ]` is a glyph every face has.
+            for (box_, done) in [("[ ] ", false), ("[x] ", true), ("[X] ", true)] {
+                if let Some(rest) = rest.strip_prefix(box_) {
+                    let _ = done;
+                    let mark = if done { "[x] " } else { "[ ] " };
+                    return Some((depth, mark.to_string(), rest));
+                }
+            }
             return Some((depth, "• ".to_string(), rest));
         }
     }
@@ -357,6 +577,7 @@ fn inline(text: &str) -> Vec<Span> {
             ('*', false, Role::Emphasis),
             ('_', true, Role::Strong),
             ('_', false, Role::Emphasis),
+            ('~', true, Role::Strike),
         ] {
             if c != mark {
                 continue;
@@ -488,6 +709,71 @@ mod tests {
         assert_eq!(out[0].kind, Kind::Rule);
         assert_eq!(out[2].kind, Kind::Body);
         assert_eq!(out[2].text(), "A paragraph after a rule.");
+    }
+
+
+    #[test]
+    fn a_table_lines_its_columns_up() {
+        let out = doc("| Name | Value |\n|------|-------|\n| a | 12 |\n| longer | 7 |\n");
+        assert_eq!(out[0].kind, Kind::TableHead);
+        assert_eq!(out[1].kind, Kind::TableRule, "the dashes are not text");
+        assert_eq!(out[2].kind, Kind::TableRow);
+        assert_eq!(out[0].text(), "Name    Value");
+        // Every cell starts where it started in the header.
+        assert_eq!(out[2].text(), "a       12");
+        assert_eq!(out[3].text(), "longer  7");
+        // The point of the padding: the second column begins in the same place in every
+        // row, or it is not a table, it is a paragraph with pipes in it.
+        let col_of = |line: &MdLine, cell: &str| line.text().find(cell);
+        assert_eq!(col_of(&out[0], "Value"), col_of(&out[2], "12"));
+        assert_eq!(col_of(&out[0], "Value"), col_of(&out[3], "7"));
+    }
+
+    #[test]
+    fn a_table_aligns_by_its_delimiters() {
+        let out = doc("| left | right | middle |\n|:--|--:|:-:|\n| a | 1 | b |\n");
+        let row = out[2].text();
+        assert!(row.starts_with("a "), "left column starts at the edge: {row:?}");
+        assert!(row.contains("   1"), "the right column is pushed right: {row:?}");
+    }
+
+    #[test]
+    fn a_ragged_row_is_padded_not_dropped() {
+        let out = doc("| a | b | c |\n|---|---|---|\n| only |\n");
+        assert_eq!(out[2].text().trim_end(), "only");
+    }
+
+    #[test]
+    fn a_line_with_pipes_is_not_a_table_without_its_dashes() {
+        let out = doc("| not | a table |\n\njust prose | with a pipe\n");
+        assert_eq!(out[0].kind, Kind::Body);
+        assert_eq!(out[2].kind, Kind::Body);
+        // A delimiter row of the wrong width is not a table either.
+        let out = doc("| a | b |\n|---|\n");
+        assert_eq!(out[0].kind, Kind::Body);
+    }
+
+    #[test]
+    fn a_table_ends_at_the_first_line_that_is_not_a_row() {
+        let out = doc("| a |\n|---|\n| 1 |\n\nAfter.\n");
+        assert_eq!(out[2].kind, Kind::TableRow);
+        assert_eq!(out[3].kind, Kind::Blank);
+        assert_eq!(out[4].text(), "After.");
+    }
+
+    #[test]
+    fn task_lists_keep_their_boxes() {
+        let out = doc("- [ ] not yet\n- [x] done\n- plain\n");
+        assert_eq!(out[0].text(), "[ ] not yet");
+        assert_eq!(out[1].text(), "[x] done");
+        assert_eq!(out[2].text(), "• plain");
+    }
+
+    #[test]
+    fn strikethrough_is_a_role_not_literal_tildes() {
+        let out = doc("this is ~~gone~~ and this ~is not~\n");
+        assert_eq!(out[0].text(), "this is gone and this ~is not~");
+        assert!(out[0].spans.iter().any(|s| s.role == Role::Strike && s.text == "gone"));
     }
 
     #[test]
