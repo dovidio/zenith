@@ -6,6 +6,8 @@
 
 **A reading room for source code.**
 
+<https://dovidio.github.io/zenith/>
+
 ![zenith reading its own README](docs/self-portrait.jpg)
 
 Zenith is a native code *reader* for projects where people only read code — reviewing,
