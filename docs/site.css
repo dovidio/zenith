@@ -1,0 +1,108 @@
+/* The landing page's own layout. The ink comes from zenith.css, which the app
+   generates; nothing here names a colour. */
+
+:root {
+  --voice-code: ui-monospace, "SF Mono", "JetBrains Mono", "Hack", "DejaVu Sans Mono",
+    "Liberation Mono", Menlo, Consolas, monospace;
+  --voice-prose: "Iowan Old Style", "Charter", "Palatino Linotype", "Athelas", Georgia,
+    ui-serif, serif;
+  --voice-ui: ui-sans-serif, -apple-system, "SF Pro Text", "Helvetica Neue", "Avenir Next",
+    "Optima", "Segoe UI", sans-serif;
+}
+
+html { background: var(--paper); }
+/* zenith.css comes from the app and was written for the blog, where `body` *is* the
+   measure. Here the measure is the column, so the page gets the whole window. */
+body {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-family: var(--voice-prose);
+  font-size: 17px;
+  line-height: 1.62;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: var(--selection); }
+main { max-width: 46rem; margin: 0 auto; padding: 4rem 1.5rem 7rem; }
+
+h1 {
+  font-family: var(--voice-prose);
+  font-weight: 400;
+  font-size: 3.4rem;
+  line-height: 1.05;
+  letter-spacing: -0.015em;
+  color: var(--tone-keyword);
+  margin: 0 0 0.4rem;
+}
+.tagline {
+  font-family: var(--voice-prose);
+  font-size: 1.25em;
+  color: var(--ink-faint);
+  margin: 0 0 2.5rem;
+}
+h2 {
+  font-family: var(--voice-ui);
+  font-size: 0.78em;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 3rem 0 0.8rem;
+}
+p { margin: 0 0 1.1em; }
+a { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-soft); }
+a:hover { border-bottom-color: var(--accent); }
+strong { color: var(--tone-keyword); font-weight: 600; }
+em { font-style: italic; }
+code, pre {
+  font-family: var(--voice-code);
+  font-size: 0.9em;
+}
+code { color: var(--tone-str); background: color-mix(in srgb, var(--ink-faint) 10%, transparent);
+  border-radius: 3px; padding: 0.05em 0.3em; }
+pre {
+  background: color-mix(in srgb, var(--ink-faint) 10%, transparent);
+  border-radius: 5px;
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+  line-height: 1.55;
+}
+pre code { background: none; padding: 0; color: var(--tone-plain); }
+img { max-width: 100%; height: auto; border-radius: 5px;
+  border: 1px solid color-mix(in srgb, var(--edge) 100%, transparent); }
+figure { margin: 1.6rem 0; }
+figcaption {
+  font-family: var(--voice-ui); font-size: 0.78em; color: var(--ink-faint);
+  margin-top: 0.5rem; text-align: right;
+}
+ul { padding-left: 1.3em; }
+li::marker { color: var(--ink-faint); }
+hr { border: 0; border-top: 1px solid var(--edge); margin: 3rem 0; }
+.bets { list-style: none; padding: 0; }
+.bets li { margin-bottom: 0.9rem; }
+.bets b { color: var(--ink); font-weight: 600; }
+
+/* The bar: the theme switcher, kept in the corner where the app keeps its rail. */
+.bar {
+  display: flex; gap: 1.2rem; align-items: baseline; flex-wrap: wrap;
+  font-family: var(--voice-ui); font-size: 0.78em; color: var(--ink-faint);
+  border-top: 1px solid var(--edge); padding-top: 0.8rem; margin-top: 3rem;
+}
+.bar button {
+  font-family: var(--voice-code); font-size: 0.95em;
+  background: none; border: 1px solid var(--edge); border-radius: 3px;
+  color: var(--ink-soft); padding: 0.1rem 0.45rem; cursor: pointer;
+}
+.bar button:hover { color: var(--ink); border-color: var(--accent-soft); }
+.key {
+  font-family: var(--voice-code); font-size: 0.92em; color: var(--ink-soft);
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  border-radius: 3px; padding: 0 0.28em;
+}
+@media (max-width: 620px) {
+  main { padding: 2.5rem 1.2rem 5rem; }
+  h1 { font-size: 2.4rem; }
+}

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en" data-zenith>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zenith — a reading room for source code</title>
+  <meta name="description" content="A native code reader for projects where people read code rather than write it: a file tree, a page, tones instead of rainbow, and six place-named themes.">
+  <link rel="stylesheet" href="zenith.css">
+  <link rel="stylesheet" href="site.css">
+  <script>
+    (function () {
+      var t = localStorage.getItem("zenith-theme");
+      if (t && t !== "lugano") document.documentElement.setAttribute("data-theme", t);
+    })();
+  </script>
+</head>
+<body>
+<main>
+  <h1>Zenith</h1>
+  <p class="tagline">A reading room for source code.</p>
+
+  <p>
+    A native code <em>reader</em> for projects where people read code rather than write it —
+    reviewing, onboarding, archaeology, study. Not an editor with the editing removed: the
+    whole interface assumes you will never type a character into it.
+  </p>
+
+  <figure>
+    <img src="self-portrait.jpg" alt="Zenith reading its own README: a file tree on the left, a page in the middle, contents and tools on the right.">
+    <figcaption>zenith, reading its own README</figcaption>
+  </figure>
+
+  <h2>Run it</h2>
+  <pre><code>git clone https://github.com/dovidio/zenith
+cd zenith
+cargo run --release -- ~/code/some-project</code></pre>
+  <p>
+    Built against egui/eframe 0.35. Developed and read on macOS and Linux; Windows is
+    written for but untested. Zero bundled assets: no fonts, no icons, no images.
+    Requires rustc ≥ 1.92.
+  </p>
+
+  <h2>Why it does not look like your editor</h2>
+  <ul class="bets">
+    <li><b>Indentation is not whitespace.</b> It is drawn as whisper hairlines in a gutter,
+      one per nesting level, so you feel the shape of a block instead of counting spaces.</li>
+    <li><b>Comments are prose.</b> The only part of a source file written in English is the
+      only part set in a reading face: a serif, italic, in the faintest ink.</li>
+    <li><b>Long lines wrap and declare themselves</b>, marked with <code>↳</code> in the
+      margin, so you never scroll sideways.</li>
+    <li><b>Tones, not rainbow.</b> Each token class sits on a single muted tonal ladder
+      instead of a palette of six competing hues.</li>
+    <li><b>Attention is a gradient.</b> The focus lens dims everything except the block you
+      are reading, like the page coming forward.</li>
+  </ul>
+
+  <h2>Six themes</h2>
+  <p>
+    Each is a tonal ladder plus a page, named for something it resembles — a theme is a
+    place, not a colour swatch. <span class="key">1</span>–<span class="key">6</span> pick
+    one, here as in the app.
+  </p>
+  <figure>
+    <img src="themes.jpg" alt="The six themes, each reading the same file in its own ink.">
+    <figcaption>Lugano, Maionese, Bibione, Kununurra, Panittha, Newsprint</figcaption>
+  </figure>
+
+  <h2>Markdown, as a document</h2>
+  <p>
+    A Markdown file is rendered as the document it describes: headings at heading size,
+    emphasis in the italic face, tables as grids with their columns aligned, quotations on a
+    band with a rule down their edge, and fenced code untouched — a <code>#</code> in a code
+    block is not a heading. <span class="key">x</span> toggles back to the source, because
+    sometimes the source is what you came to read.
+  </p>
+
+  <h2>It does not change your code</h2>
+  <p>
+    Files are opened with <code>std::fs::read</code>; there is no save, no lockfile, and no
+    cache directory inside the repository. Its own state — theme, typography, measure,
+    reading positions, bookmarks — lives in <code>~/.config/zenith/</code>, and if that is
+    not writable it degrades to an in-memory session.
+  </p>
+
+  <hr>
+
+  <p>
+    <a href="https://github.com/dovidio/zenith">The reader, on GitHub</a> ·
+    <a href="https://github.com/dovidio/hugo-zenith">The Hugo theme</a> ·
+    <a href="https://github.com/dovidio/zenith/blob/main/README.md">README</a> ·
+    <a href="https://github.com/dovidio/zenith/blob/main/LICENSE-MIT">MIT</a>
+  </p>
+
+  <div class="bar">
+    <span>theme</span>
+    <button data-theme-set="lugano">1 lugano</button>
+    <button data-theme-set="maionese">2 maionese</button>
+    <button data-theme-set="bibione">3 bibione</button>
+    <button data-theme-set="kununurra">4 kununurra</button>
+    <button data-theme-set="panittha">5 panittha</button>
+    <button data-theme-set="newsprint">6 newsprint</button>
+    <span style="margin-left:auto">written by an AI agent, from a human's direction</span>
+  </div>
+</main>
+<script>
+  (function () {
+    var html = document.documentElement;
+    document.querySelectorAll("[data-theme-set]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var name = b.getAttribute("data-theme-set");
+        if (name === "lugano") html.removeAttribute("data-theme");
+        else html.setAttribute("data-theme", name);
+        localStorage.setItem("zenith-theme", name);
+      });
+    });
+  })();
+</script>
+</body>
+</html>
