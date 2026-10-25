@@ -3745,6 +3745,15 @@ impl Zenith {
                     self.store.config.distilled = false;
                     self.caret = vim::Caret::default();
                     self.pending = Pending::Restore;
+                    // `ZENITH_CARET=LINE:COL` puts the cursor somewhere specific, for
+                    // photographing what it looks like there.
+                    if let Some(place) = std::env::var("ZENITH_CARET").ok().and_then(|v| {
+                        let (l, c) = v.split_once(':')?;
+                        Some((l.parse::<usize>().ok()?, c.parse::<usize>().ok()?))
+                    }) {
+                        self.caret = vim::Caret::new(place.0.saturating_sub(1), place.1.saturating_sub(1));
+                        self.ensure_visible();
+                    }
                 }
                 _ => {
                     self.zen = true;

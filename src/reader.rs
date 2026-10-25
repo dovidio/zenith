@@ -849,14 +849,34 @@ pub fn paint(painter: &Painter, p: &Paint) {
                 alpha(p.style.accent, 190),
             );
         }
-        // The column, when the text is monospaced: a hairline the height of the line.
-        // In a prose document the columns are not a grid, so it is not drawn.
+        // The column, when the text is monospaced: a hairline the height of the *row*
+        // the caret is on. A wrapped line is several rows tall, and a bar spanning all of
+        // them says the cursor is in two places at once — which is precisely what a
+        // reader has to resolve before pressing `gd`. In a prose document the columns are
+        // not a grid, so it is not drawn at all.
         if !p.style.prose_document {
             let indent = p.laid.indent_px(p.doc.lines[line].indent);
-            let x = ox + indent + p.caret.col as f32 * p.laid.char_w;
+            // The galley knows which row owns the column, and how far along it is: two
+            // things arithmetic on `col` cannot know once a line wraps.
+            let (x, y0, y1) = match galley_at(line) {
+                Some(galley) => {
+                    let at = galley.pos_from_cursor(egui::text::CCursor {
+                        index: p.caret.col.into(),
+                        // The caret sits *on* the character at that column, so at a wrap
+                        // it belongs to the next row rather than the end of this one.
+                        prefer_next_row: true,
+                    });
+                    (ox + indent + at.center().x, top + at.min.y, top + at.max.y)
+                }
+                None => (
+                    ox + indent + p.caret.col as f32 * p.laid.char_w,
+                    top,
+                    top + h,
+                ),
+            };
             painter.vline(
                 x,
-                Rangef::new(top + 1.0, top + h - 1.0),
+                Rangef::new(y0 + 1.0, (y1 - 1.0).max(y0 + 1.0)),
                 Stroke::new(1.0, alpha(p.style.accent, if p.zen { 120 } else { 90 })),
             );
         }
