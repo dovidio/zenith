@@ -13,6 +13,7 @@ use egui::{
 use crate::catalog::{Store, display_path};
 use crate::distill;
 use crate::fuzzy;
+use crate::lsp;
 use crate::outline::{self, SymKind, Symbol};
 use crate::reader::{self, Laid, Paint, Style};
 use crate::folder::{self, Entry, FileEntry, Folder};
@@ -163,6 +164,32 @@ struct FolderLoad {
     focus: Option<PathBuf>,
 }
 
+/// A navigation question that has been asked but not yet answered.
+struct Nav {
+    /// The request id, once it has been written.
+    id: Option<i64>,
+    path: PathBuf,
+    line: usize,
+    /// The position in protocol coordinates — see [`lsp::text::position`].
+    unit: u32,
+    root: PathBuf,
+}
+
+/// A question waiting for consent: where the server would run, and what was being asked
+/// when the reader found out it could not.
+struct Ask {
+    root: PathBuf,
+    path: PathBuf,
+    line: usize,
+    unit: u32,
+}
+
+/// A search for language servers, running in the background.
+struct Discovery {
+    rx: std::sync::mpsc::Receiver<Vec<lsp::servers::Available>>,
+    root: PathBuf,
+}
+
 struct Startup {
     target: Option<PathBuf>,
     theme: Option<String>,
@@ -221,6 +248,19 @@ pub struct Zenith {
     loading: Option<Loading>,
     /// A background walk of a folder, if one is running.
     folder_load: Option<FolderLoad>,
+    /// Every language server found on this machine for the languages this folder holds.
+    available: Vec<lsp::servers::Available>,
+    /// A search for those servers, running in the background.
+    discovering: Option<Discovery>,
+    /// Servers that have been started, at most one per language and folder.
+    servers: Vec<lsp::Session>,
+    /// A navigation request on its way to a server.
+    nav: Option<Nav>,
+    /// A folder waiting to be told whether a server may run in it.
+    lsp_ask: Option<Ask>,
+    /// The debug-only `ZENITH_GOTO` hook has fired.
+    #[cfg(debug_assertions)]
+    nav_tried: bool,
     /// Every row the folder panel is showing, in order, built once per frame so that the
     /// keyboard and the drawing agree about what is on screen.
     tree_rows: Vec<TreeRow>,
@@ -338,6 +378,13 @@ impl Zenith {
             frame: 0,
             loading: None,
             folder_load: None,
+            available: Vec::new(),
+            discovering: None,
+            servers: Vec::new(),
+            nav: None,
+            lsp_ask: None,
+            #[cfg(debug_assertions)]
+            nav_tried: false,
             tree_rows: Vec::new(),
             tree_focus: false,
             tree_sel: None,
@@ -433,7 +480,7 @@ impl Zenith {
             self.open_folder(&target, None);
         } else if target.is_file() {
             // The file the reader asked for, now; the folder around it can take its time.
-            let root = project_root(&target);
+            let root = crate::catalog::project_root(&target);
             self.open_file(&target);
             self.open_folder(&root, Some(target));
         }
@@ -869,6 +916,19 @@ impl Zenith {
         });
 
         for (key, shift, ctrl, cmd) in presses {
+            // A folder waiting to hear whether a language server may run in it. Enter
+            // allows; any other key means no, and is then handled as usual. Not `y`:
+            // that is zen mode, and a reflex should never grant permission to execute
+            // a project's build scripts.
+            if let Some(ask) = self.lsp_ask.take() {
+                if key == Key::Enter {
+                    self.store.trust(&ask.root);
+                    self.begin_nav(ask.root, ask.path, ask.line, ask.unit);
+                    continue;
+                }
+                self.status = "gd: no language server for this folder".into();
+            }
+
             // ---- commands ----
             //
             // A text box owns the letter keys: the only commands that reach through one
@@ -1101,10 +1161,7 @@ impl Zenith {
             vim::Chord::Centre => self.centre_on_caret(),
             vim::Chord::Top => self.align_caret(true),
             vim::Chord::Bottom => self.align_caret(false),
-            vim::Chord::Definition => {
-                self.status =
-                    "gd: no language server configured yet".into();
-            }
+            vim::Chord::Definition => self.goto_definition(),
         }
     }
 
@@ -1560,6 +1617,7 @@ impl eframe::App for Zenith {
                         Some(path) => self.expand_to(&path),
                         None => {}
                     }
+                    self.start_discovery();
                 }
                 Ok(Err(e)) => {
                     let root = load.root.clone();
@@ -1685,7 +1743,18 @@ impl eframe::App for Zenith {
             }
         }
 
+        self.poll_discovery();
+        self.poll_lsp();
+
         self.reading_keys(&ctx);
+
+        // Keys may have just asked a question, so the send happens after them.
+        self.advance_nav();
+        #[cfg(debug_assertions)]
+        self.dev_nav();
+        if self.discovering.is_some() || self.nav.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(60));
+        }
 
         let pal = self.palette;
         let zen = self.zen;
@@ -3067,6 +3136,321 @@ impl Zenith {
         self.show_settings = open;
     }
 
+    // -- language servers --------------------------------------------------
+
+    /// Find the servers for the languages in this folder, in the background.
+    ///
+    /// Discovery asks binaries their version, which means spawning processes: never on
+    /// the frame thread, and never before there is a folder to search.
+    fn start_discovery(&mut self) {
+        for session in &mut self.servers {
+            session.stop();
+        }
+        self.servers.clear();
+        self.nav = None;
+        self.available.clear();
+        self.discovering = None;
+        let Some(folder) = &self.folder else { return };
+        let root = folder.root.clone();
+        let kinds = lsp::servers::kinds_among(folder.files.iter().map(|f| f.path.as_path()));
+        if kinds.is_empty() {
+            return;
+        }
+        let overrides: Vec<Option<lsp::servers::Override>> = kinds
+            .iter()
+            .map(|kind| {
+                self.store
+                    .config
+                    .lsp
+                    .servers
+                    .get(kind.id)
+                    .map(|s| lsp::servers::Override {
+                        command: s.command.clone(),
+                        args: s.args.clone(),
+                    })
+            })
+            .collect();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let look_here = root.clone();
+        std::thread::spawn(move || {
+            let found = kinds
+                .iter()
+                .zip(overrides)
+                .filter_map(|(kind, over)| lsp::servers::find(kind, &look_here, over.as_ref()))
+                .collect();
+            let _ = tx.send(found);
+        });
+        self.discovering = Some(Discovery { rx, root });
+    }
+
+    fn poll_discovery(&mut self) {
+        let Some(job) = &self.discovering else { return };
+        let root = job.root.clone();
+        match job.rx.try_recv() {
+            Ok(found) => {
+                self.discovering = None;
+                // The reader may have opened another folder while this ran.
+                if self.folder.as_ref().map(|f| f.root.clone()) == Some(root) {
+                    self.available = found;
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.discovering = None,
+        }
+    }
+
+    /// Press `gd` at a place, for a test with nobody at the keyboard.
+    ///
+    /// `ZENITH_GOTO=LINE:COL` asks at that place in whatever file is open, then reports
+    /// where it landed and exits. The language-server path is the one thing in the app
+    /// that cannot be checked by rendering a frame: the question, the handshake and the
+    /// arrival only happen when a key is pressed, and a key cannot be pressed headlessly.
+    #[cfg(debug_assertions)]
+    fn dev_nav(&mut self) {
+        let Ok(spec) = std::env::var("ZENITH_GOTO") else { return };
+        if !self.nav_tried && !self.available.is_empty() {
+            self.nav_tried = true;
+            let mut parts = spec.rsplitn(3, ':');
+            let col: usize = parts.next().and_then(|v| v.parse().ok()).unwrap_or(1);
+            let line: usize = parts.next().and_then(|v| v.parse().ok()).unwrap_or(1);
+            self.caret = vim::Caret::new(line.saturating_sub(1), col.saturating_sub(1));
+            eprintln!("nav: asking at {line}:{col}, {} server(s) available", self.available.len());
+            self.goto_definition();
+            eprintln!("nav: after gd — status {:?}, prompt {:?}", self.status, self.lsp_ask.is_some());
+        }
+        if self.nav_tried && self.nav.is_none() {
+            // Exit is not a shutdown here: the servers have to be let go first, or the
+            // child processes outlive the test.
+            for session in &mut self.servers {
+                session.stop();
+            }
+            eprintln!(
+                "nav: landed at line {} col {}, status {:?}",
+                self.caret.line + 1,
+                self.caret.col + 1,
+                self.status
+            );
+            std::process::exit(0);
+        }
+        if self.frame > 900 {
+            eprintln!("nav: gave up — status {:?}", self.status);
+            std::process::exit(1);
+        }
+    }
+
+    /// Where is the thing under the cursor defined?
+    fn goto_definition(&mut self) {
+        let Some(open) = &self.open else {
+            self.status = "gd: no file is open".into();
+            return;
+        };
+        let path = open.path.clone();
+        let line = self.caret.line;
+        let unit = open
+            .doc
+            .lines
+            .get(line)
+            .map(|l| lsp::text::position(l, self.caret.col))
+            .unwrap_or(0);
+        let Some((kind, _)) = lsp::servers::kind_for(&path) else {
+            self.status = "gd: no language server serves this kind of file".into();
+            return;
+        };
+        if self.discovering.is_some() && self.available.is_empty() {
+            self.status = format!("gd: still looking for a {} language server…", kind.title);
+            return;
+        }
+        if !self.available.iter().any(|a| a.kind.id == kind.id) {
+            self.status = format!(
+                "gd: no {} language server on this machine — `zenith --lsp` says what it looks for",
+                kind.title
+            );
+            return;
+        }
+        let root = self
+            .folder
+            .as_ref()
+            .map(|f| f.root.clone())
+            .unwrap_or_else(|| crate::catalog::project_root(&path));
+        if !self.store.trusts(&root) {
+            // A server analyses the project, which means running its build scripts. It is
+            // a small, mundane and entirely real permission, and it is asked here — in
+            // the strip that already talks to the reader — rather than in a dialog that
+            // takes the page away. Enter allows it because `y` is zen mode, and a reflex
+            // key should not grant permission to execute anything.
+            let server = self
+                .available
+                .iter()
+                .find(|a| a.kind.id == kind.id)
+                .and_then(|a| a.binary.file_name().map(|n| n.to_string_lossy().to_string()))
+                .unwrap_or_default();
+            self.lsp_ask = Some(Ask {
+                root,
+                path,
+                line,
+                unit,
+            });
+            self.status = format!(
+                "ask {server} about this folder? it runs this project's build scripts — enter to allow, esc to cancel"
+            );
+            return;
+        }
+        self.begin_nav(root, path, line, unit);
+    }
+
+    /// Start the server if it is not running, then ask it the question.
+    fn begin_nav(&mut self, root: PathBuf, path: PathBuf, line: usize, unit: u32) {
+        let Some((kind, _)) = lsp::servers::kind_for(&path) else {
+            return;
+        };
+        if self.discovering.is_some() && self.available.is_empty() {
+            self.status = format!("gd: still looking for a {} language server…", kind.title);
+            return;
+        }
+        let Some(found) = self
+            .available
+            .iter()
+            .find(|a| a.kind.id == kind.id)
+            .cloned()
+        else {
+            self.status = format!("gd: no {} language server on this machine", kind.title);
+            return;
+        };
+        if !self.servers.iter().any(|s| s.id() == kind.id && s.root == root) {
+            match lsp::Session::start(kind, &found, &root) {
+                Ok(session) => self.servers.push(session),
+                Err(e) => {
+                    self.status = format!("gd: {e}");
+                    return;
+                }
+            }
+        }
+        self.status = format!("gd: asking {}…", kind.title);
+        self.nav = Some(Nav {
+            id: None,
+            path,
+            line,
+            unit,
+            root,
+        });
+    }
+
+    /// Send a waiting question once its server has finished its handshake.
+    fn advance_nav(&mut self) {
+        let Some(nav) = &self.nav else { return };
+        if nav.id.is_some() {
+            return;
+        }
+        let root = nav.root.clone();
+        let path = nav.path.clone();
+        let (line, unit) = (nav.line, nav.unit);
+        let Some(session) = self
+            .servers
+            .iter_mut()
+            .find(|s| s.root == root && Some(s.id()) == lsp::servers::kind_for(&path).map(|(k, _)| k.id))
+        else {
+            // The server this question was waiting for is gone — it failed its handshake,
+            // or the folder changed underneath it. Stop waiting: an unanswered question
+            // must not keep asking for frames.
+            self.nav = None;
+            return;
+        };
+        if *session.state() != lsp::State::Ready {
+            return;
+        }
+        match session.definition(&path, line as u32, unit) {
+            Ok(id) => {
+                if let Some(nav) = &mut self.nav {
+                    nav.id = Some(id);
+                }
+            }
+            Err(e) => {
+                self.nav = None;
+                self.status = format!("gd: {e}");
+            }
+        }
+    }
+
+    /// Take whatever the servers have said since the last frame.
+    fn poll_lsp(&mut self) {
+        if self.servers.is_empty() {
+            return;
+        }
+        let asked = self.nav.as_ref().and_then(|n| n.id);
+        let mut land: Option<Vec<lsp::Target>> = None;
+        let mut gone: Vec<String> = Vec::new();
+        for session in &mut self.servers {
+            for answer in session.poll() {
+                match answer {
+                    lsp::Answer::Ready => {}
+                    lsp::Answer::Ended(why) => gone.push(format!("{} — {why}", session.kind.title)),
+                    lsp::Answer::Found { id, targets } => {
+                        if Some(id) == asked {
+                            land = Some(targets);
+                        }
+                    }
+                    lsp::Answer::Refused { id, message } => {
+                        if Some(id) == asked {
+                            self.nav = None;
+                            self.status = format!("gd: {message}");
+                        }
+                    }
+                }
+            }
+        }
+        if !gone.is_empty() {
+            self.status = format!("gd: {}", gone.join("; "));
+            self.nav = None;
+            self.servers
+                .retain(|s| !matches!(s.state(), lsp::State::Failed(_)));
+        }
+        if let Some(targets) = land {
+            self.nav = None;
+            self.land(targets);
+        }
+    }
+
+    /// Go where the server said. One target is a teleport; several are a page opening at
+    /// the first of them, and the count says so rather than pretending there was one.
+    fn land(&mut self, targets: Vec<lsp::Target>) {
+        let Some(first) = targets.first() else {
+            self.status = "gd: nothing at that place".into();
+            return;
+        };
+        let count = targets.len();
+        let there = first.place();
+        let path = first.path.clone();
+        let (line, unit) = (first.line, first.unit);
+        let from = self.caret;
+        let here = self.open.as_ref().map(|o| o.path.clone());
+        if here.as_deref() != Some(path.as_path()) {
+            self.push_jump(from);
+            self.open_file(&path);
+        }
+        let Some(open) = &self.open else { return };
+        let line = line.min(open.doc.lines.len().saturating_sub(1));
+        let col = open
+            .doc
+            .lines
+            .get(line)
+            .map(|l| lsp::text::column(l, unit))
+            .unwrap_or(0);
+        let caret = vim::Caret::new(line, col);
+        if here.as_deref() == Some(path.as_path()) && caret != from {
+            self.push_jump(from);
+        }
+        self.caret = caret;
+        self.ensure_visible();
+        // Following a definition is an arrival, not a nudge: the line comes to the top of
+        // the page, which is where someone who has just arrived starts reading.
+        self.pending = Pending::Top(caret.line);
+        self.status = if count > 1 {
+            format!("→ {there} (1 of {count})")
+        } else {
+            format!("→ {there}")
+        };
+    }
+
     /// In zen mode, a whisper of chrome that fades when you move the mouse.
     fn zen_hint(&mut self, ctx: &egui::Context) {
         let idle = ctx.input(|i| i.pointer.has_pointer());
@@ -3546,40 +3930,6 @@ fn working_project() -> Option<PathBuf> {
         .then_some(cwd)
 }
 
-fn project_root(file: &Path) -> PathBuf {
-    let parent = file.parent().map(|p| p.to_path_buf());
-    let markers = [
-        ".git",
-        "Cargo.toml",
-        "package.json",
-        "go.mod",
-        "pyproject.toml",
-        "pom.xml",
-        "Gemfile",
-    ];
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let mut dir = parent.clone();
-    let mut hops = 0;
-    while let Some(d) = dir {
-        if hops > 8 {
-            break;
-        }
-        if markers.iter().any(|m| d.join(m).exists()) {
-            return d;
-        }
-        // Stop at the home directory or the root of the filesystem. A "project" is
-        // something a reader would recognise; climbing past home is how opening a lone
-        // file in /tmp used to hand the walker the whole disk.
-        if home.as_deref() == Some(d.as_path()) || d.parent().is_none() {
-            break;
-        }
-        dir = d.parent().map(|p| p.to_path_buf());
-        hops += 1;
-    }
-    // No marker anywhere above it: the file's own folder is the folder.
-    parent.unwrap_or_else(|| PathBuf::from("."))
-}
-
 fn read_head(path: &Path) -> String {
     std::fs::read(path)
         .ok()
@@ -3833,6 +4183,7 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("n N", "next and previous search match"),
     ("[ ]", "previous / next chapter (the outline)"),
     ("ctrl-o ctrl-i", "back and forward through where you have been"),
+    ("gd", "go to the definition of what is under the cursor"),
     ("J K", "next / previous file in the folder"),
     ("j k l h", "in the tree: move, open, and back out"),
     ("enter, G, gg", "in the tree: open, last row, first row"),

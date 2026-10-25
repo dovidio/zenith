@@ -44,6 +44,11 @@ pub enum Flow {
 pub struct Line {
     /// Indentation width in columns (tab = 4).
     pub indent: usize,
+    /// Indentation width in *bytes* of the file. Not the same number as [`Line::indent`]
+    /// once a tab is involved, and the difference is load-bearing: a language server
+    /// counts positions in the file as written, so this is what turns a caret column
+    /// into one. See [`crate::lsp::text`].
+    pub indent_bytes: usize,
     /// Indentation width of the *first* row only, for hanging structures.
     pub tokens: Vec<Token>,
     pub flow: Flow,
@@ -193,6 +198,7 @@ impl Highlighter {
         if lines.is_empty() {
             lines.push(Line {
                 indent: 0,
+                indent_bytes: 0,
                 tokens: Vec::new(),
                 flow: Flow::Blank,
                 dominant: Tone::Plain,
@@ -316,6 +322,7 @@ pub struct Run {
 /// Strip the line's indentation out of the tokens, measure it, and classify flow.
 fn finish_line(line: &str, mut toks: Vec<Token>) -> Line {
     let mut indent = 0usize;
+    let mut indent_bytes = 0usize;
     let mut stripping = true;
     let mut out: Vec<Token> = Vec::with_capacity(toks.len());
 
@@ -345,6 +352,10 @@ fn finish_line(line: &str, mut toks: Vec<Token>) -> Line {
             let _ = ch;
         }
         rest = &rest[cut..];
+        // Whitespace is ASCII, so the bytes we cut here are the bytes of the file's
+        // indentation — a tab counts four columns but one byte, and a language server
+        // means the byte.
+        indent_bytes += cut;
         if rest.is_empty() {
             continue;
         }
@@ -375,6 +386,7 @@ fn finish_line(line: &str, mut toks: Vec<Token>) -> Line {
     let _ = line;
     Line {
         indent,
+        indent_bytes,
         tokens: out,
         flow,
         dominant,
@@ -673,6 +685,7 @@ fn parse_config(text: &str, bytes: usize) -> Option<Document> {
         lines: if lines.is_empty() {
             vec![Line {
                 indent: 0,
+                indent_bytes: 0,
                 tokens: Vec::new(),
                 flow: Flow::Blank,
                 dominant: Tone::Plain,

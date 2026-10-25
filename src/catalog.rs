@@ -49,6 +49,36 @@ pub struct Config {
     pub frameless: bool,
     /// Render Markdown as a document rather than setting its source.
     pub markdown: bool,
+    /// Language servers: which folders may run one, and any the reader pointed at
+    /// themselves.
+    pub lsp: Lsp,
+}
+
+/// Language servers, as configuration.
+///
+/// The list of trusted folders is here, in the reader's own settings, and not in a file
+/// inside the project being read. That is forced by the same promise as everything else
+/// in this program: zenith writes nothing into a repository, so a per-project setting
+/// has to live outside the project.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct Lsp {
+    /// Folders a server has been allowed to run in.
+    pub trusted: Vec<PathBuf>,
+    /// Servers at a path of the reader's choosing, named by language:
+    ///
+    /// ```toml
+    /// [lsp.servers.rust]
+    /// command = "/opt/homebrew/bin/rust-analyzer"
+    /// ```
+    pub servers: BTreeMap<String, Server>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct Server {
+    pub command: String,
+    pub args: Vec<String>,
 }
 
 impl Default for Config {
@@ -70,6 +100,7 @@ impl Default for Config {
             zen: false,
             frameless: true,
             markdown: true,
+            lsp: Lsp::default(),
         }
     }
 }
@@ -174,6 +205,22 @@ impl Store {
     pub fn is_favorite(&self, file: &Path) -> bool {
         self.session.favorites.iter().any(|p| p == file)
     }
+
+    /// Has this folder been allowed to run a language server?
+    ///
+    /// Starting one is not free: a server analyses the project, which means running its
+    /// build scripts. It is a small, mundane, and very real kind of consent, and it is
+    /// asked once per folder rather than once per session.
+    pub fn trusts(&self, root: &Path) -> bool {
+        self.config.lsp.trusted.iter().any(|p| p == root)
+    }
+
+    pub fn trust(&mut self, root: &Path) {
+        if !self.trusts(root) {
+            self.config.lsp.trusted.push(root.to_path_buf());
+            self.save_config();
+        }
+    }
 }
 
 pub fn config_dir() -> PathBuf {
@@ -197,4 +244,42 @@ pub fn display_path(p: &Path) -> String {
         Ok(rest) => format!("~/{}", rest.to_string_lossy()),
         Err(_) => p.to_string_lossy().to_string(),
     }
+}
+
+/// The folder a file belongs to, by looking for the marks of a project above it.
+///
+/// This is what a language server should be rooted at: a crate, a module, a repository —
+/// something with a manifest, not a bare directory of loose files.
+pub fn project_root(file: &Path) -> PathBuf {
+    let parent = file.parent().map(|p| p.to_path_buf());
+    let markers = [
+        ".git",
+        "Cargo.toml",
+        "package.json",
+        "go.mod",
+        "pyproject.toml",
+        "pom.xml",
+        "Gemfile",
+    ];
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut dir = parent.clone();
+    let mut hops = 0;
+    while let Some(d) = dir {
+        if hops > 8 {
+            break;
+        }
+        if markers.iter().any(|m| d.join(m).exists()) {
+            return d;
+        }
+        // Stop at the home directory or the root of the filesystem. A "project" is
+        // something a reader would recognise; climbing past home is how opening a lone
+        // file in /tmp used to hand the walker the whole disk.
+        if home.as_deref() == Some(d.as_path()) || d.parent().is_none() {
+            break;
+        }
+        dir = d.parent().map(|p| p.to_path_buf());
+        hops += 1;
+    }
+    // No marker anywhere above it: the file's own folder is the folder.
+    parent.unwrap_or_else(|| PathBuf::from("."))
 }

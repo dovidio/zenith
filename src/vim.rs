@@ -483,6 +483,7 @@ mod tests {
                     let body = t.trim_start().to_string();
                     Line {
                         indent,
+                        indent_bytes: indent,
                         flow: if body.is_empty() {
                             Flow::Blank
                         } else {

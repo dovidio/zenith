@@ -12,6 +12,7 @@ mod app;
 mod catalog;
 mod distill;
 mod fuzzy;
+mod lsp;
 mod markdown;
 mod outline;
 mod png;
@@ -78,6 +79,23 @@ fn main() {
                     None => die("--md needs a file path"),
                 }
             }
+            "--lsp" => {
+                // The folder to report on; without one, this folder.
+                mode = match args.get(i + 1) {
+                    Some(next) if !next.starts_with('-') => {
+                        i += 1;
+                        Mode::Lsp(Some(PathBuf::from(next)))
+                    }
+                    _ => Mode::Lsp(None),
+                };
+            }
+            "--lsp-ask" => {
+                i += 1;
+                match args.get(i) {
+                    Some(spec) => mode = Mode::LspAsk(spec.clone()),
+                    None => die("--lsp-ask needs FILE:LINE:COL"),
+                }
+            }
             "--walk" => {
                 i += 1;
                 match args.get(i) {
@@ -126,6 +144,8 @@ fn main() {
         Mode::Css => print!("{}", theme::css()),
         Mode::Md(path) => print_md(&path),
         Mode::Walk(path) => walk(&path),
+        Mode::Lsp(dir) => lsp_report(dir),
+        Mode::LspAsk(spec) => lsp_ask(&spec),
         Mode::Scopes(path, n) => dump_scopes(&path, n),
         Mode::Smoke(out) => app::run_smoke(target, out, theme_override, measure_override, scale_override),
         Mode::Run => app::run(
@@ -149,6 +169,8 @@ enum Mode {
     Css,
     Md(PathBuf),
     Walk(PathBuf),
+    Lsp(Option<PathBuf>),
+    LspAsk(String),
     Scopes(PathBuf, usize),
     Smoke(PathBuf),
 }
@@ -167,6 +189,8 @@ USAGE:
     zenith --faces FILE       list the faces inside a font file, and their coverage
     zenith --scopes FILE [N]  show the grammar scopes behind each tone
     zenith --smoke OUT.png    render a self-portrait and exit
+    zenith --lsp [FOLDER]     which language servers were found, and where
+    zenith --lsp-ask FILE:L:C ask a server what is defined at a place, and print it
 
 READING KEYS:
     j / k, space, ⇧space      move the reading cursor / page
@@ -184,6 +208,7 @@ READING KEYS:
     w                         toggle soft wrap
     #                         toggle line numbers
     g / G                     top / bottom of file
+    gd                        go to the definition of what is under the cursor
     b                         bookmark this file
     q                         close the file
     ⌘O                        open a folder
@@ -242,6 +267,109 @@ fn walk(root: &std::path::Path) {
             }
         }
         Err(e) => eprintln!("zenith: cannot read {}: {e}", root.display()),
+    }
+}
+
+/// Which language servers exist on this machine, for the languages in a folder.
+///
+/// This is the honest half of "LSP support": zenith finds servers, it does not install
+/// them, so what it can do is tell the reader what it found and what the server itself
+/// said. A binary that exists is not a binary that works — the flag that verifies is
+/// `--lsp-ask`, which performs the handshake.
+fn lsp_report(dir: Option<PathBuf>) {
+    let root = dir.unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    });
+    if !root.is_dir() {
+        die(&format!("{} is not a folder", root.display()));
+    }
+    let name = root
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let files: Vec<PathBuf> = match folder::open(&root, &name, true, false) {
+        Ok(f) => f.files.into_iter().map(|f| f.path).collect(),
+        Err(e) => die(&format!("cannot read {}: {e}", root.display())),
+    };
+    let kinds = lsp::servers::kinds_among(files.iter().map(|p| p.as_path()));
+    println!("{}\n", catalog::display_path(&root));
+    if kinds.is_empty() {
+        println!("  no language here has a server zenith knows about");
+        return;
+    }
+    let mut found = 0;
+    for kind in &kinds {
+        match lsp::servers::find(kind, &root, None) {
+            Some(available) => {
+                found += 1;
+                println!(
+                    "  {:<12} {}",
+                    kind.title,
+                    catalog::display_path(&available.binary)
+                );
+                if !available.note.is_empty() {
+                    println!("  {:<12}   {}", "", available.note);
+                }
+            }
+            None => {
+                let names: Vec<&str> = kind.candidates.iter().map(|(b, _)| *b).collect();
+                println!("  {:<12} not found ({})", kind.title, names.join(", "));
+            }
+        }
+    }
+    println!(
+        "\n  {} of {} language(s) have a server; none were downloaded",
+        found,
+        kinds.len()
+    );
+}
+
+/// Ask a server what is defined at a place: `--lsp-ask FILE:LINE:COL`.
+///
+/// The line and column are one-based and count characters, which is what the status bar
+/// shows, so the interesting part is not the answer — it is that the translation from a
+/// reader's place to a protocol position is exercised on a real file, against a real
+/// server, without a window.
+fn lsp_ask(spec: &str) {
+    let mut parts = spec.rsplitn(3, ':');
+    let col: usize = parts
+        .next()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| die("--lsp-ask wants FILE:LINE:COL"));
+    let line: usize = parts
+        .next()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| die("--lsp-ask wants FILE:LINE:COL"));
+    let file = PathBuf::from(parts.next().unwrap_or_else(|| die("--lsp-ask wants FILE:LINE:COL")));
+    let text = match std::fs::read_to_string(&file) {
+        Ok(t) => t,
+        Err(e) => die(&format!("cannot read {}: {e}", file.display())),
+    };
+    let Some(source) = line.checked_sub(1).and_then(|n| text.lines().nth(n)) else {
+        die(&format!("{} has no line {line}", file.display()));
+    };
+    // The same conversion the window uses: a caret column, indentation excluded, to a
+    // UTF-16 position counted from the first byte of the line.
+    let l = syntax::Line::plain(source);
+    let unit = lsp::text::position(&l, col.saturating_sub(1));
+    let root = catalog::project_root(&file);
+    println!(
+        "{}:{line}:{col}  →  utf-16 character {unit}  (root {})",
+        catalog::display_path(&file),
+        catalog::display_path(&root)
+    );
+    let started = std::time::Instant::now();
+    match lsp::ask_definition(&file, line - 1, unit, &root) {
+        Ok(targets) if targets.is_empty() => {
+            println!("  nothing there — the server knows of no definition at that place");
+        }
+        Ok(targets) => {
+            println!("  answered in {:.0?}", started.elapsed());
+            for t in targets {
+                println!("  {}", t.place());
+            }
+        }
+        Err(e) => println!("  no answer: {e}"),
     }
 }
 

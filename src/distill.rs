@@ -516,6 +516,7 @@ mod tests {
     fn line(pairs: &[(&str, Tone)]) -> Line {
         Line {
             indent: 0,
+            indent_bytes: 0,
             tokens: pairs
                 .iter()
                 .map(|(t, tone)| Token {

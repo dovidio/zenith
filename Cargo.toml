@@ -42,6 +42,10 @@ skrifa = { version = "0.42.1", default-features = false, features = [
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 
+# Talking to language servers. The one place where a hand-written parser would be a
+# mistake: JSON escapes strings in six ways and every one of them appears in a reply.
+serde_json = "1"
+
 [profile.release]
 opt-level = 2
 lto = "thin"

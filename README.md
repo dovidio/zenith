@@ -22,8 +22,9 @@ cargo run --release -- ~/code/some-project
 ```
 
 Navigation is vim's, as far as a reader needs it: `j k`, `w b e`, `0 ^ $`, `{ }`, `%`,
-`gg G`, `H M L`, `zz zt zb`, `ctrl-d ctrl-u`, `[ ]` for chapters, and `ctrl-o` / `ctrl-i`
-to go back and forward through everywhere you have been. The folder tree takes the
+`gg G`, `H M L`, `zz zt zb`, `ctrl-d ctrl-u`, `[ ]` for chapters, `gd` to follow a name to
+where it is defined, and `ctrl-o` / `ctrl-i` to go back and forward through everywhere you
+have been. The folder tree takes the
 keyboard too: `tab` to enter it, `j k` to move, `l` or `enter` to open a file or fold a
 folder, `h` to back out, `esc` to return to the page. Two finders, deliberately separate:
 `⌘P` (or `ctrl-p`) finds *a file* in the open folder, `/` (or `⌘F`) searches *inside the
@@ -155,11 +156,45 @@ each folder. Opening a project puts you in front of its README, not the first fi
 alphabetically. Nothing is catalogued or remembered beyond the folder itself: there is no
 collection to curate, no workspace to configure.
 
+## Following the code
+
+`gd` goes to the definition of the name under the cursor; `ctrl-o` comes back. That is the
+whole of zenith's language-server support, and it is one question — *where is this
+defined* — asked of a server that has to answer it. No completion, no diagnostics, no type
+hints in the margin, no rename. A reader does not change anything, so the client never
+tells a server the document has changed: it opens the file, asks, and closes it.
+
+It uses the servers already on the machine. Zenith does not download, bundle or install
+them, and that is deliberate rather than unfinished: the server that matches a project is
+the one the project already builds against — rust-analyzer from the same toolchain,
+`tsserver` from the project's own TypeScript, gopls built with a Go that understands its
+`go.mod`. A copy fetched from the network is the wrong copy surprisingly often, and an
+installer would make a reader into a package manager. `zenith --lsp` reports what it found,
+where, and what each binary said about itself.
+
+A binary on `PATH` is not a server that works. On macOS, `~/.cargo/bin/rust-analyzer` can
+be a rustup shim whose component is missing: it is there, it is executable, and it exits
+with `Unknown binary 'rust-analyzer' in official toolchain`. So discovery is a table and a
+search — including the directories a window opened from the Finder cannot see, because the
+desktop hands it `/usr/bin:/bin:/usr/sbin:/sbin` — and the *handshake* is the verification.
+When a server refuses, the strip at the foot of the page quotes the server's own words,
+which is usually the exact command that fixes it.
+
+Starting one has consequences: analysing a project means running its build scripts. So the
+first `gd` in a folder asks, in that strip, and the answer is remembered in
+`~/.config/zenith/config.toml` — outside the project, because zenith writes nothing into
+it. Enter allows it; anything else cancels, and `y` deliberately does not, because `y` is
+zen mode and a reflex should not grant permission to execute anything. Every question a
+server asks in return is answered "nothing": no capabilities registered, no configuration
+supplied, no edit ever applied.
+
 ## It does not change your code
 
 Zenith reads your project and writes nothing into it. Files are opened with
 `std::fs::read`; there is no save, no lockfile, and no cache directory inside the
-repository. Its own state — theme, typography, measure, reading positions, bookmarks —
+repository. The one thing it may start on your behalf is a language server, and only for a
+folder you have said yes to (see above). Its own state — theme, typography, measure,
+reading positions, bookmarks —
 lives in `~/.config/zenith/`, and if that directory is not writable it degrades to an
 in-memory session rather than failing. That is a property of the code, not a promise in a
 README: read for a while, then diff the modification times of a copy and nothing will have
@@ -180,7 +215,9 @@ moved.
   quits everywhere regardless.
 - **Diagnostics.** There is a headless mode for almost everything: `--dump`, `--scopes`,
   `--md`, `--distill`, `--fonts`, `--faces`, `--glyphs` (which mark the fonts here can
-  actually draw), `--walk` (what a folder cost), and `--smoke` (renders the app to a PNG,
+  actually draw), `--walk` (what a folder cost), `--lsp` (which language servers were found
+  and what each said about itself), `--lsp-ask FILE:LINE:COL` (the handshake, a real
+  question, and the answer, without a window), and `--smoke` (renders the app to a PNG,
   which is how the screenshots above were taken).
 - **How it was written.** The code, the tests, this README and the screenshots were
   produced by an AI agent working from a human's direction. No human has read every line —
