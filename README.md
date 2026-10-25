@@ -83,7 +83,10 @@ Baskerville, Georgia…), and **chrome** in a humanist sans (SF Pro; Helvetica N
 Next, Optima, Geneva…).
 
 Nothing is bundled: it reads the typefaces already on the machine and measures the glyphs
-source code depends on before trusting them. That check earns its keep — Apple's handsome
+source code depends on before trusting them. It measures their *x-heights* too, and sets
+the prose larger than the code by exactly that ratio — a book serif and a coding face at
+the same point size are not the same size to the eye, and the serif is the one that loses
+(`zenith --fonts` prints the measurement). That check earns its keep — Apple's handsome
 New York maps `_` in its character table and draws it 0.005 em thick, so `snake_case_name`
 renders as `snake case name`, and the default prose voice is Iowan Old Style because of it.
 `zenith --fonts` says why any face was refused.
@@ -180,12 +183,24 @@ desktop hands it `/usr/bin:/bin:/usr/sbin:/sbin` — and the *handshake* is the 
 When a server refuses, the strip at the foot of the page quotes the server's own words,
 which is usually the exact command that fixes it.
 
-Starting one has consequences: analysing a project means running its build scripts. So the
-first `gd` in a folder asks, in that strip, and the answer is remembered in
-`~/.config/zenith/config.toml` — outside the project, because zenith writes nothing into
-it. `y` or enter allows it, `esc` says no, and the question stays on screen until it is
-answered. Every question a server asks in return is answered "nothing": no capabilities
-registered, no configuration supplied, no edit ever applied.
+Starting one has consequences: analysing a project means running its build scripts. That
+cost is paid without asking, so it is a *setting* rather than a ceremony: a server starts
+by itself when you open a file of a language that has one — while you read, so the answer
+is ready when you press `gd` — and this turns them all off:
+
+```toml
+# ~/.config/zenith/config.toml
+[lsp]
+enabled = false
+```
+
+Every question a server asks in return is answered "nothing": no capabilities registered,
+no configuration supplied, no edit ever applied.
+
+The contents panel comes from the server too, when there is one. A grammar can say where
+a declaration starts; only the language itself knows that a method belongs inside an
+`impl` and a variant inside its `enum`, so the panel indents them that way. With no server
+the panel falls back to reading the grammar and nothing is missing from the page.
 
 The handshake is not readiness. A server that has not finished reading the project answers
 "nothing is defined there", which is true and useless, so the client watches the server's

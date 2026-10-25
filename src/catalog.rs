@@ -60,11 +60,13 @@ pub struct Config {
 /// inside the project being read. That is forced by the same promise as everything else
 /// in this program: zenith writes nothing into a repository, so a per-project setting
 /// has to live outside the project.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Lsp {
-    /// Folders a server has been allowed to run in.
-    pub trusted: Vec<PathBuf>,
+    /// Whether zenith may start language servers at all. On by default: a server is what
+    /// makes `gd` work, and the point of discovering one is to use it. Turning it off is
+    /// a setting, not a ritual, and nothing else in the program depends on a server.
+    pub enabled: bool,
     /// Servers at a path of the reader's choosing, named by language:
     ///
     /// ```toml
@@ -72,6 +74,15 @@ pub struct Lsp {
     /// command = "/opt/homebrew/bin/rust-analyzer"
     /// ```
     pub servers: BTreeMap<String, Server>,
+}
+
+impl Default for Lsp {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            servers: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -206,21 +217,6 @@ impl Store {
         self.session.favorites.iter().any(|p| p == file)
     }
 
-    /// Has this folder been allowed to run a language server?
-    ///
-    /// Starting one is not free: a server analyses the project, which means running its
-    /// build scripts. It is a small, mundane, and very real kind of consent, and it is
-    /// asked once per folder rather than once per session.
-    pub fn trusts(&self, root: &Path) -> bool {
-        self.config.lsp.trusted.iter().any(|p| p == root)
-    }
-
-    pub fn trust(&mut self, root: &Path) {
-        if !self.trusts(root) {
-            self.config.lsp.trusted.push(root.to_path_buf());
-            self.save_config();
-        }
-    }
 }
 
 pub fn config_dir() -> PathBuf {
@@ -287,4 +283,44 @@ pub fn project_root(file: &Path) -> PathBuf {
     }
     // No marker anywhere above it: the file's own folder is the folder.
     parent.unwrap_or_else(|| PathBuf::from("."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_config_from_before_servers_is_still_a_config() {
+        // The list of trusted folders is gone; a file that still names one must load,
+        // not reset the reader's taste along with it.
+        let old = r#"
+theme = "Kununurra"
+measure = 72
+
+[lsp]
+trusted = ["/Users/someone/code/thing"]
+"#;
+        let config: Config = toml::from_str(old).unwrap();
+        assert_eq!(config.measure, 72);
+        assert!(config.lsp.enabled, "servers are on unless turned off");
+    }
+
+    #[test]
+    fn a_server_can_be_pointed_at_a_binary_of_the_readers_choosing() {
+        let text = r#"
+[lsp.servers.rust]
+command = "/opt/homebrew/bin/rust-analyzer"
+args = ["--no-sysroot"]
+"#;
+        let config: Config = toml::from_str(text).unwrap();
+        let rust = config.lsp.servers.get("rust").unwrap();
+        assert_eq!(rust.command, "/opt/homebrew/bin/rust-analyzer");
+        assert_eq!(rust.args, vec!["--no-sysroot".to_string()]);
+    }
+
+    #[test]
+    fn servers_can_be_turned_off() {
+        let config: Config = toml::from_str("[lsp]\nenabled = false\n").unwrap();
+        assert!(!config.lsp.enabled);
+    }
 }

@@ -141,6 +141,10 @@ pub struct Voice {
     pub path: PathBuf,
     pub index: u32,
     pub note: String,
+    /// The height of its lowercase letters, in em units. Faces agree about the em and
+    /// disagree about everything else, so this is what makes two faces look like they are
+    /// set at the same size when they are set at the same size.
+    pub x_height: f32,
 }
 
 /// A font file found on this machine.
@@ -339,6 +343,7 @@ pub fn voices(role: Role) -> Vec<Voice> {
         .into_iter()
         .filter(|f| f.role == role)
         .map(|f| Voice {
+            x_height: x_height(&f.path, 0).unwrap_or(0.5),
             label: f.label.to_string(),
             path: f.path,
             index: 0,
@@ -413,6 +418,34 @@ fn underscore_size(font: &FontRef) -> Option<(f32, f32, f32)> {
     glyph.draw(settings, &mut pen).ok()?;
     let (w, h) = (pen.width(), pen.height());
     Some((w / em, h / em, -pen.min.1 / em))
+}
+
+/// The height of a face's lowercase letters, in em units, measured from a drawn `x`.
+///
+/// A monospace drawn for source code has an x-height around 0.53 em; a book serif around
+/// 0.45. Set at the same point size, the prose is then visibly smaller than the code it
+/// sits among — not because it is set smaller, but because a point is an em and ems are
+/// not the same size in the eye. This is the measurement that lets the page correct for
+/// it, and it is measured from the glyph rather than read from `OS/2`, because a table
+/// is a claim and an outline is a fact.
+fn x_height(path: &Path, index: u32) -> Option<f32> {
+    let bytes = std::fs::read(path).ok()?;
+    // `from_index`, not `new`: a `.ttc` holds several faces, and the first of them is
+    // usually not the one the page is set in — which is how every serif on this machine
+    // measured the same and none of them measured right.
+    let font = FontRef::from_index(&bytes, index).ok()?;
+    let metrics = font.metrics(Size::unscaled(), LocationRef::default());
+    let em = metrics.units_per_em as f32;
+    if em <= 0.0 {
+        return None;
+    }
+    let glyph = font.outline_glyphs().get(font.charmap().map('x')?)?;
+    let mut pen = Bounds::default();
+    let settings = DrawSettings::unhinted(Size::unscaled(), LocationRef::default());
+    glyph.draw(settings, &mut pen).ok()?;
+    let height = pen.height() / em;
+    // Sane lowercase heights only: a face that reports something wild is not measured.
+    (0.3..=0.8).contains(&height).then_some(height)
 }
 
 const UNDERSCORE_MIN_WIDTH: f32 = 0.10;
@@ -799,6 +832,20 @@ impl Typography {
     pub fn code_italic_id(&self, size: f32) -> FontId {
         FontId::new(size, self.code_italic.clone())
     }
+    /// How much larger the prose has to be set to look the same size as the code.
+    ///
+    /// The ratio of the two faces' x-heights: give or take the way a serif and a
+    /// monospace sit next to each other, matching lowercase heights is what makes them
+    /// read as one page rather than two sizes.
+    pub fn prose_scale(&self) -> f32 {
+        let code = self.mono_voices.get(self.mono_idx).map(|v| v.x_height);
+        let prose = self.prose_voices.get(self.prose_idx).map(|v| v.x_height);
+        match (code, prose) {
+            (Some(code), Some(prose)) if code > 0.0 && prose > 0.0 => (code / prose).clamp(0.95, 1.35),
+            _ => 1.0,
+        }
+    }
+
     pub fn prose_id(&self, size: f32) -> FontId {
         FontId::new(size, self.prose.clone())
     }
@@ -859,16 +906,19 @@ pub fn print_available() {
         }
         for (i, v) in list.iter().enumerate() {
             println!(
-                "  {} {}  {:<22} {:<52} {}",
+                "  {} {}  {:<22} x{:<4.2} {:<52} {}",
                 if loads(v) { "✓" } else { "·" },
                 if i == 0 { "*" } else { " " },
                 v.label,
+                v.x_height,
                 v.path.display(),
                 verdict(&v.path, v.index, &v.note)
             );
         }
         println!();
     }
+    println!("x = the height of its lowercase letters, in em. Prose is set larger than code");
+    println!("    by the ratio of the two, so a book serif and a coding face look the same size.");
     println!("* = the voice zenith would choose. A face must parse, cover every character");
     println!("  source code needs, and draw a real underscore — a hairline is refused.");
 }

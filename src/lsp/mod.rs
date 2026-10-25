@@ -61,6 +61,17 @@ pub enum State {
     Failed(String),
 }
 
+/// One entry of a document's outline, as the server sees it.
+#[derive(Clone, Debug)]
+pub struct Outline {
+    pub name: String,
+    pub line: usize,
+    pub kind: crate::outline::SymKind,
+    pub depth: usize,
+    /// What follows the name on its line, for context: `fn memo(&self) -> String`.
+    pub detail: String,
+}
+
 /// What a session has to report after a frame's worth of messages.
 pub enum Answer {
     Ready,
@@ -70,6 +81,8 @@ pub enum Answer {
     Found { id: i64, targets: Vec<Target> },
     /// The server answered a question with an error.
     Refused { id: i64, message: String },
+    /// The outline of the document that was open when it was asked for.
+    Outline(Vec<Outline>),
 }
 
 pub struct Session {
@@ -80,6 +93,8 @@ pub struct Session {
     handshake: i64,
     /// The document the server has been told about, if any.
     doc: Option<PathBuf>,
+    /// The document symbol request in flight, if any.
+    symbols: Option<i64>,
 }
 
 impl Session {
@@ -97,6 +112,7 @@ impl Session {
             state: State::Starting,
             handshake,
             doc: None,
+            symbols: None,
         })
     }
 
@@ -130,6 +146,14 @@ impl Session {
                         }
                     }
                 }
+                Incoming::Reply { id, answer } if Some(id) == self.symbols => {
+                    self.symbols = None;
+                    // A refused outline is not worth a message: the panel keeps what the
+                    // grammar guessed, which is what it had before the server answered.
+                    if let Ok(value) = answer {
+                        answers.push(Answer::Outline(outline_of(&value)));
+                    }
+                }
                 Incoming::Reply { id, answer } => match answer {
                     Ok(value) => answers.push(Answer::Found {
                         id,
@@ -154,6 +178,21 @@ impl Session {
                 "position": { "line": line, "character": unit }
             }),
         )
+    }
+
+    /// Ask for the document's outline.
+    ///
+    /// A grammar can say where a declaration *starts*; only the compiler's own view of
+    /// the file knows what is nested in what, and the heuristic in `outline` is the
+    /// fallback for the first frame, when no server has answered yet.
+    pub fn outline(&mut self, file: &Path) -> Result<i64, String> {
+        self.open(file)?;
+        let id = self.client.request(
+            "textDocument/documentSymbol",
+            json!({ "textDocument": { "uri": text::to_uri(file) } }),
+        )?;
+        self.symbols = Some(id);
+        Ok(id)
     }
 
     /// Tell the server about the file being read.
@@ -239,6 +278,17 @@ impl Session {
     }
 }
 
+/// Is this error the server saying "ask again" rather than "no"?
+///
+/// `ContentModified` is what a server answers when the snapshot it was asked about moved
+/// while the question was in flight — routine when a document has only just been opened,
+/// and the protocol's own answer is to retry. Reporting it to the reader as a failure
+/// would be reporting a race as a fact about their code.
+pub fn transient(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    m.contains("content modified") || m.contains("content-modified")
+}
+
 /// One question, asked and waited for. This is what `--lsp-ask` runs, and it is the only
 /// part of this module that blocks.
 pub fn ask_definition(
@@ -257,10 +307,28 @@ pub fn ask_definition(
     // The handshake is not readiness: a server that has not read the project yet answers
     // "nothing", which is true and useless. Wait for it to say it is done.
     let _ = session.wait_idle(Duration::from_secs(30));
-    let id = session.definition(file, line as u32, unit)?;
-    let value = session.wait(id, Duration::from_secs(30))?;
+    // A freshly opened document can race the question; the server says so, and the
+    // answer is to ask again rather than to report a race as a fact.
+    let mut last = String::new();
+    for attempt in 0..5 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        let id = session.definition(file, line as u32, unit)?;
+        match session.wait(id, Duration::from_secs(30)) {
+            Ok(value) => {
+                session.stop();
+                return Ok(targets(&value));
+            }
+            Err(e) if transient(&e) => last = e,
+            Err(e) => {
+                session.stop();
+                return Err(e);
+            }
+        }
+    }
     session.stop();
-    Ok(targets(&value))
+    Err(last)
 }
 
 /// Read the shapes a definition or reference answer can take.
@@ -289,6 +357,79 @@ fn targets(value: &Value) -> Vec<Target> {
     let mut seen = std::collections::HashSet::new();
     out.retain(|t| seen.insert((t.path.clone(), t.line, t.unit)));
     out
+}
+
+/// Read an outline out of either shape the protocol allows: a tree of `DocumentSymbol`
+/// (which is what a server that knows the language sends) or a flat list of
+/// `SymbolInformation` (which is what the older servers send).
+fn outline_of(value: &Value) -> Vec<Outline> {
+    let mut out = Vec::new();
+    let Some(items) = value.as_array() else {
+        return out;
+    };
+    let flat = items
+        .iter()
+        .all(|item| item.get("location").is_some() && item.get("range").is_none());
+    for item in items {
+        if flat {
+            let Some(line) = item["location"]["range"]["start"]["line"].as_u64() else {
+                continue;
+            };
+            out.push(Outline {
+                name: item["name"].as_str().unwrap_or("").to_string(),
+                line: line as usize,
+                kind: kind_of(item["kind"].as_u64().unwrap_or(0)),
+                depth: 0,
+                detail: String::new(),
+            });
+        } else {
+            walk_symbol(item, 0, &mut out);
+        }
+    }
+    out.sort_by_key(|s| s.line);
+    out
+}
+
+fn walk_symbol(item: &Value, depth: usize, out: &mut Vec<Outline>) {
+    let Some(line) = item["selectionRange"]["start"]["line"]
+        .as_u64()
+        .or_else(|| item["range"]["start"]["line"].as_u64())
+    else {
+        return;
+    };
+    let name = item["name"].as_str().unwrap_or("");
+    if !name.is_empty() {
+        out.push(Outline {
+            name: name.to_string(),
+            line: line as usize,
+            kind: kind_of(item["kind"].as_u64().unwrap_or(0)),
+            depth,
+            detail: item["detail"].as_str().unwrap_or("").to_string(),
+        });
+    }
+    if let Some(children) = item["children"].as_array() {
+        for child in children {
+            walk_symbol(child, depth + 1, out);
+        }
+    }
+}
+
+/// The protocol's symbol kinds, folded onto the eight the page has marks for.
+fn kind_of(kind: u64) -> crate::outline::SymKind {
+    use crate::outline::SymKind;
+    match kind {
+        // file, module, namespace, package
+        1..=4 => SymKind::Module,
+        // class, interface, struct, type parameter
+        5 | 11 | 23 | 26 => SymKind::Type,
+        10 => SymKind::Enum,
+        // method, constructor, function, operator
+        6 | 9 | 12 | 25 => SymKind::Function,
+        // property, field, variable, constant, and every literal kind
+        7 | 8 | 13..=21 => SymKind::Constant,
+        22 => SymKind::Constant, // enum member
+        _ => SymKind::Function,
+    }
 }
 
 fn collect(value: &Value, out: &mut Vec<Target>) {

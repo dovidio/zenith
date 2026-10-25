@@ -191,6 +191,10 @@ impl Client {
                         // which is where a reader wants to land, not the whole body.
                         "definition": { "linkSupport": true },
                         "references": {},
+                        // Without this, a server is required to answer the outline
+                        // *flat*: every method of every impl as a sibling of its type.
+                        // With it, the outline has the nesting the file has.
+                        "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
                         "synchronization": { "dynamicRegistration": false, "didSave": false }
                     },
                     "workspace": { "workspaceFolders": true, "configuration": false }
