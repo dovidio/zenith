@@ -168,6 +168,13 @@ struct FolderLoad {
 }
 
 /// A navigation question that has been asked but not yet answered.
+/// A place worth coming back to: a file, and where in it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct Place {
+    path: PathBuf,
+    caret: vim::Caret,
+}
+
 struct Nav {
     /// The request id, once it has been written.
     id: Option<i64>,
@@ -272,6 +279,8 @@ pub struct Zenith {
     /// Frames to let pass after a landing, so the page can act on it before the report.
     #[cfg(debug_assertions)]
     nav_settled: u32,
+    #[cfg(debug_assertions)]
+    then_done: bool,
     /// Every row the folder panel is showing, in order, built once per frame so that the
     /// keyboard and the drawing agree about what is on screen.
     tree_rows: Vec<TreeRow>,
@@ -289,8 +298,9 @@ pub struct Zenith {
     /// sits below it, so the system's title and traffic lights have the room they expect.
     chrome_strip: f32,
     tree_hook_step: u8,
-    /// The places we have been, so `ctrl-o` can take us back.
-    jumps: Vec<vim::Caret>,
+    /// The places we have been, so `ctrl-o` can take us back — across files, because a
+    /// definition is usually in another one.
+    jumps: Vec<Place>,
     jump_pos: usize,
     outline_sel: Option<usize>,
 
@@ -402,6 +412,8 @@ impl Zenith {
             nav_tried: false,
             #[cfg(debug_assertions)]
             nav_settled: 0,
+            #[cfg(debug_assertions)]
+            then_done: false,
             tree_rows: Vec::new(),
             tree_focus: false,
             tree_sel: None,
@@ -1355,13 +1367,37 @@ impl Zenith {
             Act::Smaller => self.bump_scale(-0.06, ctx),
             Act::Larger => self.bump_scale(0.06, ctx),
             Act::Reload => self.reload(),
-            Act::CloseFile => {
-                self.remember_position();
-                self.open = None;
-                self.store.save_session();
-            }
+            Act::CloseFile => self.close_file(),
             _ => {}
         }
+    }
+
+    /// Put this file down.
+    ///
+    /// Closing the file you were *taken into* — a definition in a dependency, or in the
+    /// standard library — puts you back where you were reading. That is what `:bd` does
+    /// in vim, and it needs no command line here: `q` closes the file, and the file
+    /// underneath it is the one you came from. With nothing underneath, the page is the
+    /// reading room.
+    fn close_file(&mut self) {
+        self.remember_position();
+        self.nav = None;
+        let here = self.open.as_ref().map(|o| o.path.clone());
+        let back = (0..self.jump_pos.min(self.jumps.len()))
+            .rev()
+            .find(|&i| Some(&self.jumps[i].path) != here.as_ref())
+            .map(|i| (i, self.jumps[i].clone()));
+        match back {
+            Some((index, place)) => {
+                self.jump_pos = index + 1;
+                self.go_to(&place);
+            }
+            None => {
+                self.open = None;
+                self.caret = vim::Caret::default();
+            }
+        }
+        self.store.save_session();
     }
 
     fn open_palette(&mut self) {
@@ -1411,7 +1447,7 @@ impl Zenith {
         let Some(open) = &self.open else { return };
         let next = vim::resolve(&open.doc, self.caret, motion);
         if next != self.caret {
-            self.push_jump(self.caret);
+            self.push_jump();
             self.caret = next;
         }
         match motion {
@@ -1423,25 +1459,46 @@ impl Zenith {
 
     fn jump_to(&mut self, caret: vim::Caret) {
         if self.caret != caret {
-            self.push_jump(self.caret);
+            self.push_jump();
         }
         self.caret = caret;
         self.ensure_visible();
     }
 
-    fn push_jump(&mut self, caret: vim::Caret) {
-        if self.jumps.last() == Some(&caret) {
+    fn push_jump(&mut self) {
+        let Some(path) = self.open.as_ref().map(|o| o.path.clone()) else {
+            return;
+        };
+        let place = Place {
+            path,
+            caret: self.caret,
+        };
+        // Already where the list ends: nothing to remember.
+        if self.jump_pos > 0 && self.jumps.get(self.jump_pos - 1) == Some(&place) {
             return;
         }
         self.jumps.truncate(self.jump_pos);
-        self.jumps.push(caret);
+        self.jumps.push(place);
         if self.jumps.len() > 200 {
             self.jumps.remove(0);
         }
         self.jump_pos = self.jumps.len();
     }
 
-    /// Back and forth through the places the reader has been.
+    /// Go to a remembered place, opening its file if that is a different one.
+    fn go_to(&mut self, place: &Place) {
+        if self.open.as_ref().map(|o| o.path.as_path()) != Some(place.path.as_path()) {
+            self.open_file(&place.path);
+        }
+        let caret = match &self.open {
+            Some(open) => vim::clamp(&open.doc, place.caret),
+            None => return,
+        };
+        self.caret = caret;
+        self.ensure_visible();
+    }
+
+    /// Back and forth through the places the reader has been, files and all.
     fn jump(&mut self, direction: i32) {
         if self.jumps.is_empty() {
             return;
@@ -1451,8 +1508,8 @@ impl Zenith {
             return;
         }
         self.jump_pos = next as usize;
-        self.caret = self.jumps[self.jump_pos];
-        self.ensure_visible();
+        let place = self.jumps[self.jump_pos].clone();
+        self.go_to(&place);
     }
 
     fn search_step(&mut self, forward: bool) {
@@ -3312,6 +3369,38 @@ impl Zenith {
             if self.nav_settled < 4 {
                 return;
             }
+            // `ZENITH_THEN=back|close` presses the key that undoes a jump, so that the
+            // way back can be checked without a hand on the keyboard.
+            if !self.then_done {
+                self.then_done = true;
+                match std::env::var("ZENITH_THEN").as_deref() {
+                    Ok("back") => {
+                        self.jump(-1);
+                        eprintln!(
+                            "nav: back to {} line {}",
+                            self.open
+                                .as_ref()
+                                .map(|o| crate::catalog::display_path(&o.path))
+                                .unwrap_or_default(),
+                            self.caret.line + 1
+                        );
+                    }
+                    Ok("close") => {
+                        self.close_file();
+                        eprintln!(
+                            "nav: closed to {} line {}",
+                            self.open
+                                .as_ref()
+                                .map(|o| crate::catalog::display_path(&o.path))
+                                .unwrap_or_else(|| "(the reading room)".into()),
+                            self.caret.line + 1
+                        );
+                    }
+                    _ => {}
+                }
+                self.nav_settled = 0;
+                return;
+            }
             // Exit is not a shutdown here: the servers have to be let go first, or the
             // child processes outlive the test.
             for session in &mut self.servers {
@@ -3666,15 +3755,26 @@ impl Zenith {
         let there = first.place();
         let path = first.path.clone();
         let (line, unit) = (first.line, first.unit);
-        let from = self.caret;
         let here = self.open.as_ref().map(|o| o.path.clone());
+        let left = self
+            .open
+            .as_ref()
+            .map(|o| o.rel.clone())
+            .unwrap_or_default();
+        // Is the definition outside the folder being read? A dependency's source is
+        // legitimate reading, but the reader has left the page they were on.
+        let outside = self
+            .folder
+            .as_ref()
+            .map(|f| !path.starts_with(&f.root))
+            .unwrap_or(true);
         let previous = self
             .open
             .as_ref()
             .map(|o| (o.path.clone(), self.scroll));
         let (previous, _) = (previous, self.scroll);
         if here.as_deref() != Some(path.as_path()) {
-            self.push_jump(from);
+            self.push_jump();
             self.open_file(&path);
         }
         let Some(open) = &self.open else { return };
@@ -3686,8 +3786,8 @@ impl Zenith {
             .map(|l| lsp::text::column(l, unit))
             .unwrap_or(0);
         let caret = vim::Caret::new(line, col);
-        if here.as_deref() == Some(path.as_path()) && caret != from {
-            self.push_jump(from);
+        if here.as_deref() == Some(path.as_path()) && caret != self.caret {
+            self.push_jump();
         }
         // Following a definition is an arrival, not a nudge: the line comes to the top
         // of the page, which is where someone who has just arrived starts reading. Going
@@ -3708,11 +3808,17 @@ impl Zenith {
         } else {
             Pending::Top(caret.line)
         };
-        self.status = if count > 1 {
+        let mut said = if count > 1 {
             format!("→ {there} (1 of {count})")
         } else {
             format!("→ {there}")
         };
+        if outside && !left.is_empty() {
+            // The way back is not visible from here: the tree does not hold this file,
+            // and nothing on the page says which key undoes the jump.
+            said.push_str(&format!(" · ctrl-o back to {left}"));
+        }
+        self.status = said;
     }
 
     // -- smoke -------------------------------------------------------------
@@ -4452,7 +4558,7 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("zz zt zb", "centre, or put the line at the top / bottom"),
     ("n N", "next and previous search match"),
     ("[ ]", "previous / next chapter (the outline)"),
-    ("ctrl-o ctrl-i", "back and forward through where you have been"),
+    ("ctrl-o ctrl-i", "back and forward through where you have been, across files"),
     ("gd", "go to the definition of what is under the cursor"),
     ("J K", "next / previous file in the folder"),
     ("j k l h", "in the tree: move, open, and back out"),
@@ -4473,7 +4579,7 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("#", "toggle line numbers"),
     ("x", "render markdown, or its source"),
     ("r", "re-read from disk"),
-    ("q", "close the file"),
+    ("q", "close the file — and go back to the one you came from"),
     ("{mod}Q", "quit zenith"),
     ("⌘O", "open a folder to read"),
     ("gd", "go to definition (no language server configured yet)"),

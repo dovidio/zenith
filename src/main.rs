@@ -210,7 +210,7 @@ READING KEYS:
     g / G                     top / bottom of file
     gd                        go to the definition of what is under the cursor
     b                         bookmark this file
-    q                         close the file
+    q                         close the file, back to the one you came from
     ⌘O                        open a folder
     ⌘,                        settings panel
     ?                         help

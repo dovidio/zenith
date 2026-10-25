@@ -167,6 +167,13 @@ defined* — asked of a server that has to answer it. No completion, no diagnost
 hints in the margin, no rename. A reader does not change anything, so the client never
 tells a server the document has changed: it opens the file, asks, and closes it.
 
+A definition is often not in the folder you are reading: it is in a dependency, or in the
+standard library. Zenith follows it anyway — reading the standard library is legitimate
+reading — and the strip at the foot of the page says so, naming the file you came from and
+the key that goes back. `ctrl-o` walks back through everywhere you have been, across files;
+`q` puts the file down and returns to the one underneath it, which is what `:bd` does in
+vim, in a program that has no command line to type it into.
+
 It uses the servers already on the machine. Zenith does not download, bundle or install
 them, and that is deliberate rather than unfinished: the server that matches a project is
 the one the project already builds against — rust-analyzer from the same toolchain,
