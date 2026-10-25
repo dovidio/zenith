@@ -249,6 +249,21 @@ pub fn find(
     None
 }
 
+/// The one failure common enough that naming the fix is worth doing.
+///
+/// rustup puts a *shim* at `~/.cargo/bin/rust-analyzer` whether or not the component is
+/// installed, so "the binary exists" is true while "the server exists" is not, and the
+/// shim's own message names the component without saying the command. This turns that
+/// message into the thing to type — and only that message, so nothing is invented for
+/// failures that explain themselves.
+pub fn advice(kind: &Kind, said: &str) -> Option<String> {
+    if said.contains("Unknown binary") {
+        let binary = kind.candidates.first()?.0;
+        return Some(format!("run `rustup component add {binary}`"));
+    }
+    None
+}
+
 fn default_args(kind: &Kind, binary: &Path) -> Vec<String> {
     let name = binary.file_name().and_then(|n| n.to_str()).unwrap_or("");
     kind.candidates
@@ -431,6 +446,19 @@ mod tests {
         let kinds = kinds_among(files);
         let ids: Vec<&str> = kinds.iter().map(|k| k.id).collect();
         assert_eq!(ids, vec!["rust", "go"]);
+    }
+
+    #[test]
+    fn a_shim_with_no_component_gets_the_command_that_fixes_it() {
+        let kind = KINDS.iter().find(|k| k.id == "rust").unwrap();
+        let said = "error: Unknown binary 'rust-analyzer' in official toolchain \
+                    'stable-aarch64-apple-darwin'.";
+        assert_eq!(
+            advice(kind, said).as_deref(),
+            Some("run `rustup component add rust-analyzer`")
+        );
+        // Every other failure explains itself; nothing is invented for it.
+        assert!(advice(kind, "error: no such crate `foo`").is_none());
     }
 
     #[test]

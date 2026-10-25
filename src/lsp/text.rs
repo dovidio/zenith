@@ -66,8 +66,12 @@ pub fn column(line: &Line, unit: u32) -> usize {
 /// code in have spaces in them ("Application Support", "My Projects"), and a URI with a
 /// raw space in it is one no server will parse.
 pub fn to_uri(path: &Path) -> String {
+    // A `file:` URI is absolute or it is not a URI. A relative path here becomes
+    // `file://src/main.rs`, and a server answers that with "url is not a file" — the
+    // least useful sentence in the protocol.
+    let absolute = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut out = String::from("file://");
-    for b in path.to_string_lossy().bytes() {
+    for b in absolute.to_string_lossy().bytes() {
         match b {
             b'/' | b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
                 out.push(b as char)
@@ -185,6 +189,14 @@ mod tests {
             "file:///Users/umberto/My%20Projects/%C3%BCn%C3%AFcode/lib.rs"
         );
         assert_eq!(from_uri(&uri).as_deref(), Some(p));
+    }
+
+    #[test]
+    fn a_relative_path_still_becomes_an_absolute_uri() {
+        let uri = to_uri(Path::new("src/main.rs"));
+        assert!(uri.starts_with("file:///"), "{uri}");
+        assert!(!uri.contains("file://src"), "{uri}");
+        assert!(uri.ends_with("/src/main.rs"), "{uri}");
     }
 
     #[test]

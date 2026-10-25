@@ -15,6 +15,7 @@
 //!    kept.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::BufReader;
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -35,6 +36,19 @@ pub enum Incoming {
     Gone,
 }
 
+/// What the server says about its own work.
+///
+/// A freshly started server is busy: it is reading the project, and a question asked
+/// during that reading gets a technically-correct "nothing". The protocol has two ways of
+/// saying so — `$/progress` (begin/end) and rust-analyzer's `experimental/serverStatus`
+/// (a `quiescent` flag) — so both are watched, and a server that never mentions it is
+/// given a moment of silence before being taken at its word.
+#[derive(Default)]
+struct Load {
+    busy: AtomicBool,
+    ever: AtomicBool,
+}
+
 pub struct Client {
     child: Child,
     stdin: ChildStdin,
@@ -43,6 +57,8 @@ pub struct Client {
     /// The last few lines the server printed to stderr. Only ever read to explain a
     /// server that has died or refused, so it is a short tail rather than a log.
     said: Arc<Mutex<VecDeque<String>>>,
+    load: Arc<Load>,
+    started: Instant,
 }
 
 impl Client {
@@ -62,6 +78,8 @@ impl Client {
 
         let (tx, inbox) = channel();
         let feeder = tx.clone();
+        let load = Arc::new(Load::default());
+        let heard = Arc::clone(&load);
         std::thread::spawn(move || {
             let mut input = BufReader::new(stdout);
             while let Ok(Some(body)) = wire::read(&mut input) {
@@ -69,6 +87,7 @@ impl Client {
                     continue;
                 };
                 let id = message.get("id").and_then(Value::as_i64);
+                let method = message.get("method").and_then(Value::as_str).unwrap_or("");
                 match (message.get("method").is_some(), id) {
                     // A request from the server: we will answer it "nothing".
                     (true, Some(id)) => {
@@ -76,10 +95,29 @@ impl Client {
                             return;
                         }
                     }
-                    // A notification (`$/progress`, `publishDiagnostics`, log messages).
-                    // Navigation asks questions and reads the answers; it does not
-                    // follow a server's narration.
-                    (true, None) => {}
+                    // A notification. Navigation does not follow a server's narration,
+                    // with one exception: how busy it is, because that is the difference
+                    // between "nothing is defined there" and "I have not read the project
+                    // yet".
+                    (true, None) => match method {
+                        "$/progress" => {
+                            match message["params"]["value"]["kind"].as_str().unwrap_or("") {
+                                "begin" => {
+                                    heard.ever.store(true, Ordering::Relaxed);
+                                    heard.busy.store(true, Ordering::Relaxed);
+                                }
+                                "end" => heard.busy.store(false, Ordering::Relaxed),
+                                _ => {}
+                            }
+                        }
+                        "experimental/serverStatus" => {
+                            if let Some(quiet) = message["params"]["quiescent"].as_bool() {
+                                heard.ever.store(true, Ordering::Relaxed);
+                                heard.busy.store(!quiet, Ordering::Relaxed);
+                            }
+                        }
+                        _ => {}
+                    },
                     (false, Some(id)) => {
                         let answer = match message.get("error") {
                             Some(error) => Err(error
@@ -118,12 +156,15 @@ impl Client {
             });
         }
 
+        load.busy.store(true, Ordering::Relaxed);
         Ok(Client {
             child,
             stdin,
             inbox,
             next_id: 0,
             said,
+            load,
+            started: Instant::now(),
         })
     }
 
@@ -178,6 +219,18 @@ impl Client {
     /// no applied edit, no granted permission.
     pub fn answer(&mut self, id: i64) -> Result<(), String> {
         self.send(json!({ "jsonrpc": "2.0", "id": id, "result": Value::Null }))
+    }
+
+    /// Has the server finished reading the project?
+    ///
+    /// A server that has never said anything about its own progress is not hiding
+    /// anything — it simply has none to report — so silence is taken for readiness after
+    /// a moment, rather than leaving the question hanging forever.
+    pub fn is_idle(&self) -> bool {
+        if !self.load.busy.load(Ordering::Relaxed) {
+            return true;
+        }
+        !self.load.ever.load(Ordering::Relaxed) && self.started.elapsed() > Duration::from_millis(2_500)
     }
 
     pub fn poll(&self) -> Vec<Incoming> {

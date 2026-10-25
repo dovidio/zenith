@@ -297,9 +297,19 @@ fn lsp_report(dir: Option<PathBuf>) {
         println!("  no language here has a server zenith knows about");
         return;
     }
+    let store = catalog::Store::load();
     let mut found = 0;
     for kind in &kinds {
-        match lsp::servers::find(kind, &root, None) {
+        let over = store
+            .config
+            .lsp
+            .servers
+            .get(kind.id)
+            .map(|s| lsp::servers::Override {
+                command: s.command.clone(),
+                args: s.args.clone(),
+            });
+        match lsp::servers::find(kind, &root, over.as_ref()) {
             Some(available) => {
                 found += 1;
                 println!(
@@ -353,13 +363,27 @@ fn lsp_ask(spec: &str) {
     let l = syntax::Line::plain(source);
     let unit = lsp::text::position(&l, col.saturating_sub(1));
     let root = catalog::project_root(&file);
+    // The same server the window would pick, override and all: a checker that disagrees
+    // with the thing it checks is worse than no checker.
+    let store = catalog::Store::load();
+    let over = lsp::servers::kind_for(&file).and_then(|(kind, _)| {
+        store
+            .config
+            .lsp
+            .servers
+            .get(kind.id)
+            .map(|s| lsp::servers::Override {
+                command: s.command.clone(),
+                args: s.args.clone(),
+            })
+    });
     println!(
         "{}:{line}:{col}  →  utf-16 character {unit}  (root {})",
         catalog::display_path(&file),
         catalog::display_path(&root)
     );
     let started = std::time::Instant::now();
-    match lsp::ask_definition(&file, line - 1, unit, &root) {
+    match lsp::ask_definition(&file, line - 1, unit, &root, over.as_ref()) {
         Ok(targets) if targets.is_empty() => {
             println!("  nothing there — the server knows of no definition at that place");
         }

@@ -189,6 +189,26 @@ impl Session {
         Ok(())
     }
 
+    /// Has the server finished reading the project?
+    pub fn is_idle(&self) -> bool {
+        self.client.is_idle()
+    }
+
+    /// Wait until it has. For the command line, and for the one retry the window makes.
+    pub fn wait_idle(&mut self, within: Duration) -> Result<(), String> {
+        let deadline = std::time::Instant::now() + within;
+        while !self.client.is_idle() {
+            if std::time::Instant::now() >= deadline {
+                return Err("the server is still reading this project".into());
+            }
+            if let Some(Answer::Ended(why)) = self.poll().into_iter().find(|a| matches!(a, Answer::Ended(_))) {
+                return Err(why);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Ok(())
+    }
+
     fn ended(&mut self) -> Answer {
         let said = self.client.last_word();
         let message = if said.is_empty() {
@@ -226,13 +246,17 @@ pub fn ask_definition(
     line: usize,
     unit: u32,
     root: &Path,
+    over: Option<&servers::Override>,
 ) -> Result<Vec<Target>, String> {
     let (kind, _) = servers::kind_for(file)
         .ok_or_else(|| format!("no language server serves {}", file.display()))?;
-    let found = servers::find(kind, root, None)
+    let found = servers::find(kind, root, over)
         .ok_or_else(|| format!("no {} language server found on this machine", kind.title))?;
     let mut session = Session::start(kind, &found, root)?;
     session.wait_ready(Duration::from_secs(30))?;
+    // The handshake is not readiness: a server that has not read the project yet answers
+    // "nothing", which is true and useless. Wait for it to say it is done.
+    let _ = session.wait_idle(Duration::from_secs(30));
     let id = session.definition(file, line as u32, unit)?;
     let value = session.wait(id, Duration::from_secs(30))?;
     session.stop();

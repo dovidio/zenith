@@ -183,10 +183,14 @@ which is usually the exact command that fixes it.
 Starting one has consequences: analysing a project means running its build scripts. So the
 first `gd` in a folder asks, in that strip, and the answer is remembered in
 `~/.config/zenith/config.toml` — outside the project, because zenith writes nothing into
-it. Enter allows it; anything else cancels, and `y` deliberately does not, because `y` is
-zen mode and a reflex should not grant permission to execute anything. Every question a
-server asks in return is answered "nothing": no capabilities registered, no configuration
-supplied, no edit ever applied.
+it. `y` or enter allows it, `esc` says no, and the question stays on screen until it is
+answered. Every question a server asks in return is answered "nothing": no capabilities
+registered, no configuration supplied, no edit ever applied.
+
+The handshake is not readiness. A server that has not finished reading the project answers
+"nothing is defined there", which is true and useless, so the client watches the server's
+own progress reports and asks again rather than repeating a lie — the strip says *still
+reading this project* while it waits.
 
 ## It does not change your code
 

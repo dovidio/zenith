@@ -143,6 +143,9 @@ fn launch(opts: Startup) {
 // State
 // ---------------------------------------------------------------------------
 
+/// How long a message holds the status strip before the position readout comes back.
+const NOTICE_SECONDS: f64 = 7.0;
+
 /// What the background read of a large file sends back.
 struct Loaded {
     doc: crate::syntax::Document,
@@ -168,6 +171,10 @@ struct FolderLoad {
 struct Nav {
     /// The request id, once it has been written.
     id: Option<i64>,
+    /// How many times an empty answer has been taken as "not yet" rather than "nothing".
+    tries: u32,
+    /// Do not ask again before this: a server reading a project needs seconds, not frames.
+    again_at: Option<std::time::Instant>,
     path: PathBuf,
     line: usize,
     /// The position in protocol coordinates — see [`lsp::text::position`].
@@ -258,6 +265,9 @@ pub struct Zenith {
     nav: Option<Nav>,
     /// A folder waiting to be told whether a server may run in it.
     lsp_ask: Option<Ask>,
+    /// The message the strip is currently showing, and when it started showing it.
+    shown: String,
+    shown_at: f64,
     /// The debug-only `ZENITH_GOTO` hook has fired.
     #[cfg(debug_assertions)]
     nav_tried: bool,
@@ -383,6 +393,8 @@ impl Zenith {
             servers: Vec::new(),
             nav: None,
             lsp_ask: None,
+            shown: String::new(),
+            shown_at: 0.0,
             #[cfg(debug_assertions)]
             nav_tried: false,
             tree_rows: Vec::new(),
@@ -916,17 +928,24 @@ impl Zenith {
         });
 
         for (key, shift, ctrl, cmd) in presses {
-            // A folder waiting to hear whether a language server may run in it. Enter
-            // allows; any other key means no, and is then handled as usual. Not `y`:
-            // that is zen mode, and a reflex should never grant permission to execute
-            // a project's build scripts.
-            if let Some(ask) = self.lsp_ask.take() {
-                if key == Key::Enter {
-                    self.store.trust(&ask.root);
-                    self.begin_nav(ask.root, ask.path, ask.line, ask.unit);
-                    continue;
+            // A folder waiting to hear whether a language server may run in it. The
+            // question is in the strip with its keys; while it is there it owns the
+            // keyboard, because a question that can be answered by accident, or ignored
+            // by pressing the key that asked it, is not really being asked.
+            if self.lsp_ask.is_some() {
+                match key {
+                    Key::Enter | Key::Y => {
+                        let ask = self.lsp_ask.take().expect("asked");
+                        self.store.trust(&ask.root);
+                        self.begin_nav(ask.root, ask.path, ask.line, ask.unit);
+                    }
+                    Key::Escape | Key::N => {
+                        self.lsp_ask = None;
+                        self.status = "gd: no language server for this folder".into();
+                    }
+                    _ => {}
                 }
-                self.status = "gd: no language server for this folder".into();
+                continue;
             }
 
             // ---- commands ----
@@ -1752,6 +1771,8 @@ impl eframe::App for Zenith {
         self.advance_nav();
         #[cfg(debug_assertions)]
         self.dev_nav();
+        #[cfg(debug_assertions)]
+        self.forced_notice();
         if self.discovering.is_some() || self.nav.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(60));
         }
@@ -1925,7 +1946,27 @@ impl Zenith {
     fn status_bar(&mut self, ui: &mut Ui) {
         let pal = self.palette;
         let font = self.typo.ui_id(11.5 * self.scale);
-        let left = match &self.open {
+        let now = ui.input(|i| i.time);
+
+        // What the strip says, when there is something to say. The position readout is
+        // the resting state, not the only state: a message used to be written into a
+        // string that this line never read while a file was open, which is exactly when
+        // every message worth reading happens.
+        if self.status != self.shown {
+            self.shown = self.status.clone();
+            self.shown_at = now;
+        }
+        // A notice steps aside after a while so the readout can come back — and both are
+        // forgotten when it does, so saying the same thing again is said again. The one
+        // exception is a question, which waits for an answer.
+        if self.lsp_ask.is_none() && now - self.shown_at > NOTICE_SECONDS {
+            self.shown.clear();
+            self.status.clear();
+        }
+        let asking = self.lsp_ask.is_some();
+        let notice = !self.shown.is_empty();
+
+        let position = match &self.open {
             Some(o) => {
                 let lines = o.doc.line_count();
                 let line = self.caret.line + 1;
@@ -1938,12 +1979,24 @@ impl Zenith {
                 }
                 s
             }
-            None => self.status.clone(),
+            None => String::new(),
         };
-        let hint = if self.tree_focus {
+        let (left, ink) = if notice {
+            // A question is addressed to the reader, so it is set in the ink of a
+            // sentence rather than the ink of a footnote.
+            (self.shown.clone(), if asking { pal.ink } else { pal.ink_soft })
+        } else {
+            (position, pal.ink_soft)
+        };
+        let hint = if notice {
+            // News outranks the standing invitation on the right: the two would otherwise
+            // be set over each other, and a message nobody can read is not a message.
+            String::new()
+        } else if self.tree_focus {
             keys("tree: j k move · l open · h back · G end · / find · esc to the page").to_string()
         } else {
             keys("{mod}P find file · / search in file · Z zen · f focus · tab tree · ? keys")
+                .to_string()
         };
         egui::Panel::bottom("zenith-status")
             .resizable(false)
@@ -1961,7 +2014,7 @@ impl Zenith {
                     Align2::LEFT_CENTER,
                     left,
                     font.clone(),
-                    pal.ink_soft,
+                    ink,
                 );
                 ui.painter().text(
                     Pos2::new(ui.min_rect().center().x + 40.0, y),
@@ -3291,7 +3344,7 @@ impl Zenith {
                 unit,
             });
             self.status = format!(
-                "ask {server} about this folder? it runs this project's build scripts — enter to allow, esc to cancel"
+                "ask {server} about this folder? it runs this project's build scripts — y or enter to allow, esc to cancel"
             );
             return;
         }
@@ -3328,6 +3381,8 @@ impl Zenith {
         self.status = format!("gd: asking {}…", kind.title);
         self.nav = Some(Nav {
             id: None,
+            tries: 0,
+            again_at: None,
             path,
             line,
             unit,
@@ -3339,6 +3394,9 @@ impl Zenith {
     fn advance_nav(&mut self) {
         let Some(nav) = &self.nav else { return };
         if nav.id.is_some() {
+            return;
+        }
+        if nav.again_at.is_some_and(|t| t > std::time::Instant::now()) {
             return;
         }
         let root = nav.root.clone();
@@ -3377,15 +3435,41 @@ impl Zenith {
             return;
         }
         let asked = self.nav.as_ref().and_then(|n| n.id);
+        let mut tries = 0u32;
         let mut land: Option<Vec<lsp::Target>> = None;
         let mut gone: Vec<String> = Vec::new();
         for session in &mut self.servers {
             for answer in session.poll() {
                 match answer {
                     lsp::Answer::Ready => {}
-                    lsp::Answer::Ended(why) => gone.push(format!("{} — {why}", session.kind.title)),
+                    lsp::Answer::Ended(why) => {
+                        let mut line = format!("{} — {why}", session.kind.title);
+                        if let Some(fix) = lsp::servers::advice(session.kind, &why) {
+                            line.push_str(" · ");
+                            line.push_str(&fix);
+                        }
+                        gone.push(line);
+                    }
                     lsp::Answer::Found { id, targets } => {
-                        if Some(id) == asked {
+                        if Some(id) != asked {
+                            continue;
+                        }
+                        if targets.is_empty() && !session.is_idle() && tries < 12 {
+                            // Ask again shortly: the server is reading the project, and
+                            // "nothing is defined there" would be a lie about a file it
+                            // has not opened yet.
+                            tries += 1;
+                            if let Some(nav) = &mut self.nav {
+                                nav.id = None;
+                                nav.tries += 1;
+                                nav.again_at =
+                                    Some(std::time::Instant::now() + std::time::Duration::from_millis(600));
+                            }
+                            self.status = format!(
+                                "gd: {} is still reading this project…",
+                                session.kind.title
+                            );
+                        } else {
                             land = Some(targets);
                         }
                     }
@@ -3473,6 +3557,30 @@ impl Zenith {
     }
 
     // -- smoke -------------------------------------------------------------
+
+    /// A message in the strip, for photographing it: `ZENITH_FORCE_NOTICE="…"`.
+    ///
+    /// The status strip is the one piece of chrome whose job is to be read at a glance,
+    /// and a glance is what a screenshot is for.
+    #[cfg(debug_assertions)]
+    fn forced_notice(&mut self) {
+        let Ok(text) = std::env::var("ZENITH_FORCE_NOTICE") else {
+            return;
+        };
+        if self.frame > 2 {
+            return;
+        }
+        let asking = text.starts_with("ask ");
+        self.status = text;
+        if asking {
+            self.lsp_ask = Some(Ask {
+                root: PathBuf::from("/"),
+                path: PathBuf::new(),
+                line: 0,
+                unit: 0,
+            });
+        }
+    }
 
     fn smoke_tick(&mut self, ctx: &egui::Context) {
         if self.smoke.is_none() {

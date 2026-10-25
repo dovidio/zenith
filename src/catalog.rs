@@ -251,6 +251,11 @@ pub fn display_path(p: &Path) -> String {
 /// This is what a language server should be rooted at: a crate, a module, a repository —
 /// something with a manifest, not a bare directory of loose files.
 pub fn project_root(file: &Path) -> PathBuf {
+    // Absolute first: walking up from a relative path ends at `""`, and `""` is a path
+    // that exists (it joins to this directory), so the walk would stop there and hand a
+    // language server an empty root — which it cannot even start in.
+    let file = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
+    let file = file.as_path();
     let parent = file.parent().map(|p| p.to_path_buf());
     let markers = [
         ".git",
