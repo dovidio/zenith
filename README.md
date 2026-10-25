@@ -201,6 +201,11 @@ is ready when you press `gd` — and this turns them all off:
 enabled = false
 ```
 
+…or the switch in the settings panel (`s`), which also lists the languages in the folder,
+what each one's server is doing, and a field to point at a binary yourself when discovery
+guesses wrong. The panel has no tabs any more: the sections stand in a column on the left,
+because there are five of them and one of them needs room for a path.
+
 Every question a server asks in return is answered "nothing": no capabilities registered,
 no configuration supplied, no edit ever applied.
 

@@ -629,8 +629,7 @@ pub struct Typography {
     pub mono_idx: usize,
     pub prose_idx: usize,
     pub ui_idx: usize,
-    pub mono_label: String,
-    pub prose_label: String,
+    /// The interface voice's name: the one label the page has nowhere else to say.
     pub ui_label: String,
 
     /// True when no system face could be used and egui's bundled fonts are carrying
@@ -728,7 +727,7 @@ pub fn build(mono_idx: usize, prose_idx: usize, ui_idx: usize) -> Typography {
 
     // ---- code ----
     let code_key = "zenith-mono".to_string();
-    let (mono_idx, mono_label, mono_italic) = match &mono {
+    let (mono_idx, _mono_label, mono_italic) = match &mono {
         Some((idx, v)) => {
             add_font(&mut defs, &code_key, &v.path, v.index, &v.label);
             let italic = italic_sibling(v).and_then(|(path, index)| {
@@ -754,7 +753,7 @@ pub fn build(mono_idx: usize, prose_idx: usize, ui_idx: usize) -> Typography {
 
     // ---- prose ----
     let prose_key = "zenith-prose-regular".to_string();
-    let (prose_idx, prose_label) = match &prose {
+    let (prose_idx, _prose_label) = match &prose {
         Some((idx, v)) => {
             add_font(&mut defs, &prose_key, &v.path, v.index, &v.label);
             let italic = italic_sibling(v).and_then(|(path, index)| {
@@ -813,8 +812,6 @@ pub fn build(mono_idx: usize, prose_idx: usize, ui_idx: usize) -> Typography {
         mono_idx,
         prose_idx,
         ui_idx,
-        mono_label,
-        prose_label,
         ui_label,
         bundled_fallback,
         code,

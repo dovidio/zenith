@@ -143,6 +143,9 @@ fn launch(opts: Startup) {
 // State
 // ---------------------------------------------------------------------------
 
+/// The settings rail, top to bottom.
+const SETTINGS_SECTIONS: [&str; 5] = ["Page", "Type", "Theme", "Folder", "Language"];
+
 /// How long a message holds the status strip before the position readout comes back.
 const NOTICE_SECONDS: f64 = 7.0;
 
@@ -258,6 +261,12 @@ pub struct Zenith {
     folder_load: Option<FolderLoad>,
     /// Every language server found on this machine for the languages this folder holds.
     available: Vec<lsp::servers::Available>,
+    /// The languages this folder holds that zenith has a server for, found once per
+    /// folder so the settings panel can list them without walking the tree every frame.
+    lsp_kinds: Vec<&'static lsp::servers::Kind>,
+    /// Languages whose server path has been typed into but not yet left: the server is
+    /// restarted when the reader finishes, not on every keystroke.
+    lsp_path_dirty: std::collections::BTreeSet<String>,
     /// A search for those servers, running in the background.
     discovering: Option<Discovery>,
     /// Servers that have been started, at most one per language and folder.
@@ -400,6 +409,8 @@ impl Zenith {
             loading: None,
             folder_load: None,
             available: Vec::new(),
+            lsp_kinds: Vec::new(),
+            lsp_path_dirty: std::collections::BTreeSet::new(),
             discovering: None,
             servers: Vec::new(),
             nav: None,
@@ -2993,20 +3004,24 @@ impl Zenith {
         self.show_help = open;
     }
 
-    /// Settings: four short sections, one at a time.
+    /// Settings: a rail of sections, and one of them at a time.
     ///
-    /// Sections, two-column rows and paired lists keep the whole panel within a third of
-    /// the screen, so nothing has to be scrolled for or hidden.
+    /// Six sections do not fit across a card, and the Language section needs room a short
+    /// tab row cannot give it — a server's path is long. So the sections stand in a column
+    /// on the left, where a list of names belongs, and the content gets the rest.
     fn settings_overlay(&mut self, ctx: &egui::Context) {
         let mut open_folder = false;
         let pal = self.palette;
         let font = self.typo.ui_id(12.5 * self.scale);
-        let head = self.typo.prose_id(15.0 * self.scale);
+        let head = self.typo.prose_id(14.5 * self.scale);
         let small = self.typo.ui_id(11.5 * self.scale);
         let screen = ctx.content_rect();
-        let width = 380.0;
+        let width = 540.0;
+        let rail = 118.0;
         let mut open = self.show_settings;
         let mut changed = false;
+        let mut lsp_changed = false;
+        let mut restart: Option<String> = None;
         let mut new_mono = self.typo.mono_idx;
         let mut new_prose = self.typo.prose_idx;
         let mut theme_choice: Option<usize> = None;
@@ -3023,216 +3038,328 @@ impl Zenith {
                     .fill(pal.panel)
                     .stroke(Stroke::new(1.0, pal.edge))
                     .corner_radius(CornerRadius::same(8))
-                    .inner_margin(Margin::symmetric(14, 12)),
+                    .inner_margin(Margin::symmetric(0, 14)),
             )
             .show(ctx, |ui| {
-                // ---- section tabs ----
-                ui.horizontal(|ui| {
-                    for (i, name) in ["Page", "Type", "Theme", "Folder"].iter().enumerate() {
-                        let selected = self.settings_tab == i;
-                        let text = RichText::new(*name)
-                            .font(head.clone())
-                            .color(if selected { pal.ink } else { pal.ink_faint });
-                        if ui.selectable_label(selected, text).clicked() {
-                            self.settings_tab = i;
-                        }
-                    }
-                });
-                ui.add_space(2.0);
-                ui.painter().hline(
-                    ui.min_rect().left()..=ui.min_rect().right(),
-                    ui.cursor().top(),
-                    Stroke::new(1.0, pal.edge),
-                );
-                ui.add_space(8.0);
+                let content = width - rail - 62.0;
+                let mut rail_edge = 0.0;
+                let mut block: Option<Rect> = None;
 
-                // A fixed minimum height keeps the panel from jumping as the reader
-                // moves between sections. Nothing here needs scrolling: each section is
-                // at most four rows.
-                ui.set_min_height(232.0);
-                {
-                    match self.settings_tab {
-                        // ------------------------------------------------ page
-                        0 => {
-                            let cfg = &mut self.store.config;
-                            ui.horizontal(|ui| {
-                                let half = width * 0.5 - 18.0;
-                                ui.vertical(|ui| {
-                                    ui.set_width(half);
-                                    changed |= toggles(ui, &font, &pal, &mut [
-                                        ("soft wrap", &mut cfg.wrap),
-                                        ("indentation whispers", &mut cfg.guides),
-                                        ("comments as prose", &mut cfg.serif_comments),
-                                        ("focus lens", &mut cfg.focus_lens),
-                                    ]);
-                                });
-                                ui.vertical(|ui| {
-                                    ui.set_width(half);
-                                    changed |= toggles(ui, &font, &pal, &mut [
-                                        ("compress blank lines", &mut cfg.compress_blank),
-                                        ("line numbers", &mut cfg.line_numbers),
-                                        ("distilled types", &mut cfg.distilled),
-                                        ("themed window bar", &mut cfg.frameless),
-                                        ("render markdown", &mut cfg.markdown),
-                                    ]);
-                                });
+                ui.horizontal_top(|ui| {
+                    ui.add_space(18.0);
+                    // ---- the rail ----
+                    ui.vertical(|ui| {
+                        ui.set_width(rail);
+                        for (i, name) in SETTINGS_SECTIONS.iter().enumerate() {
+                            let selected = self.settings_tab == i;
+                            let text = RichText::new(*name).font(head.clone()).color(if selected {
+                                pal.ink
+                            } else {
+                                pal.ink_faint
                             });
-                            ui.add_space(6.0);
-                            ui.add(
-                                egui::Slider::new(&mut cfg.measure, 40..=160)
-                                    .text(RichText::new("measure (characters)").font(font.clone())),
-                            );
-                            ui.add(
-                                egui::Slider::new(&mut cfg.leading, 1.2..=2.2)
-                                    .text(RichText::new("leading").font(font.clone())),
-                            );
-                            ui.add(
-                                egui::Slider::new(&mut self.scale, 0.7..=2.0)
-                                    .text(RichText::new("type size").font(font.clone())),
-                            );
+                            let response =
+                                ui.add(egui::Label::new(text).sense(egui::Sense::click()));
+                            if response.clicked() {
+                                self.settings_tab = i;
+                            }
                         }
-                        // ------------------------------------------------ type
-                        1 => {
-                            let code = self
-                                .typo
-                                .mono_voices
-                                .get(self.typo.mono_idx)
-                                .map(|v| v.label.clone())
-                                .unwrap_or_else(|| self.typo.mono_label.clone());
-                            let prose = self
-                                .typo
-                                .prose_voices
-                                .get(self.typo.prose_idx)
-                                .map(|v| v.label.clone())
-                                .unwrap_or_else(|| self.typo.prose_label.clone());
-                            let column = width * 0.5 - 20.0;
-                            ui.horizontal_top(|ui| {
-                                ui.vertical(|ui| {
-                                    ui.set_width(column);
-                                    ui.label(
-                                        RichText::new("code")
-                                            .font(small.clone())
-                                            .color(pal.ink_faint),
-                                    );
-                                    for (i, v) in self.typo.mono_voices.iter().enumerate() {
-                                        let selected = i == self.typo.mono_idx;
-                                        let ok = typography::loads(v);
-                                        let text = RichText::new(v.label.clone())
-                                            .font(font.clone())
-                                            .color(if ok { pal.ink_soft } else { pal.ink_faint });
-                                        let r = ui.selectable_label(selected, text);
-                                        if r.clicked() {
-                                            new_mono = i;
-                                        }
-                                        r.on_hover_text(
-                                            RichText::new(v.note.clone()).font(small.clone()),
-                                        );
-                                    }
+                        rail_edge = ui.min_rect().right();
+                    });
+                    ui.add_space(18.0);
+
+                    // ---- the section ----
+                    ui.vertical(|ui| {
+                        ui.set_width(content);
+                        // A fixed minimum height keeps the panel from jumping as the
+                        // reader moves down the rail.
+                        ui.set_min_height(252.0);
+                        match self.settings_tab {
+                            // -------------------------------------------- page
+                            0 => {
+                                let cfg = &mut self.store.config;
+                                let half = (content - 12.0) * 0.5;
+                                ui.horizontal_top(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.set_width(half);
+                                        changed |= toggles(ui, &font, &pal, &mut [
+                                            ("soft wrap", &mut cfg.wrap),
+                                            ("indentation whispers", &mut cfg.guides),
+                                            ("comments as prose", &mut cfg.serif_comments),
+                                            ("focus lens", &mut cfg.focus_lens),
+                                            ("line numbers", &mut cfg.line_numbers),
+                                        ]);
+                                    });
+                                    ui.vertical(|ui| {
+                                        ui.set_width(half);
+                                        changed |= toggles(ui, &font, &pal, &mut [
+                                            ("compress blank lines", &mut cfg.compress_blank),
+                                            ("distilled types", &mut cfg.distilled),
+                                            ("themed window bar", &mut cfg.frameless),
+                                            ("render markdown", &mut cfg.markdown),
+                                        ]);
+                                    });
                                 });
-                                ui.vertical(|ui| {
-                                    ui.set_width(column);
-                                    ui.label(
-                                        RichText::new("prose")
-                                            .font(small.clone())
-                                            .color(pal.ink_faint),
-                                    );
-                                    for (i, v) in self.typo.prose_voices.iter().enumerate() {
-                                        let selected = i == self.typo.prose_idx;
-                                        let text = RichText::new(v.label.clone())
-                                            .font(font.clone())
-                                            .color(pal.ink_soft);
-                                        let r = ui.selectable_label(selected, text);
-                                        if r.clicked() {
-                                            new_prose = i;
-                                        }
-                                        r.on_hover_text(
-                                            RichText::new(v.note.clone()).font(small.clone()),
-                                        );
-                                    }
-                                });
-                            });
-                            ui.add_space(4.0);
-                            let _ = (code, prose);
-                            ui.add_space(6.0);
-                            let chrome = self
-                                .typo
-                                .ui_voices
-                                .first()
-                                .map(|v| v.label.clone())
-                                .unwrap_or_else(|| self.typo.ui_label.clone());
-                            ui.label(
-                                RichText::new(format!("interface: {chrome}"))
-                                    .font(small.clone())
-                                    .color(pal.ink_faint),
-                            );
-                            if self.typo.bundled_fallback {
-                                ui.label(
-                                    RichText::new(
-                                        "no system fonts found: egui's bundled faces are in use",
-                                    )
-                                    .font(small.clone())
-                                    .color(pal.ink_faint),
+                                ui.add_space(8.0);
+                                ui.add(
+                                    egui::Slider::new(&mut cfg.measure, 40..=160)
+                                        .text(RichText::new("measure").font(font.clone())),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut cfg.leading, 1.2..=2.2)
+                                        .text(RichText::new("leading").font(font.clone())),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut self.scale, 0.7..=2.0)
+                                        .text(RichText::new("type size").font(font.clone())),
                                 );
                             }
-                        }
-                        // ------------------------------------------------ theme
-                        2 => {
-                            // Two columns: six full-width rows was half the panel.
-                            for pair in theme::THEMES.chunks(2) {
-                                ui.horizontal(|ui| {
-                                    for p in pair {
-                                        let selected = p.name == self.palette.name;
-                                        let text = RichText::new(p.name)
-                                            .font(font.clone())
-                                            .color(p.tone(Tone::Keyword));
-                                        let r = ui.selectable_label(selected, text);
-                                        if r.clicked() {
-                                            theme_choice = Some(
-                                                theme::THEMES
-                                                    .iter()
-                                                    .position(|t| t.name == p.name)
-                                                    .unwrap_or(0),
+                            // -------------------------------------------- type
+                            1 => {
+                                let column = (content - 16.0) * 0.5;
+                                ui.horizontal_top(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.set_width(column);
+                                        ui.label(
+                                            RichText::new("code")
+                                                .font(small.clone())
+                                                .color(pal.ink_faint),
+                                        );
+                                        for (i, v) in self.typo.mono_voices.iter().enumerate() {
+                                            let selected = i == self.typo.mono_idx;
+                                            let ok = typography::loads(v);
+                                            let text = RichText::new(v.label.clone())
+                                                .font(font.clone())
+                                                .color(if ok { pal.ink_soft } else { pal.ink_faint });
+                                            let r = ui.selectable_label(selected, text);
+                                            if r.clicked() {
+                                                new_mono = i;
+                                            }
+                                            r.on_hover_text(
+                                                RichText::new(v.note.clone()).font(small.clone()),
                                             );
                                         }
-                                        r.on_hover_text(
-                                            RichText::new(p.mood).font(small.clone()),
+                                    });
+                                    ui.vertical(|ui| {
+                                        ui.set_width(column);
+                                        ui.label(
+                                            RichText::new("prose")
+                                                .font(small.clone())
+                                                .color(pal.ink_faint),
                                         );
-                                        ui.add_space(4.0);
-                                    }
+                                        for (i, v) in self.typo.prose_voices.iter().enumerate() {
+                                            let selected = i == self.typo.prose_idx;
+                                            let text = RichText::new(v.label.clone())
+                                                .font(font.clone())
+                                                .color(pal.ink_soft);
+                                            let r = ui.selectable_label(selected, text);
+                                            if r.clicked() {
+                                                new_prose = i;
+                                            }
+                                            r.on_hover_text(
+                                                RichText::new(v.note.clone()).font(small.clone()),
+                                            );
+                                        }
+                                    });
                                 });
-                            }
-                        }
-                        // ------------------------------------------------ folder
-                        _ => {
-                            let cfg = &mut self.store.config;
-                            changed |= toggles(
-                                ui,
-                                &font,
-                                &pal,
-                                &mut [
-                                    ("source files only", &mut cfg.code_only),
-                                    ("include hidden files", &mut cfg.show_hidden),
-                                ],
-                            );
-                            ui.add_space(6.0);
-                            if let Some(f) = &self.folder {
+                                ui.add_space(8.0);
+                                let chrome = self
+                                    .typo
+                                    .ui_voices
+                                    .first()
+                                    .map(|v| v.label.clone())
+                                    .unwrap_or_else(|| self.typo.ui_label.clone());
                                 ui.label(
-                                    RichText::new(display_path(&f.root))
+                                    RichText::new(format!("interface: {chrome}"))
                                         .font(small.clone())
                                         .color(pal.ink_faint),
                                 );
+                                if self.typo.bundled_fallback {
+                                    ui.label(
+                                        RichText::new(
+                                            "no system fonts found: egui's bundled faces are in use",
+                                        )
+                                        .font(small.clone())
+                                        .color(pal.ink_faint),
+                                    );
+                                }
                             }
-                            if ui
-                                .button(RichText::new("Open a folder…").font(font.clone()))
-                                .clicked()
-                            {
-                                open_folder = true;
+                            // -------------------------------------------- theme
+                            2 => {
+                                // Three across: six themes in two rows of a wider panel.
+                                for row in theme::THEMES.chunks(3) {
+                                    ui.horizontal(|ui| {
+                                        for p in row {
+                                            let selected = p.name == self.palette.name;
+                                            let text = RichText::new(p.name)
+                                                .font(font.clone())
+                                                .color(p.tone(Tone::Keyword));
+                                            let r = ui.selectable_label(selected, text);
+                                            if r.clicked() {
+                                                theme_choice = Some(
+                                                    theme::THEMES
+                                                        .iter()
+                                                        .position(|t| t.name == p.name)
+                                                        .unwrap_or(0),
+                                                );
+                                            }
+                                            r.on_hover_text(
+                                                RichText::new(p.mood).font(small.clone()),
+                                            );
+                                            ui.add_space(10.0);
+                                        }
+                                    });
+                                }
+                            }
+                            // -------------------------------------------- folder
+                            3 => {
+                                let cfg = &mut self.store.config;
+                                changed |= toggles(
+                                    ui,
+                                    &font,
+                                    &pal,
+                                    &mut [
+                                        ("source files only", &mut cfg.code_only),
+                                        ("include hidden files", &mut cfg.show_hidden),
+                                    ],
+                                );
+                                ui.add_space(10.0);
+                                if let Some(f) = &self.folder {
+                                    ui.label(
+                                        RichText::new(display_path(&f.root))
+                                            .font(small.clone())
+                                            .color(pal.ink_faint),
+                                    );
+                                }
+                                ui.add_space(4.0);
+                                if ui
+                                    .button(RichText::new("Open a folder…").font(font.clone()))
+                                    .clicked()
+                                {
+                                    open_folder = true;
+                                }
+                            }
+                            // -------------------------------------------- language
+                            _ => {
+                                let enabled = self.store.config.lsp.enabled;
+                                let mut on = enabled;
+                                if toggles(
+                                    ui,
+                                    &font,
+                                    &pal,
+                                    &mut [("start language servers", &mut on)],
+                                ) {
+                                    self.store.config.lsp.enabled = on;
+                                    changed = true;
+                                    lsp_changed = true;
+                                }
+                                ui.add_space(10.0);
+
+                                if self.lsp_kinds.is_empty() {
+                                    ui.label(
+                                        RichText::new(
+                                            "nothing in this folder speaks a language zenith \
+                                             has a server for",
+                                        )
+                                        .font(small.clone())
+                                        .color(pal.ink_faint),
+                                    );
+                                }
+                                for kind in self.lsp_kinds.clone() {
+                                    let (state, why) = self.server_state(kind.id);
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new(kind.title)
+                                                .font(font.clone())
+                                                .color(pal.ink_soft),
+                                        );
+                                        // A server that failed is the one thing on this
+                                        // page worth catching the eye.
+                                        let ink = if state == "failed" {
+                                            pal.tone(Tone::Invalid)
+                                        } else {
+                                            pal.ink_faint
+                                        };
+                                        ui.label(RichText::new(state).font(small.clone()).color(ink));
+                                    });
+                                    if let Some(why) = why {
+                                        ui.label(
+                                            RichText::new(why)
+                                                .font(small.clone())
+                                                .color(pal.ink_faint),
+                                        );
+                                    }
+                                    // The path, editable: empty means "find it yourself",
+                                    // which is what zenith does when nothing is written.
+                                    let discovered = self
+                                        .available
+                                        .iter()
+                                        .find(|a| a.kind.id == kind.id)
+                                        .map(|a| display_path(&a.binary));
+                                    let entry = self
+                                        .store
+                                        .config
+                                        .lsp
+                                        .servers
+                                        .entry(kind.id.to_string())
+                                        .or_default();
+                                    ui.visuals_mut().extreme_bg_color = pal.panel_deep;
+                                    // A path is code, and it is edited: set it in the code
+                                    // voice, over a hairline, which is how this program
+                                    // draws every field it has.
+                                    let edit = ui.add(
+                                        egui::TextEdit::singleline(&mut entry.command)
+                                            .hint_text(
+                                                discovered
+                                                    .clone()
+                                                    .unwrap_or_else(|| "path to the binary".into()),
+                                            )
+                                            .font(self.typo.code_id(11.5 * self.scale))
+                                            .desired_width(content)
+                                            .frame(Frame::NONE),
+                                    );
+                                    ui.painter().hline(
+                                        edit.rect.x_range(),
+                                        edit.rect.bottom() + 2.0,
+                                        Stroke::new(1.0, pal.edge),
+                                    );
+                                    if edit.changed() {
+                                        changed = true;
+                                        self.lsp_path_dirty.insert(kind.id.to_string());
+                                    }
+                                    if edit.lost_focus()
+                                        && self.lsp_path_dirty.remove(kind.id)
+                                    {
+                                        // Finishing the edit restarts that language's
+                                        // server, so the new path is the one in use. A
+                                        // field visited and left alone is not an edit.
+                                        restart = Some(kind.id.to_string());
+                                    }
+                                    ui.add_space(6.0);
+                                }
                             }
                         }
-                    }
+                    });
+                    ui.add_space(14.0);
+                    block = Some(ui.min_rect());
+                });
+
+                // The rule between the rail and the page, drawn last so it sits between
+                // them rather than under either.
+                if let Some(r) = block {
+                    ui.painter().vline(
+                        rail_edge + 9.0,
+                        r.y_range(),
+                        Stroke::new(1.0, pal.edge),
+                    );
                 }
             });
 
+        if let Some(id) = restart {
+            self.restart_server(&id);
+        }
+        if lsp_changed {
+            self.start_discovery();
+        }
         if new_mono != self.typo.mono_idx || new_prose != self.typo.prose_idx {
             self.apply_typography(ctx, new_mono, new_prose);
         }
@@ -3251,6 +3378,45 @@ impl Zenith {
         self.show_settings = open;
     }
 
+    /// What a language's server is doing, and why, for the settings panel.
+    fn server_state(&self, id: &str) -> (String, Option<String>) {
+        if !self.store.config.lsp.enabled {
+            // Not running is not the same as not found: nothing was looked for.
+            return ("off".into(), None);
+        }
+        if let Some(session) = self.servers.iter().find(|s| s.id() == id) {
+            return match session.state() {
+                lsp::State::Starting => ("starting".into(), None),
+                lsp::State::Ready => ("ready".into(), None),
+                lsp::State::Failed(why) => ("failed".into(), Some(why.clone())),
+            };
+        }
+        if self.available.iter().any(|a| a.kind.id == id) {
+            ("found".into(), None)
+        } else if self.discovering.is_some() {
+            ("looking…".into(), None)
+        } else {
+            ("not found".into(), None)
+        }
+    }
+
+    /// Stop a language's server so the next question starts it again — with the path the
+    /// reader has just written down.
+    fn restart_server(&mut self, id: &str) {
+        for session in self.servers.iter_mut().filter(|s| s.id() == id) {
+            session.stop();
+        }
+        self.servers.retain(|s| s.id() != id);
+        self.available.retain(|a| a.kind.id != id);
+        self.outline_asked = None;
+        let Some(root) = self.folder.as_ref().map(|f| f.root.clone()) else {
+            return;
+        };
+        let kinds: Vec<&'static lsp::servers::Kind> =
+            self.lsp_kinds.iter().filter(|k| k.id == id).copied().collect();
+        self.discover(kinds, root);
+    }
+
     // -- language servers --------------------------------------------------
 
     /// Find the servers for the languages in this folder, in the background.
@@ -3258,6 +3424,14 @@ impl Zenith {
     /// Discovery asks binaries their version, which means spawning processes: never on
     /// the frame thread, and never before there is a folder to search.
     fn start_discovery(&mut self) {
+        // The languages are a fact about the folder, so the panel can list them even
+        // when the servers are turned off.
+        self.lsp_path_dirty.clear();
+        self.lsp_kinds = self
+            .folder
+            .as_ref()
+            .map(|f| lsp::servers::kinds_among(f.files.iter().map(|e| e.path.as_path())))
+            .unwrap_or_default();
         if !self.store.config.lsp.enabled {
             for session in &mut self.servers {
                 session.stop();
@@ -3276,7 +3450,16 @@ impl Zenith {
         self.discovering = None;
         let Some(folder) = &self.folder else { return };
         let root = folder.root.clone();
-        let kinds = lsp::servers::kinds_among(folder.files.iter().map(|f| f.path.as_path()));
+        let kinds = self.lsp_kinds.clone();
+        if kinds.is_empty() {
+            return;
+        }
+        self.discover(kinds, root);
+    }
+
+    /// Look for servers for these languages, off the frame thread: `find` runs the
+    /// binaries it finds, which is not something a frame may wait for.
+    fn discover(&mut self, kinds: Vec<&'static lsp::servers::Kind>, root: PathBuf) {
         if kinds.is_empty() {
             return;
         }
@@ -3315,7 +3498,12 @@ impl Zenith {
                 self.discovering = None;
                 // The reader may have opened another folder while this ran.
                 if self.folder.as_ref().map(|f| f.root.clone()) == Some(root) {
-                    self.available = found;
+                    // Merged rather than replaced: a restart looks for one language, and
+                    // must not forget the servers the others already have.
+                    for server in found {
+                        self.available.retain(|a| a.kind.id != server.kind.id);
+                        self.available.push(server);
+                    }
                 }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}

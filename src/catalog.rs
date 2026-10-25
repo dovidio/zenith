@@ -95,7 +95,10 @@ pub struct Server {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            theme: "Washi".into(),
+            // The first theme in `theme::THEMES`, named rather than numbered. It used to
+            // say "Washi", which is a theme that no longer exists: every new config was
+            // written with a name that quietly fell back to this one.
+            theme: "Lugano".into(),
             font_scale: 1.0,
             measure: 86,
             leading: 1.62,
