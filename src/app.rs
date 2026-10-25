@@ -144,7 +144,21 @@ fn launch(opts: Startup) {
 // ---------------------------------------------------------------------------
 
 /// The settings rail, top to bottom.
-const SETTINGS_SECTIONS: [&str; 5] = ["Page", "Type", "Theme", "Folder", "Language"];
+const SETTINGS_SECTIONS: [&str; 4] = ["Page", "Type", "Theme", "Language"];
+
+/// What a theme is shown by: a few lines of the sort of thing this program is for.
+///
+/// Short enough to fit in a tile, and written to use every tone the page has — a doc
+/// comment in the reading face, a keyword, a type, a call, a number, punctuation.
+const THEME_SAMPLE: &str = "//! read the room, slowly
+fn read(page: &Page) {
+    let t = page.wait(4);
+    Ok(t)
+}
+";
+
+/// One line of the sample: how far it is indented, and its tones.
+type SampleLine = (usize, Vec<(String, Tone)>);
 
 /// How long a message holds the status strip before the position readout comes back.
 const NOTICE_SECONDS: f64 = 7.0;
@@ -267,6 +281,8 @@ pub struct Zenith {
     /// Languages whose server path has been typed into but not yet left: the server is
     /// restarted when the reader finishes, not on every keystroke.
     lsp_path_dirty: std::collections::BTreeSet<String>,
+    /// The theme tiles' sample, toned once and painted six times.
+    theme_preview: Option<Vec<SampleLine>>,
     /// A search for those servers, running in the background.
     discovering: Option<Discovery>,
     /// Servers that have been started, at most one per language and folder.
@@ -411,6 +427,7 @@ impl Zenith {
             available: Vec::new(),
             lsp_kinds: Vec::new(),
             lsp_path_dirty: std::collections::BTreeSet::new(),
+            theme_preview: None,
             discovering: None,
             servers: Vec::new(),
             nav: None,
@@ -990,6 +1007,9 @@ impl Zenith {
                     continue;
                 }
                 if (cmd && key == Key::Comma) || (!cmd && !ctrl && key == Key::S) {
+                    // One overlay at a time: settings is modal, and a help panel under a
+                    // modal's backdrop is a panel nobody can click.
+                    self.show_help = false;
                     self.show_settings = !self.show_settings;
                     continue;
                 }
@@ -1010,6 +1030,7 @@ impl Zenith {
                     continue;
                 }
                 if !cmd && !ctrl && key == Key::Questionmark {
+                    self.show_settings = false;
                     self.show_help = !self.show_help;
                     continue;
                 }
@@ -3004,49 +3025,61 @@ impl Zenith {
         self.show_help = open;
     }
 
-    /// Settings: a rail of sections, and one of them at a time.
+    /// Settings: a modal screen, a rail of sections, and one section at a time.
     ///
-    /// Six sections do not fit across a card, and the Language section needs room a short
-    /// tab row cannot give it — a server's path is long. So the sections stand in a column
-    /// on the left, where a list of names belongs, and the content gets the rest.
+    /// Modal because settings are a place you go, not a card that floats over the page and
+    /// lets a scroll wheel move the text underneath you. The page is still there — veiled
+    /// in the theme's own ink — and it comes back the way it was.
     fn settings_overlay(&mut self, ctx: &egui::Context) {
-        let mut open_folder = false;
         let pal = self.palette;
         let font = self.typo.ui_id(12.5 * self.scale);
+        let title = self.typo.prose_id(20.0 * self.scale);
         let head = self.typo.prose_id(14.5 * self.scale);
         let small = self.typo.ui_id(11.5 * self.scale);
-        let screen = ctx.content_rect();
-        let width = 540.0;
+        let width = 560.0;
         let rail = 118.0;
         let mut open = self.show_settings;
         let mut changed = false;
         let mut lsp_changed = false;
+        let mut tree_changed = false;
         let mut restart: Option<String> = None;
         let mut new_mono = self.typo.mono_idx;
         let mut new_prose = self.typo.prose_idx;
         let mut theme_choice: Option<usize> = None;
+        if self.theme_preview.is_none() {
+            self.theme_preview = Some(sample_tokens(&self.hl));
+        }
+        let sample = self.theme_preview.clone().unwrap_or_default();
 
-        egui::Window::new("settings")
-            .open(&mut open)
-            .title_bar(false)
-            .resizable(false)
-            .collapsible(false)
-            .fixed_pos(Pos2::new(screen.center().x - width * 0.5, screen.top() + 56.0))
-            .fixed_size(vec2(width, 0.0))
+        let modal = egui::Modal::new(egui::Id::new("zenith-settings"))
+            .backdrop_color(theme::alpha(pal.ink, 44))
             .frame(
                 Frame::NONE
                     .fill(pal.panel)
                     .stroke(Stroke::new(1.0, pal.edge))
-                    .corner_radius(CornerRadius::same(8))
-                    .inner_margin(Margin::symmetric(0, 14)),
+                    .corner_radius(CornerRadius::same(10)),
             )
             .show(ctx, |ui| {
-                let content = width - rail - 62.0;
+                ui.set_width(width);
+                // ---- the title ----
+                ui.add_space(18.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(20.0);
+                    ui.label(RichText::new("Settings").font(title.clone()).color(pal.ink));
+                });
+                ui.add_space(8.0);
+                ui.painter().hline(
+                    ui.min_rect().left()..=ui.min_rect().right(),
+                    ui.cursor().top(),
+                    Stroke::new(1.0, pal.edge),
+                );
+                ui.add_space(14.0);
+
+                let content = width - rail - 78.0;
                 let mut rail_edge = 0.0;
                 let mut block: Option<Rect> = None;
-
                 ui.horizontal_top(|ui| {
-                    ui.add_space(18.0);
+                    ui.add_space(20.0);
                     // ---- the rail ----
                     ui.vertical(|ui| {
                         ui.set_width(rail);
@@ -3070,15 +3103,15 @@ impl Zenith {
                     // ---- the section ----
                     ui.vertical(|ui| {
                         ui.set_width(content);
-                        // A fixed minimum height keeps the panel from jumping as the
+                        // A fixed minimum height keeps the screen from jumping as the
                         // reader moves down the rail.
-                        ui.set_min_height(252.0);
+                        ui.set_min_height(296.0);
                         match self.settings_tab {
                             // -------------------------------------------- page
                             0 => {
-                                let cfg = &mut self.store.config;
                                 let half = (content - 12.0) * 0.5;
                                 ui.horizontal_top(|ui| {
+                                    let cfg = &mut self.store.config;
                                     ui.vertical(|ui| {
                                         ui.set_width(half);
                                         changed |= toggles(ui, &font, &pal, &mut [
@@ -3097,9 +3130,26 @@ impl Zenith {
                                             ("themed window bar", &mut cfg.frameless),
                                             ("render markdown", &mut cfg.markdown),
                                         ]);
+                                        // The tree's own two questions, which are about
+                                        // what to read rather than how to set it. They
+                                        // re-read the folder as they change, so they
+                                        // still answer on the frame they are clicked.
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            RichText::new("the tree")
+                                                .font(small.clone())
+                                                .color(pal.ink_faint),
+                                        );
+                                        let tree = toggles(ui, &font, &pal, &mut [
+                                            ("source files only", &mut cfg.code_only),
+                                            ("include hidden files", &mut cfg.show_hidden),
+                                        ]);
+                                        changed |= tree;
+                                        tree_changed |= tree;
                                     });
                                 });
-                                ui.add_space(8.0);
+                                ui.add_space(10.0);
+                                let cfg = &mut self.store.config;
                                 ui.add(
                                     egui::Slider::new(&mut cfg.measure, 40..=160)
                                         .text(RichText::new("measure").font(font.clone())),
@@ -3185,16 +3235,28 @@ impl Zenith {
                             }
                             // -------------------------------------------- theme
                             2 => {
-                                // Three across: six themes in two rows of a wider panel.
-                                for row in theme::THEMES.chunks(3) {
+                                // Each theme is shown by being used: a few lines of the
+                                // sample, set in that theme's paper and ink. A name and a
+                                // swatch tell you nothing about how a page reads.
+                                let tile_w = (content - 14.0) * 0.5;
+                                for row in theme::THEMES.chunks(2) {
                                     ui.horizontal(|ui| {
                                         for p in row {
-                                            let selected = p.name == self.palette.name;
-                                            let text = RichText::new(p.name)
-                                                .font(font.clone())
-                                                .color(p.tone(Tone::Keyword));
-                                            let r = ui.selectable_label(selected, text);
-                                            if r.clicked() {
+                                            let chosen = p.name == self.palette.name;
+                                            let (rect, response) = ui.allocate_exact_size(
+                                                vec2(tile_w, 84.0),
+                                                egui::Sense::click(),
+                                            );
+                                            theme_tile(
+                                                ui,
+                                                rect,
+                                                p,
+                                                &sample,
+                                                chosen,
+                                                &self.typo,
+                                                self.scale,
+                                            );
+                                            if response.clicked() {
                                                 theme_choice = Some(
                                                     theme::THEMES
                                                         .iter()
@@ -3202,46 +3264,18 @@ impl Zenith {
                                                         .unwrap_or(0),
                                                 );
                                             }
-                                            r.on_hover_text(
+                                            response.on_hover_text(
                                                 RichText::new(p.mood).font(small.clone()),
                                             );
                                             ui.add_space(10.0);
                                         }
                                     });
-                                }
-                            }
-                            // -------------------------------------------- folder
-                            3 => {
-                                let cfg = &mut self.store.config;
-                                changed |= toggles(
-                                    ui,
-                                    &font,
-                                    &pal,
-                                    &mut [
-                                        ("source files only", &mut cfg.code_only),
-                                        ("include hidden files", &mut cfg.show_hidden),
-                                    ],
-                                );
-                                ui.add_space(10.0);
-                                if let Some(f) = &self.folder {
-                                    ui.label(
-                                        RichText::new(display_path(&f.root))
-                                            .font(small.clone())
-                                            .color(pal.ink_faint),
-                                    );
-                                }
-                                ui.add_space(4.0);
-                                if ui
-                                    .button(RichText::new("Open a folder…").font(font.clone()))
-                                    .clicked()
-                                {
-                                    open_folder = true;
+                                    ui.add_space(10.0);
                                 }
                             }
                             // -------------------------------------------- language
                             _ => {
-                                let enabled = self.store.config.lsp.enabled;
-                                let mut on = enabled;
+                                let mut on = self.store.config.lsp.enabled;
                                 if toggles(
                                     ui,
                                     &font,
@@ -3272,14 +3306,14 @@ impl Zenith {
                                                 .font(font.clone())
                                                 .color(pal.ink_soft),
                                         );
-                                        // A server that failed is the one thing on this
-                                        // page worth catching the eye.
                                         let ink = if state == "failed" {
                                             pal.tone(Tone::Invalid)
                                         } else {
                                             pal.ink_faint
                                         };
-                                        ui.label(RichText::new(state).font(small.clone()).color(ink));
+                                        ui.label(
+                                            RichText::new(state).font(small.clone()).color(ink),
+                                        );
                                     });
                                     if let Some(why) = why {
                                         ui.label(
@@ -3288,8 +3322,6 @@ impl Zenith {
                                                 .color(pal.ink_faint),
                                         );
                                     }
-                                    // The path, editable: empty means "find it yourself",
-                                    // which is what zenith does when nothing is written.
                                     let discovered = self
                                         .available
                                         .iter()
@@ -3309,9 +3341,9 @@ impl Zenith {
                                     let edit = ui.add(
                                         egui::TextEdit::singleline(&mut entry.command)
                                             .hint_text(
-                                                discovered
-                                                    .clone()
-                                                    .unwrap_or_else(|| "path to the binary".into()),
+                                                discovered.clone().unwrap_or_else(|| {
+                                                    "path to the binary".into()
+                                                }),
                                             )
                                             .font(self.typo.code_id(11.5 * self.scale))
                                             .desired_width(content)
@@ -3326,22 +3358,21 @@ impl Zenith {
                                         changed = true;
                                         self.lsp_path_dirty.insert(kind.id.to_string());
                                     }
-                                    if edit.lost_focus()
-                                        && self.lsp_path_dirty.remove(kind.id)
-                                    {
+                                    if edit.lost_focus() && self.lsp_path_dirty.remove(kind.id) {
                                         // Finishing the edit restarts that language's
                                         // server, so the new path is the one in use. A
                                         // field visited and left alone is not an edit.
                                         restart = Some(kind.id.to_string());
                                     }
-                                    ui.add_space(6.0);
+                                    ui.add_space(8.0);
                                 }
                             }
                         }
                     });
-                    ui.add_space(14.0);
+                    ui.add_space(16.0);
                     block = Some(ui.min_rect());
                 });
+                ui.add_space(20.0);
 
                 // The rule between the rail and the page, drawn last so it sits between
                 // them rather than under either.
@@ -3360,6 +3391,16 @@ impl Zenith {
         if lsp_changed {
             self.start_discovery();
         }
+        if tree_changed {
+            // The tree's filters are questions about what to read, and the answer is a
+            // new walk of the folder — which happens in the background, so it is still
+            // immediate as far as the reader is concerned.
+            let root = self.folder.as_ref().map(|f| f.root.clone());
+            if let Some(root) = root {
+                let focus = self.open.as_ref().map(|o| o.path.clone());
+                self.open_folder(&root, focus);
+            }
+        }
         if new_mono != self.typo.mono_idx || new_prose != self.typo.prose_idx {
             self.apply_typography(ctx, new_mono, new_prose);
         }
@@ -3374,6 +3415,9 @@ impl Zenith {
             ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(
                 !self.store.config.frameless,
             ));
+        }
+        if modal.should_close() {
+            open = false;
         }
         self.show_settings = open;
     }
@@ -3432,24 +3476,27 @@ impl Zenith {
             .as_ref()
             .map(|f| lsp::servers::kinds_among(f.files.iter().map(|e| e.path.as_path())))
             .unwrap_or_default();
-        if !self.store.config.lsp.enabled {
-            for session in &mut self.servers {
+        let root = self.folder.as_ref().map(|f| f.root.clone());
+        // A server already reading *this* folder is still reading this folder: re-walking
+        // the tree to hide or show a file is not a reason to make it start again. One
+        // rooted anywhere else is another folder's server and is let go.
+        let enabled = self.store.config.lsp.enabled;
+        let mut kept = Vec::new();
+        for mut session in std::mem::take(&mut self.servers) {
+            if enabled && root.as_ref() == Some(&session.root) {
+                kept.push(session);
+            } else {
                 session.stop();
             }
-            self.servers.clear();
-            self.available.clear();
-            self.discovering = None;
-            return;
         }
-        for session in &mut self.servers {
-            session.stop();
-        }
-        self.servers.clear();
+        self.servers = kept;
         self.nav = None;
         self.available.clear();
         self.discovering = None;
-        let Some(folder) = &self.folder else { return };
-        let root = folder.root.clone();
+        if !enabled {
+            return;
+        }
+        let Some(root) = root else { return };
         let kinds = self.lsp_kinds.clone();
         if kinds.is_empty() {
             return;
@@ -4254,6 +4301,90 @@ fn flatten(
                 empty: f.size == 0,
             }),
         }
+    }
+}
+
+/// The theme sample, toned by the grammar zenith already has loaded.
+fn sample_tokens(hl: &Highlighter) -> Vec<SampleLine> {
+    let path = PathBuf::from("sample.rs");
+    let syntax = hl.syntax_for(&path, "").clone();
+    hl.parse(&syntax, THEME_SAMPLE, THEME_SAMPLE.len())
+        .lines
+        .iter()
+        .map(|line| {
+            (
+                line.indent,
+                line.tokens
+                    .iter()
+                    .map(|t| (t.text.clone(), t.tone))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+/// One theme, shown by being used: its paper, its inks, its faces, and the sample set in
+/// them. `chosen` draws the accent around it rather than a fill, so the preview is never
+/// tinted by the fact that it is the one in force.
+fn theme_tile(
+    ui: &egui::Ui,
+    rect: Rect,
+    palette: &Palette,
+    sample: &[SampleLine],
+    chosen: bool,
+    typo: &Typography,
+    scale: f32,
+) {
+    let painter = ui.painter();
+    painter.rect_filled(rect, CornerRadius::same(4), palette.paper);
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(4),
+        Stroke::new(
+            if chosen { 1.5 } else { 1.0 },
+            if chosen { palette.accent } else { palette.edge },
+        ),
+        egui::StrokeKind::Inside,
+    );
+
+    let pad = 9.0;
+    painter.text(
+        Pos2::new(rect.left() + pad, rect.top() + 5.0),
+        Align2::LEFT_TOP,
+        palette.name,
+        typo.prose_id(12.0 * scale),
+        palette.ink_soft,
+    );
+
+    let code = typo.code_id(10.0 * scale);
+    let prose = typo.prose_italic_id(10.0 * scale);
+    let char_w = painter
+        .layout_no_wrap("M".to_string(), code.clone(), palette.ink)
+        .size()
+        .x;
+    let step = 13.0 * scale;
+    let mut y = rect.top() + 25.0;
+    for (indent, tokens) in sample {
+        if y + step > rect.bottom() - 4.0 {
+            break;
+        }
+        let mut x = rect.left() + pad + *indent as f32 * char_w;
+        for (text, tone) in tokens {
+            let ink = palette.tone(*tone);
+            let font = if matches!(tone, Tone::Comment | Tone::Doc) {
+                prose.clone()
+            } else {
+                code.clone()
+            };
+            let galley = painter.layout_no_wrap(text.clone(), font, ink);
+            // A tile is not a page: a line that does not fit simply stops.
+            if x + galley.size().x > rect.right() - 6.0 {
+                break;
+            }
+            painter.galley(Pos2::new(x, y), galley.clone(), ink);
+            x += galley.size().x;
+        }
+        y += step;
     }
 }
 
