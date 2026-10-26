@@ -142,8 +142,8 @@ The window has one permanent surface: the page. Everything else is a state.
 
 The index is 252 pt wide and resizes 200–340. The contents are 240 pt wide and resize
 180–340. A drawer meets the page at one continuous hairline in `edge`; there is no gap and
-no second background. The page re-centers in the remaining width, but its measure does not
-change.
+no second background. The page re-centers in the remaining width; a drawer takes room from
+the margins before it takes room from the measure.
 
 **One summoned surface at a time.** Opening a sheet puts a drawer away; opening a drawer
 closes the launcher or settings. The launcher itself replaces a drawer before it appears.
@@ -223,8 +223,8 @@ hairline the whole way round.
 ### The mark
 
 The only thing the page offers on its own. A 12 pt mark drawn with a trunk and two
-branches, in `ink_faint`, 18 pt in from the bottom-left corner. It is drawn, not typed,
-and it belongs to no icon set.
+branches, in `ink_faint`, 18 pt in from the bottom-left corner, inside a 28 pt invisible
+hit area. It is drawn, not typed, and it belongs to no icon set.
 
 It appears when the reader scrolls or moves the pointer, and leaves two and a half seconds
 after the last movement — unless the pointer is on it, which holds it. It does not fade; it
