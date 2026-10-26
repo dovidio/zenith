@@ -24,6 +24,9 @@ Three consequences run through the system:
 - **The page is the product.** The index, the contents, the launcher and settings exist
   to get you back to it. None of them is allowed to become the interesting thing.
 
+The bloom is the one piece of chrome that offers itself, at startup and when the pointer
+reaches for it. It is how the doors are seen; everything else waits to be asked.
+
 ## Three voices
 
 A code editor is set in one monospace face, everywhere, forever. Zenith sets code in a
@@ -133,7 +136,7 @@ The window has one permanent surface: the page. Everything else is a state.
 
 | state | on screen |
 |---|---|
-| **reading** (default) | the page alone; the mark appears on movement |
+| **reading** (default) | the page, with the bloom at the top |
 | **index** | the page and the left drawer |
 | **contents** | the page and the right drawer |
 | **launcher** | the page and the launcher sheet |
@@ -159,6 +162,9 @@ There is no status bar. The foot of the window is not furniture.
 A file names itself at the head of its page: the name, the path under it in the reading
 face, and a hairline. That title block is part of the page, not chrome; it scrolls away
 with the text. There is no masthead above the page.
+
+The page keeps 96 pt of air above the title block. That is the bloom's room, and the pause
+before the title.
 
 When there is nothing to read at all, the page is not silent: it says `Open a folder…` in
 one line, centered, as a row. It is a row like any other — a wash on hover, never a hand.
@@ -210,7 +216,8 @@ and a 3 pt corner; nothing gets a border, a shadow or a second background colour
 | cursor wash, row wash | 2–4 pt | soft enough not to read as a button |
 | toggles, fields, buttons, small controls | 2–4 pt | tactile, not pill-shaped |
 | theme swatch | 8 pt | a card, not a sheet |
-| sheet (launcher, settings, search) | 14 pt | the only generous corner |
+| bloom bubble | full | the only ring; it is a bubble, not a button |
+| sheet (launcher, settings, search) | 14 pt | the only generous rounded rectangle |
 
 Fourteen, not twenty-four. A 24 pt corner on a 560 pt sheet reads as a phone app placed on
 a desk; 14 pt reads as a sheet lifted at one corner. This is furniture, not a device.
@@ -220,18 +227,41 @@ hairline the whole way round.
 
 ## Components
 
-### The mark
+### The bloom
 
-The only thing the page offers on its own. A 12 pt mark drawn with a trunk and two
-branches, in `ink_faint`, 18 pt in from the bottom-left corner, inside a 28 pt invisible
-hit area. It is drawn, not typed, and it belongs to no icon set.
+The one piece of chrome that offers itself. At the top of the window's content, centered,
+below the desktop's title strip where there is one, 14 pt down, is a 7 pt dot in
+`ink_soft` inside a 28 pt hit area. On hover a 20 pt hairline ring appears around it and the
+dot warms. It is the seed, not a menu.
 
-It appears when the reader scrolls or moves the pointer, and leaves two and a half seconds
-after the last movement — unless the pointer is on it, which holds it. It does not fade; it
-is there or it is not. It is hidden while a drawer or a sheet is open.
+At startup the bloom is open: the dot and four 26 pt bubbles in a shallow fan below it,
+each with a short hairline stem back to the dot and a name in 9.5 pt chrome, tracked
+0.08 em, beneath it — `INDEX`, `CONTENTS`, `LAUNCHER`, `SETTINGS`. The bubbles are
+paper-filled circles with a 1 pt `edge` ring; the marks inside are drawn, not typed: a trunk
+with two branches, three rules, a ring with a handle, two slider rules. The rings are
+`edge`, the marks `ink_soft`, the labels `ink_faint`; on hover the ring takes `accent`, the
+mark and label take `ink`, and the stem warms. A bubble and its label are one hit area. If
+the reader does nothing for four seconds, the bubbles collapse into the dot and the whole
+bloom dissolves.
 
-Clicking it opens the index. It is the one unlabelled door in the program: a tree mark
-opens a tree.
+After that it is summoned by approach. The pointer entering the top 56 pt of the window
+within 240 pt of its center brings the dot back; it is a hover zone and never steals a
+click from the page. Clicking the dot buds the four bubbles; clicking it again, or `esc`,
+collapses them. Resting on the dot for 200 ms also buds them, so the icons can be found
+without a click. Clicking a bubble opens its surface and the bloom goes away; a click
+anywhere else collapses it, and on the page that click also places the reading cursor.
+Once summoned, the bloom collapses to the dot after three and a half seconds without a
+hover or a click, and the dot fades two and a half seconds after the pointer leaves the top
+zone; it does not disappear while the pointer is on it. Nothing in the bloom gets a hand;
+hover is a ring and a change of ink.
+
+The bloom is fixed to the window, not to the page. At the top of a file it sits in the
+96 pt of air above the title block; when the page is scrolled it floats over the text,
+which is why it is small, paper-filled, and never stays. The names belong to the margin:
+when the bloom floats over scrolled text, the labels are left out and the marks alone are
+enough. It is hidden while a drawer or a sheet is open.
+
+Everything else is summoned; this one has to offer itself, or the doors would be invisible.
 
 ### The index
 
@@ -244,9 +274,9 @@ drawn triangles, because `▸` and `▾` are missing from some machines. A name 
 the drawer is cut with an ellipsis and shown in full on hover.
 
 The tree is a map, not a finder: finding a file is the launcher's job. Choosing a file
-reads it and leaves the index open, so the reader can walk the tree. `esc` or a click on
-the page returns to the page. A keyboard reader reaches the same drawer with the launcher's
-`Index`.
+reads it and leaves the index open, so the reader can walk the tree. `esc`, or a click on
+the page, leaves it. Its bubble is the tree mark in the bloom; a keyboard reader reaches
+the same drawer with the launcher's `Index`.
 
 ### The contents
 
@@ -256,14 +286,16 @@ or constant, `+` module. The symbol the cursor is inside is washed and marked wi
 same 2 pt tab as the index. Clicking a symbol moves the page and leaves the drawer open;
 `esc`, or a click on the page, closes it.
 
-It is summoned from the launcher. It is a view, not a permanent sidebar.
+It is summoned from its bubble in the bloom, or from the launcher. It is a view, not a
+permanent sidebar.
 
 ### The launcher
 
-The front door. A sheet 560 pt wide, one third of the way down the window, opened with
-`⌘K` (or `ctrl-K`). It behaves like a spotlight: one field, a few results, no menus. Its
-input is chrome 16 pt, with no box: a hairline under the line is the only boundary. The
-placeholder is `a file, a symbol, or a view`.
+The room's search, and one of the bloom's four bubbles. A sheet 560 pt wide, one third of
+the way down the window, opened by its bubble or with `⌘K` (or `ctrl-K`). It behaves like a
+spotlight: one field, a few results, no menus. Its input is chrome 16 pt, with no box: a
+hairline under the line is the only boundary. The placeholder is `a file, a symbol, or a
+view`.
 
 The results are a short, ranked list, not a manual: names in the code face, views and
 settings in chrome, 28 pt rows, selected with a wash and a 2 pt accent tab. There is no
@@ -276,14 +308,14 @@ symbols. Then `Folder` — `Index`, its files and `Open folder…`. Then `Zenith
 come first. Typing `theme` surfaces the atmospheres; typing `keys` surfaces the key page.
 
 It launches places and views, not motions. `j`, `k`, `gd` and the rest are the page's
-grammar, and they never appear as commands here. The launcher is where the reading state
-advertises what the program can do; the empty page has one door of its own.
+grammar, and they never appear as commands here. The bloom shows the four doors; the
+launcher is the one for anything that is not a place in the index or the contents. It is
+where the reading state advertises what else the program can do; the empty page has one
+door of its own.
 
 `⌘P` opens it scoped to files; `s` and `⌘,` open settings directly. These are back doors
-for people who already know them. Nothing in the reading state advertises a key: this is
-the one place the design chooses calm over discoverability. The mark is the visible door,
-and the empty page always offers `Open a folder…`, so a new reader is never completely
-stuck.
+for people who already know them. No key is advertised anywhere; the bloom shows the
+doors instead, and the empty page still offers `Open a folder…`.
 
 `esc` or a click outside closes it; the arrows move; enter or a click opens.
 
@@ -298,6 +330,7 @@ names the file, the spine shows how far you are, and the page shows the rest.
 
 ### Settings
 
+Summoned by its bubble in the bloom, by the launcher's `Settings`, or with `s` / `⌘,`.
 A centered sheet 560 pt wide, `panel`, 14 pt corners, 1 pt `edge`, and the sheet shadow.
 A 20 pt serif title, a hairline, then a 118 pt rail of five sections — `Page`, `Type`,
 `Theme`, `Language`, `Keys` — in the prose voice at 14.5 pt, active in `ink`, inactive in
@@ -357,21 +390,32 @@ Finding a *file* is the launcher's job. There is no second file finder.
 
 ## Motion
 
-There is none. Nothing fades, slides, springs or eases. The page moves when the reader
-moves it, and a landing is instant. The mark appears and leaves; the drawers and sheets
-arrive and go; none of them animates. The one soft thing in the program is a shadow, and
-it is soft because paper is.
+The page is still. It never fades, slides, springs or eases; a landing is instant; a drawer
+or a sheet arrives without transition. The bloom is the one exception, because a bubble
+has to come from somewhere.
+
+Opening: the dot's ring divides into four stems, and each bubble is a duplicate of that
+ring — born at the dot at 0.2 scale and zero opacity, travelling along its stem, and
+resolving its own mark as it settles — 200 ms, staggered 30 ms from the centre out.
+Closing: the bubbles return and fade in 140 ms with no stagger. The dot fades in over
+160 ms when the pointer reaches the top, and out over 600 ms when it is left. Idle: the
+bubbles collapse to the dot, and then the dot fades.
+
+That is the whole vocabulary: one bud, one dissolve, at the top of the window. The one soft
+thing is a sheet's shadow; the one moving thing is the bloom.
 
 ## What this system refuses
 
 - **Chrome by default.** No permanent masthead, no pinned sidebar, no status bar, no
   toolbar. Zen is not a mode to enter; it is the state you start in.
 - **A shortcut legend.** No hints at the foot, no `?` overlay. What the program can do is
-  in the launcher; the complete list is in Settings › Keys.
+  in the bloom and the launcher; the complete list is in Settings › Keys.
 - **A status bar.** Notices are one line at the foot of the page and then they are gone.
 - **A hand cursor.** The arrow is the native pointer; the I-beam is for fields. The hand
   belongs to links on the web.
 - **A pinned panel.** At most one drawer or sheet at a time, and only when asked for.
+- **Animation everywhere.** The page, the drawers and the sheets arrive and go without a
+  transition. The bloom buds and dissolves; nothing else moves.
 - **A Material colour hierarchy.** No primary/secondary/tertiary, no containers, no error
   surfaces. Those are the tokens of a program with actions and failures. This one has
   neither.
@@ -382,8 +426,8 @@ it is soft because paper is.
   to be.
 - **Diagnostics as decoration.** No red squiggles, no error counts, no badges. A broken
   thing gets one line at the foot of the page.
-- **Icons.** Every mark is drawn (the tree mark, carets, the cursor ribbon) or typographic
-  (`ƒ`, `○`, `+`, `↳`). No icon set, no emoji.
+- **Icons.** Every mark is drawn (the bloom's bubbles, carets, the cursor ribbon) or
+  typographic (`ƒ`, `○`, `+`, `↳`). No icon set, no emoji.
 - **Shadows inside the page.** Elevation belongs to the sheets laid over the page. Text
   is flat.
 - **The editor's furniture.** No minimap, no gutter of line numbers by default, no
