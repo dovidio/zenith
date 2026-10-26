@@ -56,8 +56,6 @@ pub struct Config {
     /// Recede the parts of a strongly typed language a human is not reading:
     /// type annotations, modifiers, and the punctuation that only the compiler needs.
     pub distilled: bool,
-    /// Chrome-free reading.
-    pub zen: bool,
     /// Draw the window's own bar instead of the system's, so the strip along the top of
     /// the window is the theme's colour rather than the desktop's.
     pub frameless: bool,
@@ -125,7 +123,6 @@ impl Default for Config {
             show_hidden: false,
             focus_lens: false,
             distilled: false,
-            zen: false,
             frameless: true,
             markdown: true,
             lsp: Lsp::default(),

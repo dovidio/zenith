@@ -194,20 +194,14 @@ USAGE:
 
 READING KEYS:
     j / k, space, ⇧space      move the reading cursor / page
-    n / p                     next / previous file in the folder
-    enter                     jump to the outline entry under the cursor line
-    /  or ⌘K                  find a file in the folder
-    o                         outline panel
-    y                         zen mode (hide all chrome)
-    f                         focus lens — dim everything but the block you read
-    t                         next theme
-    T                         previous theme
-    m                         change the code voice (mono typeface)
-    M                         change the prose voice (serif typeface)
-    [ / ]                     smaller / larger type
-    w                         toggle soft wrap
-    #                         toggle line numbers
-    g / G                     top / bottom of file
+    J / K                     next / previous file in the folder
+    tab                       open the index and move the keyboard into it
+    o                         contents
+    /  or ⌘F                  find inside this file
+    ⌘P, ⌘K or ctrl-p          find a file in the folder
+    s  or ⌘,                  settings
+    ?                         the key map (Settings › Keys)
+    esc                       close what is open
     gd                        go to the definition of what is under the cursor
     b                         bookmark this file
     q                         close the file, back to the one you came from

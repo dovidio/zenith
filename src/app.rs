@@ -1,5 +1,5 @@
-//! The window: a folder on the left, a page in the middle, a table of contents on
-//! the right, and a reading cursor instead of a caret.
+//! The window: a page, and four doors summoned at its head. The reading cursor is
+//! the only permanent mark on the page.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -144,7 +144,7 @@ fn launch(opts: Startup) {
 // ---------------------------------------------------------------------------
 
 /// The settings rail, top to bottom.
-const SETTINGS_SECTIONS: [&str; 4] = ["Page", "Type", "Theme", "Language"];
+const SETTINGS_SECTIONS: [&str; 5] = ["Page", "Type", "Theme", "Language", "Keys"];
 
 // ---------------------------------------------------------------------------
 // The shape of the furniture
@@ -160,6 +160,12 @@ const ROW_RADIUS: u8 = 4;
 const LABEL_TRACKING: f32 = 0.12;
 /// The masthead is the one place that is tracked a little wider.
 const MASTHEAD_TRACKING: f32 = 0.14;
+/// The air the page keeps above its title block: the bloom lives here.
+const BLOOM_ROOM: f32 = 96.0;
+/// The page stops short of the window by this much, so a notice has a quiet foot.
+const PAGE_FOOT: f32 = 52.0;
+/// The four doors the bloom opens.
+const BLOOM_LABELS: [&str; 4] = ["INDEX", "CONTENTS", "LAUNCHER", "SETTINGS"];
 
 /// The shadow under a sheet: paper lifted off the desk, not a light source.
 fn sheet_shadow(pal: &Palette) -> egui::epaint::Shadow {
@@ -303,7 +309,6 @@ struct Open {
     outline: Vec<Symbol>,
     laid: Option<Laid>,
     error: Option<String>,
-    note: Option<String>,
 }
 
 pub struct Zenith {
@@ -391,11 +396,25 @@ pub struct Zenith {
 
     show_panels: bool,
     show_outline: bool,
-    zen: bool,
-    show_help: bool,
     show_settings: bool,
     /// Which section of the settings panel is showing.
     settings_tab: usize,
+    /// The settings sheet's keyboard focus: the rail, then the section's controls,
+    /// then the reset action.
+    settings_rail_focus: bool,
+    settings_focus: usize,
+    /// The filter on the Keys page.
+    keys_query: String,
+    /// The bloom is the one piece of chrome that offers itself. Its state is frame
+    /// timing, not taste; `started` at -1 until the first frame can measure time.
+    bloom_open: bool,
+    bloom_visible: bool,
+    bloom_started: f64,
+    bloom_last_touch: f64,
+    bloom_seen: bool,
+    bloom_hover_since: Option<f64>,
+    bloom_hover_opened: bool,
+    page_center_x: f32,
     palette_open: bool,
     query: String,
     palette_sel: usize,
@@ -514,12 +533,21 @@ impl Zenith {
             jumps: Vec::new(),
             jump_pos: 0,
             outline_sel: None,
-            show_panels: true,
-            show_outline: !config.zen,
-            zen: config.zen,
-            show_help: false,
+            show_panels: false,
+            show_outline: false,
             show_settings: false,
             settings_tab: 0,
+            settings_rail_focus: true,
+            settings_focus: 0,
+            keys_query: String::new(),
+            bloom_open: true,
+            bloom_visible: true,
+            bloom_started: -1.0,
+            bloom_last_touch: 0.0,
+            bloom_seen: false,
+            bloom_hover_since: None,
+            bloom_hover_opened: false,
+            page_center_x: 0.0,
             palette_open: false,
             query: String::new(),
             palette_sel: 0,
@@ -565,13 +593,20 @@ impl Zenith {
             app.show_settings = true;
         }
         if std::env::var("ZENITH_FORCE_TREE").is_ok() {
+            app.show_panels = true;
+            app.show_outline = false;
             app.tree_focus = true;
         }
         if std::env::var("ZENITH_FORCE_OUTLINE").is_ok() {
             app.show_outline = true;
+            app.show_panels = false;
         }
         if let Ok(tab) = std::env::var("ZENITH_SETTINGS_TAB") {
             app.settings_tab = tab.parse().unwrap_or(0);
+        }
+        if let Ok(focus) = std::env::var("ZENITH_SETTINGS_FOCUS") {
+            app.settings_rail_focus = false;
+            app.settings_focus = focus.parse().unwrap_or(0);
         }
         app
     }
@@ -758,7 +793,6 @@ impl Zenith {
                     outline: Vec::new(),
                     laid: None,
                     error: Some(format!("{e}")),
-                    note: None,
                 });
                 return;
             }
@@ -774,7 +808,6 @@ impl Zenith {
                     outline: Vec::new(),
                     laid: None,
                     error: Some(format!("{reason} — zenith only reads text")),
-                    note: None,
                 });
             }
             Readable::Text {
@@ -874,8 +907,10 @@ impl Zenith {
                     outline: syms,
                     laid: None,
                     error: None,
-                    note: (!note.is_empty()).then_some(note),
                 });
+                if !note.is_empty() {
+                    self.say(note);
+                }
                 self.caret = vim::Caret::default();
                 self.pending = Pending::Restore;
                 self.store.touch_recent(path);
@@ -907,7 +942,7 @@ impl Zenith {
     }
 
     fn line_count(&self) -> usize {
-        self.open.as_ref().map(|o| o.doc.lines.len()).unwrap_or(0)
+        self.open.as_ref().map(|o| o.doc.line_count()).unwrap_or(0)
     }
 
     /// Expand every ancestor folder of `path` so the open file is visible in the tree.
@@ -993,7 +1028,9 @@ impl Zenith {
             s
         };
         let col_x = reader::column_x(page, style.measure, gutter);
-        let header_h = reader::header_height(&style);
+        // The bloom lives in the air above the title block; the header and every line
+        // below it start after that air, so the space scrolls with the page.
+        let header_h = reader::header_height(&style) + BLOOM_ROOM;
         let key = style.key();
 
         let Some(open) = &mut self.open else { return };
@@ -1025,8 +1062,10 @@ impl Zenith {
         // Two different kinds of "busy", which want different keys to work. A text box
         // (the file finder, the search field) owns every letter. An open panel (settings,
         // help) owns none of them, but should still keep the page still behind it.
-        let text_entry = self.search_open || self.palette_open;
-        let modal = self.show_settings || self.show_help;
+        let text_entry = self.search_open
+            || self.palette_open
+            || (self.show_settings && ctx.memory(|m| m.focused().is_some()));
+        let modal = self.show_settings;
 
         // Every key press this frame, with the modifiers that came with it.
         let presses: Vec<(Key, bool, bool, bool)> = ctx.input(|i| {
@@ -1068,31 +1107,37 @@ impl Zenith {
                     continue;
                 }
                 if (cmd && key == Key::Comma) || (!cmd && !ctrl && key == Key::S) {
-                    // One overlay at a time: settings is modal, and a help panel under a
-                    // modal's backdrop is a panel nobody can click.
-                    self.show_help = false;
                     self.show_settings = !self.show_settings;
-                    continue;
-                }
-                if key == Key::Escape {
-                    self.show_help = false;
-                    self.show_settings = false;
-                    self.palette_open = false;
-                    self.search_open = false;
-                    self.chords.clear();
-                    self.tree_focus = false;
-                    // Escape is the way back from everything, zen mode included: it is
-                    // the one key a reader should never have to think about.
-                    if self.zen {
-                        self.zen = false;
-                        self.store.config.zen = false;
-                        self.store.save_config();
+                    if self.show_settings {
+                        self.show_panels = false;
+                        self.show_outline = false;
+                        self.tree_focus = false;
+                        self.settings_rail_focus = true;
+                        self.settings_focus = 0;
                     }
                     continue;
                 }
-                if !cmd && !ctrl && key == Key::Questionmark {
+                if key == Key::Escape {
                     self.show_settings = false;
-                    self.show_help = !self.show_help;
+                    self.palette_open = false;
+                    self.search_open = false;
+                    self.show_panels = false;
+                    self.show_outline = false;
+                    self.tree_focus = false;
+                    self.bloom_open = false;
+                    self.bloom_visible = false;
+                    self.chords.clear();
+                    continue;
+                }
+                if !cmd && !ctrl && key == Key::Questionmark {
+                    self.show_settings = true;
+                    self.show_panels = false;
+                    self.show_outline = false;
+                    self.tree_focus = false;
+                    self.settings_tab = 4;
+                    self.settings_rail_focus = true;
+                    self.settings_focus = 0;
+                    self.keys_query.clear();
                     continue;
                 }
                 if ctrl && key == Key::O {
@@ -1103,6 +1148,9 @@ impl Zenith {
                     self.jump(1);
                     continue;
                 }
+            }
+            if self.show_settings && self.settings_key(ctx, key, shift, ctrl, cmd) {
+                continue;
             }
             if text_entry || modal {
                 continue;
@@ -1132,6 +1180,8 @@ impl Zenith {
                 continue;
             }
             if key == Key::Tab && !self.tree_rows.is_empty() {
+                self.show_panels = true;
+                self.show_outline = false;
                 self.tree_focus = true;
                 if self.tree_sel.is_none() {
                     self.tree_sel = self.tree_index().map(|i| self.tree_rows[i].key());
@@ -1342,7 +1392,6 @@ impl Zenith {
         };
         let shifted = match key {
             Key::G => Some(Act::FileBottom),
-            Key::Z => Some(Act::Zen),
             Key::Y => Some(Act::CopyLine),
             Key::D => Some(Act::Distilled),
             Key::J => Some(Act::NextFile),
@@ -1409,11 +1458,6 @@ impl Zenith {
                 let caret = vim::landing(&self.open.as_ref().unwrap().doc, line);
                 self.jump_to(caret);
             }
-            Act::Zen => {
-                self.zen = !self.zen;
-                self.store.config.zen = self.zen;
-                self.store.save_config();
-            }
             Act::Focus => {
                 self.store.config.focus_lens = !self.store.config.focus_lens;
                 self.store.save_config();
@@ -1445,7 +1489,12 @@ impl Zenith {
             Act::PrevFile => self.step_file(false),
             Act::NextChapter => self.step_symbol(true),
             Act::PrevChapter => self.step_symbol(false),
-            Act::Outline => self.show_outline = !self.show_outline,
+            Act::Outline => {
+                self.show_outline = !self.show_outline;
+                if self.show_outline {
+                    self.show_panels = false;
+                }
+            }
             Act::Search => {
                 // With nothing open there is nothing to search *in*, so `/` does the
                 // thing the reader obviously wants instead of nothing at all.
@@ -1494,9 +1543,12 @@ impl Zenith {
     }
 
     fn open_palette(&mut self) {
-        // The two finders are alternatives, not layers: switching to one closes the
-        // other, so `⌘P` while searching means "find a file", not "two boxes".
+        // One summoned surface at a time: the launcher replaces a drawer or the search.
         self.search_open = false;
+        self.show_panels = false;
+        self.show_outline = false;
+        self.show_settings = false;
+        self.tree_focus = false;
         self.palette_open = true;
         self.query.clear();
         self.palette_sel = 0;
@@ -1526,6 +1578,10 @@ impl Zenith {
 
     fn open_search(&mut self) {
         self.palette_open = false;
+        self.show_panels = false;
+        self.show_outline = false;
+        self.show_settings = false;
+        self.tree_focus = false;
         self.search_open = true;
         self.search_query.clear();
         self.search_hits.clear();
@@ -1712,7 +1768,6 @@ enum Act {
     NextFile,
     PrevFile,
     Outline,
-    Zen,
     Focus,
     Distilled,
     Markdown,
@@ -1766,17 +1821,10 @@ impl eframe::App for Zenith {
         if let Some(load) = &self.folder_load {
             match load.rx.try_recv() {
                 Ok(Ok(folder)) => {
-                    let name = load
-                        .root
-                        .file_name()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_default();
                     let focus = load.focus.clone();
                     let root = load.root.clone();
-                    let files = folder.files.len();
                     self.folder_load = None;
                     self.folder = Some(folder);
-                    self.status = format!("{name} — {files} files");
                     let wanted = focus
                         .filter(|p| p.starts_with(&root))
                         .or_else(|| {
@@ -1956,17 +2004,18 @@ impl eframe::App for Zenith {
         }
 
         let pal = self.palette;
-        let zen = self.zen;
-
-        if !zen {
+        // The page owns the window. On macOS the desktop draws the title and the traffic
+        // lights; on Linux and Windows we still have to draw the window's own buttons,
+        // so a bare controls bar remains there and nowhere else.
+        if own_window_buttons() {
             self.top_bar(ui);
-            self.status_bar(ui);
-            if self.show_panels {
-                self.folder_panel(ui);
-            }
-            if self.show_outline {
-                self.outline_panel(ui);
-            }
+        }
+
+        if self.show_panels {
+            self.folder_panel(ui);
+        }
+        if self.show_outline {
+            self.outline_panel(ui);
         }
 
         egui::CentralPanel::no_frame()
@@ -1975,14 +2024,16 @@ impl eframe::App for Zenith {
                 self.page(ui);
             });
 
+        self.notice(ui);
+        // The bloom is drawn above the page and below the sheets; it hides itself while
+        // any summoned surface is open.
+        self.bloom(&ctx);
+
         if self.palette_open {
             self.palette_overlay(&ctx);
         }
         if self.search_open {
             self.search_overlay(&ctx);
-        }
-        if self.show_help {
-            self.help_overlay(&ctx);
         }
         if self.show_settings {
             self.settings_overlay(&ctx);
@@ -2097,7 +2148,7 @@ impl Zenith {
                     Align2::LEFT_CENTER,
                     "ZENITH",
                     self.typo.ui_id(brand_size),
-                    pal.ink_faint,
+                    pal.ink_soft,
                     MASTHEAD_TRACKING * brand_size,
                 );
                 let mark_sep = |x: f32, painter: &egui::Painter| -> f32 {
@@ -2107,7 +2158,7 @@ impl Zenith {
                             Align2::LEFT_CENTER,
                             self.typo.marks.pick("›"),
                             self.typo.ui_id(11.5 * self.scale),
-                            pal.ink_faint,
+                            pal.ink_soft,
                         )
                         .right()
                 };
@@ -2120,7 +2171,7 @@ impl Zenith {
                     // A path is made of names from the codebase, so the file itself is
                     // set in the code face; the folders are chrome and step back.
                     let f = if last { file_font.clone() } else { dir_font.clone() };
-                    let color = if last { pal.ink } else { pal.ink_faint };
+                    let color = if last { pal.ink } else { pal.ink_soft };
                     let r = painter.text(Pos2::new(x, y), Align2::LEFT_CENTER, c, f, color);
                     x = r.right() + 6.0;
                     if !last {
@@ -2138,93 +2189,265 @@ impl Zenith {
         );
     }
 
-    fn status_bar(&mut self, ui: &mut Ui) {
-        let pal = self.palette;
-        // The left half of the rail is measurements, so it is set in the code face. The
-        // invitation on the right is a sentence, so it is set in chrome.
-        let metrics = self.typo.code_id(11.0 * self.scale);
-        let font = self.typo.ui_id(11.0 * self.scale);
+    /// A notice is one line at the foot of the page, not a bar. The rest of the time the
+    /// foot is empty.
+    fn notice(&mut self, ui: &mut Ui) {
         let now = ui.input(|i| i.time);
-
-        // What the strip says, when there is something to say. The position readout is
-        // the resting state, not the only state: a message used to be written into a
-        // string that this line never read while a file was open, which is exactly when
-        // every message worth reading happens.
         if self.status != self.shown || self.status_seq != self.shown_seq {
             self.shown = self.status.clone();
             self.shown_seq = self.status_seq;
             self.shown_at = now;
         }
-        // A notice steps aside after a while so the readout can come back — and both are
-        // forgotten when it does, so saying the same thing again is said again.
         if now - self.shown_at > NOTICE_SECONDS {
             self.shown.clear();
             self.status.clear();
         }
-        let notice = !self.shown.is_empty();
-
-        let position = match &self.open {
-            Some(o) => {
-                let lines = o.doc.line_count();
-                let line = self.caret.line + 1;
-                let col = self.caret.col + 1;
-                let lang = o.doc.syntax.clone();
-                let mut s = format!("{lang} · line {line}:{col} of {lines}");
-                if let Some(note) = &o.note {
-                    s.push_str(" · ");
-                    s.push_str(note);
-                }
-                s
-            }
-            None => String::new(),
-        };
-        let (left, ink) = if notice {
-            (self.shown.clone(), pal.ink_soft)
+        if self.shown.is_empty() {
+            return;
+        }
+        let screen = ui.ctx().content_rect();
+        let x = if self.page_center_x > 0.0 {
+            self.page_center_x
         } else {
-            (position, pal.ink_soft)
+            screen.center().x
         };
-        let hint = if notice {
-            // News outranks the standing invitation on the right: the two would otherwise
-            // be set over each other, and a message nobody can read is not a message.
-            String::new()
-        } else if self.tree_focus {
-            keys("tree: j k move · l open · h back · G end · / find · esc to the page").to_string()
-        } else {
-            keys("{mod}P find file · Z zen · ? keys").to_string()
-        };
-        let panel_rect = egui::Panel::bottom("zenith-status")
-            .resizable(false)
-            .exact_size(24.0)
-            .show_separator_line(false)
-            .frame(
-                Frame::NONE
-                    .fill(pal.panel)
-                    .inner_margin(Margin::symmetric(14, 3)),
-            )
-            .show(ui, |ui| {
-                let y = ui.min_rect().center().y;
-                ui.painter().text(
-                    Pos2::new(ui.min_rect().left(), y),
-                    Align2::LEFT_CENTER,
-                    left,
-                    metrics.clone(),
-                    ink,
-                );
-                ui.painter().text(
-                    Pos2::new(ui.min_rect().center().x + 40.0, y),
-                    Align2::CENTER_CENTER,
-                    hint,
-                    font.clone(),
-                    pal.ink_faint,
-                );
-            })
-            .response
-            .rect;
-        ui.painter().hline(
-            panel_rect.x_range(),
-            panel_rect.top() + 0.5,
-            Stroke::new(1.0, pal.edge),
+        ui.painter().text(
+            Pos2::new(x, screen.bottom() - 14.0),
+            Align2::CENTER_BOTTOM,
+            &self.shown,
+            self.typo.ui_id(11.0 * self.scale),
+            self.palette.ink_soft,
         );
+    }
+
+    /// The bloom: one dot at the top, four doors when it is asked. This is the only
+    /// piece of chrome that offers itself, and the only thing in the program that moves.
+    fn bloom(&mut self, ctx: &egui::Context) {
+        let surfaces = self.show_panels
+            || self.show_outline
+            || self.show_settings
+            || self.palette_open
+            || self.search_open;
+        let now = ctx.input(|i| i.time);
+        let pal = self.palette;
+        if self.bloom_started < 0.0 {
+            self.bloom_started = now;
+            self.bloom_last_touch = now;
+        }
+        if surfaces {
+            self.bloom_open = false;
+            self.bloom_visible = false;
+            self.bloom_seen = true;
+            return;
+        }
+
+        let screen = ctx.content_rect();
+        let bar = if own_window_buttons() { 40.0 } else { 0.0 };
+        let top = screen.top() + bar + self.title_strip() + 14.0;
+        let cx = screen.center().x;
+        let hot = Rect::from_center_size(Pos2::new(cx, top + 28.0), vec2(520.0, 80.0));
+        let in_hot = ctx
+            .input(|i| i.pointer.hover_pos())
+            .is_some_and(|p| hot.contains(p));
+        if in_hot {
+            self.bloom_seen = true;
+            self.bloom_visible = true;
+            self.bloom_last_touch = now;
+        }
+        if !self.bloom_seen && now - self.bloom_started > 4.0 {
+            self.bloom_open = false;
+            self.bloom_visible = false;
+        }
+        if self.bloom_open && now - self.bloom_last_touch > 3.5 {
+            self.bloom_open = false;
+            self.bloom_last_touch = now;
+        }
+        if self.bloom_visible && !self.bloom_open && !in_hot && now - self.bloom_last_touch > 2.5
+        {
+            self.bloom_visible = false;
+        }
+
+        let dot_id = egui::Id::new("zenith-bloom");
+        let open_t = ctx.animate_bool_with_time(dot_id.with("open"), self.bloom_open, 0.2);
+        let vis_t = ctx.animate_bool_with_time(
+            dot_id.with("visible"),
+            self.bloom_visible,
+            if self.bloom_visible { 0.16 } else { 0.6 },
+        );
+        if vis_t <= 0.001 && open_t <= 0.001 {
+            return;
+        }
+
+        let dot_center = Pos2::new(cx, top + 7.0);
+        let targets = [
+            Pos2::new(cx - 112.0, top + 56.0),
+            Pos2::new(cx - 40.0, top + 48.0),
+            Pos2::new(cx + 40.0, top + 48.0),
+            Pos2::new(cx + 112.0, top + 56.0),
+        ];
+        let area = egui::Rect::from_min_size(
+            Pos2::new(cx - 144.0, top - 18.0),
+            vec2(288.0, 146.0),
+        );
+        let hovers = ctx.input(|i| i.pointer.hover_pos());
+        let labels = self.scroll < 4.0;
+
+        egui::Area::new(dot_id)
+            .order(egui::Order::Foreground)
+            .fixed_pos(area.min)
+            .show(ctx, |ui| {
+                ui.set_min_size(area.size());
+                let painter = ui.painter();
+                let base = theme::alpha(pal.ink_soft, (vis_t * 255.0) as u8);
+
+                // The dot, and the ring that appears when the pointer reaches for it.
+                let dot_rect = Rect::from_center_size(dot_center, vec2(28.0, 28.0));
+                let dot = ui.interact(dot_rect, dot_id.with("dot"), Sense::click());
+                let dot_hover = dot.hovered()
+                    || hovers.is_some_and(|p| p.distance(dot_center) <= 10.0);
+                if dot_hover {
+                    self.bloom_seen = true;
+                    self.bloom_last_touch = now;
+                    let since = *self.bloom_hover_since.get_or_insert(now);
+                    if !self.bloom_open && now - since > 0.2 {
+                        self.bloom_open = true;
+                        self.bloom_hover_opened = true;
+                    }
+                } else {
+                    self.bloom_hover_since = None;
+                    self.bloom_hover_opened = false;
+                }
+                if dot.clicked() {
+                    if !self.bloom_hover_opened {
+                        self.bloom_open = !self.bloom_open;
+                    }
+                    self.bloom_hover_since = None;
+                    self.bloom_hover_opened = false;
+                    self.bloom_last_touch = now;
+                    self.bloom_seen = true;
+                }
+                painter.circle_filled(dot_center, 3.5, base);
+                if dot_hover {
+                    painter.circle_stroke(
+                        dot_center,
+                        10.0,
+                        Stroke::new(1.0, theme::alpha(pal.accent, (vis_t * 255.0) as u8)),
+                    );
+                }
+
+                // Stems first, so the bubbles sit on them.
+                for target in targets {
+                    let at = dot_center + (target - dot_center) * open_t;
+                    if open_t > 0.01 {
+                        painter.line_segment(
+                            [dot_center, at],
+                            Stroke::new(
+                                1.0,
+                                theme::alpha(
+                                    pal.ink_faint,
+                                    (open_t * vis_t * 255.0) as u8,
+                                ),
+                            ),
+                        );
+                    }
+                }
+
+                for (i, target) in targets.into_iter().enumerate() {
+                    let at = dot_center + (target - dot_center) * open_t;
+                    let hit = Rect::from_center_size(Pos2::new(at.x, at.y + 7.0), vec2(56.0, 48.0));
+                    let response = ui.interact(hit, dot_id.with(("bubble", i)), Sense::click());
+                    let hovered = response.hovered();
+                    if hovered {
+                        self.bloom_seen = true;
+                        self.bloom_last_touch = now;
+                    }
+                    if response.clicked() {
+                        self.bloom_open = false;
+                        self.bloom_visible = false;
+                        self.bloom_seen = true;
+                        self.summon(i);
+                    }
+                    let alpha = (open_t * vis_t * 255.0) as u8;
+                    if alpha == 0 {
+                        continue;
+                    }
+                    let ink = if hovered {
+                        pal.ink
+                    } else {
+                        pal.ink_soft
+                    };
+                    let edge = if hovered {
+                        pal.accent
+                    } else {
+                        pal.ink_faint
+                    };
+                    painter.circle_filled(at, 13.0, theme::alpha(pal.paper, alpha));
+                    painter.circle_stroke(
+                        at,
+                        13.0,
+                        Stroke::new(1.0, theme::alpha(edge, alpha)),
+                    );
+                    draw_bloom_mark(painter, at, i, theme::alpha(ink, alpha));
+                    if labels {
+                        paint_tracked(
+                            painter,
+                            Pos2::new(at.x, at.y + 18.0),
+                            Align2::CENTER_TOP,
+                            BLOOM_LABELS[i],
+                            self.typo.ui_id(9.5 * self.scale.min(1.15)),
+                            theme::alpha(if hovered { pal.ink } else { pal.ink_soft }, alpha),
+                            (0.08 * 9.5 * self.scale.min(1.15)).max(0.0),
+                        );
+                    }
+                }
+            });
+
+        if self.bloom_open
+            && ctx.input(|i| i.pointer.primary_clicked())
+            && ctx
+                .input(|i| i.pointer.interact_pos())
+                .is_some_and(|p| !area.contains(p))
+        {
+            self.bloom_open = false;
+            self.bloom_last_touch = now;
+        }
+    }
+
+    /// Open one of the bloom's four doors.
+    fn summon(&mut self, which: usize) {
+        self.show_settings = false;
+        self.palette_open = false;
+        self.search_open = false;
+        self.tree_focus = false;
+        match which {
+            0 => {
+                self.show_panels = true;
+                self.show_outline = false;
+                self.tree_focus = true;
+                if self.tree_sel.is_none() {
+                    self.tree_sel = self.tree_index().map(|i| self.tree_rows[i].key());
+                }
+                self.tree_moved = true;
+            }
+            1 => {
+                self.show_panels = false;
+                self.show_outline = true;
+            }
+            2 => {
+                self.show_panels = false;
+                self.show_outline = false;
+                self.open_palette();
+            }
+            3 => {
+                self.show_panels = false;
+                self.show_outline = false;
+                self.show_settings = true;
+                self.settings_tab = 0;
+                self.settings_rail_focus = true;
+                self.settings_focus = 0;
+            }
+            _ => {}
+        }
     }
 
     /// The folder panel's rows, in the order they appear on screen.
@@ -2284,7 +2507,7 @@ impl Zenith {
                         Align2::LEFT_CENTER,
                         &format!("FOLDER · {folder_name}"),
                         label_font.clone(),
-                        pal.ink_faint,
+                        pal.ink_soft,
                         LABEL_TRACKING * PANEL_LABEL_FONT * self.scale,
                     );
                 }
@@ -2478,7 +2701,7 @@ impl Zenith {
                     Align2::LEFT_CENTER,
                     "CONTENTS",
                     label_font.clone(),
-                    pal.ink_faint,
+                    pal.ink_soft,
                     LABEL_TRACKING * PANEL_LABEL_FONT * self.scale,
                 );
                 ui.add_space(PANEL_LABEL_GAP);
@@ -2566,37 +2789,56 @@ impl Zenith {
         }
         let pending = std::mem::replace(&mut self.pending, Pending::None);
 
-        // Typeset for this page width before borrowing the document.
-        let page_rect = Rect::from_min_size(ui.min_rect().min, ui.available_size());
+        // Typeset for this page width before borrowing the document. The foot is left
+        // empty so a notice can sit there without setting itself over a line.
+        let page_h = (ui.available_height() - PAGE_FOOT).max(1.0);
+        let page_rect = Rect::from_min_size(ui.min_rect().min, vec2(ui.available_width(), page_h));
+        self.page_center_x = page_rect.center().x;
         self.ensure_layout(&ctx, page_rect);
         let style = self.style();
 
         let Some(open) = &self.open else {
-            // The reading room, empty.
+            // The reading room, empty. One door, no key legend: silence in an empty
+            // room is a dead end, but a list of shortcuts is not an invitation either.
             let rect = ui.max_rect();
-            let font = self.typo.prose_id(22.0 * self.scale);
+            self.page_center_x = rect.center().x;
+            let title = self.typo.prose_id(22.0 * self.scale);
             let small = self.typo.ui_id(13.0 * self.scale);
             ui.painter().text(
-                rect.center() - vec2(0.0, 26.0),
+                rect.center() - vec2(0.0, 42.0),
                 Align2::CENTER_CENTER,
                 "Zenith",
-                font,
-                pal.ink_soft,
+                title,
+                pal.ink,
             );
             ui.painter().text(
-                rect.center() + vec2(0.0, 12.0),
+                rect.center() - vec2(0.0, 12.0),
                 Align2::CENTER_CENTER,
                 "a reading room for source code",
                 small.clone(),
-                pal.ink_faint,
+                pal.ink_soft,
             );
-            ui.painter().text(
-                rect.center() + vec2(0.0, 40.0),
-                Align2::CENTER_CENTER,
-                keys("{mod}O  open a folder      /  find a file"),
-                small,
-                pal.ink_faint,
+            let label = "Open a folder…";
+            let galley = ui
+                .painter()
+                .layout_no_wrap(label.to_string(), small.clone(), pal.ink);
+            let row = Rect::from_center_size(
+                rect.center() + vec2(0.0, 38.0),
+                vec2(galley.size().x + 28.0, 28.0),
             );
+            let response = ui.interact(row, ui.id().with("open-folder"), Sense::click());
+            if response.hovered() {
+                ui.painter()
+                    .rect_filled(row, CornerRadius::same(ROW_RADIUS), pal.selection);
+            }
+            ui.painter().galley(
+                Pos2::new(row.center().x - galley.size().x * 0.5, row.center().y - galley.size().y * 0.5),
+                galley,
+                pal.ink,
+            );
+            if response.clicked() {
+                self.pick_folder();
+            }
             return;
         };
 
@@ -2616,7 +2858,7 @@ impl Zenith {
                 Align2::CENTER_CENTER,
                 err.clone(),
                 small,
-                pal.ink_faint,
+                pal.ink_soft,
             );
             return;
         }
@@ -2694,6 +2936,7 @@ impl Zenith {
 
         let mut area = ScrollArea::vertical()
             .id_salt("zenith-page")
+            .max_height(page_h)
             // The reading pane has its own indicator — the spine at the edge of the paper —
             // so egui's floating scrollbar is a second bar at a second x, and the two never
             // lined up. The spine is draggable instead, which is what the bar was for.
@@ -2721,7 +2964,6 @@ impl Zenith {
             None
         };
         let caret = self.caret;
-        let zen = self.zen;
 
         let mut clicked: Option<vim::Caret> = None;
         let out = area.show_viewport(ui, |ui, viewport| {
@@ -2765,7 +3007,7 @@ impl Zenith {
                 &style,
                 &pal,
                 laid.col_x,
-                origin_y,
+                origin_y + BLOOM_ROOM,
                 &title,
                 &parent,
                 badge,
@@ -2783,7 +3025,7 @@ impl Zenith {
                 caret,
                 focus,
                 fade_alpha: 176,
-                zen,
+                zen: false,
                 show_cursor: true,
             };
             reader::paint(painter, &paint);
@@ -2800,6 +3042,10 @@ impl Zenith {
         }
         if let Some(caret) = clicked {
             self.caret = caret;
+            // A click on the page is also the way back from a summoned drawer.
+            self.show_panels = false;
+            self.show_outline = false;
+            self.tree_focus = false;
         }
 
         // The spine stays with the page, not with the text: it is a bookmark, not a
@@ -2874,23 +3120,27 @@ impl Zenith {
         let width = (screen.width() * 0.46).clamp(360.0, 720.0);
         let pos = Pos2::new(screen.center().x - width * 0.5, screen.top() + 96.0);
 
-        // Matching files.
-        let matches: Vec<(i32, usize, Vec<usize>)> = match &self.folder {
-            Some(s) => {
-                let mut v: Vec<(i32, usize, Vec<usize>)> = s
-                    .files
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, f)| {
-                        fuzzy::match_path(&f.rel, &self.query).map(|h| (h.score, i, h.positions))
-                    })
-                    .collect();
-                v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-                v.truncate(11);
-                v
-            }
-            None => Vec::new(),
-        };
+        // Matching files. The list is capped, but the reader is told how many were
+        // matched; a silent cap makes a file look absent.
+        let (matches, matched_total): (Vec<(i32, usize, Vec<usize>)>, usize) =
+            match &self.folder {
+                Some(s) => {
+                    let mut v: Vec<(i32, usize, Vec<usize>)> = s
+                        .files
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, f)| {
+                            fuzzy::match_path(&f.rel, &self.query)
+                                .map(|h| (h.score, i, h.positions))
+                        })
+                        .collect();
+                    v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+                    let total = v.len();
+                    v.truncate(8);
+                    (v, total)
+                }
+                None => (Vec::new(), 0),
+            };
         let file_rows: Vec<(String, bool)> = match &self.folder {
             Some(s) => matches
                 .iter()
@@ -2985,13 +3235,7 @@ impl Zenith {
                         let hit = dims.binary_search(&ci).is_ok();
                         let mut f = TextFormat {
                             font_id: font.clone(),
-                            color: if hit {
-                                if selected { pal.ink } else { pal.ink_soft }
-                            } else if selected {
-                                pal.ink_soft
-                            } else {
-                                pal.ink_faint
-                            },
+                            color: if hit && selected { pal.ink } else { pal.ink_soft },
                             ..Default::default()
                         };
                         if hit {
@@ -3021,9 +3265,32 @@ impl Zenith {
                         Align2::LEFT_TOP,
                         "nothing matches",
                         font.clone(),
-                        pal.ink_faint,
+                        pal.ink_soft,
                     );
                     ui.add_space(18.0);
+                } else {
+                    let note = if file_rows.len() < matched_total {
+                        format!(
+                            "{} of {} files · type to narrow",
+                            file_rows.len(),
+                            matched_total
+                        )
+                    } else {
+                        format!(
+                            "{} file{}",
+                            matched_total,
+                            if matched_total == 1 { "" } else { "s" }
+                        )
+                    };
+                    ui.add_space(4.0);
+                    ui.painter().text(
+                        Pos2::new(ui.min_rect().left() + 2.0, ui.cursor().top()),
+                        Align2::LEFT_TOP,
+                        note,
+                        self.typo.ui_id(10.5 * self.scale),
+                        pal.ink_soft,
+                    );
+                    ui.add_space(16.0);
                 }
             });
 
@@ -3099,7 +3366,7 @@ impl Zenith {
                     } else {
                         format!("{} match(es)", self.search_hits.len())
                     };
-                    ui.label(RichText::new(count).font(font.clone()).color(pal.ink_faint));
+                    ui.label(RichText::new(count).font(font.clone()).color(pal.ink_soft));
                 });
                 let (enter, shift, esc) = ctx.input(|i| {
                     (
@@ -3125,43 +3392,200 @@ impl Zenith {
         }
     }
 
-    fn help_overlay(&mut self, ctx: &egui::Context) {
-        let pal = self.palette;
-        let font = self.typo.ui_id(12.5 * self.scale);
-        let key_font = self.typo.code_id(12.0 * self.scale);
-        let mut open = self.show_help;
-        let screen = ctx.content_rect();
-        egui::Window::new("keys")
-            .open(&mut open)
-            .title_bar(false)
-            .resizable(false)
-            .collapsible(false)
-            .default_pos(Pos2::new(screen.center().x - 240.0, screen.center().y - 200.0))
-            .frame(
-                Frame::NONE
-                    .fill(pal.panel)
-                    .stroke(Stroke::new(1.0, pal.edge))
-                    .corner_radius(CornerRadius::same(SHEET_RADIUS))
-                    .inner_margin(Margin::symmetric(18, 16))
-                    .shadow(sheet_shadow(&pal)),
-            )
-            .show(ctx, |ui| {
-                ui.label(
-                    RichText::new("Reading keys")
-                        .font(self.typo.prose_id(17.0 * self.scale))
-                        .color(pal.ink),
-                );
-                ui.add_space(8.0);
-                for (k, v) in HELP_ROWS {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(*k).font(key_font.clone()).color(pal.accent));
-                        ui.add_space(90.0);
-                        ui.label(RichText::new(*v).font(font.clone()).color(pal.ink_soft));
-                    });
-                }
+    /// How many controls the current settings section has, excluding the reset action.
+    fn settings_focus_count(&self) -> usize {
+        match self.settings_tab {
+            0 => 14,
+            1 => self.typo.mono_voices.len() + self.typo.prose_voices.len(),
+            2 => theme::THEMES.len(),
+            3 => 1,
+            _ => 0,
+        }
+    }
 
-            });
-        self.show_help = open;
+    /// The settings sheet's keyboard. Tab walks the rail, the controls and the reset
+    /// action; arrows move; Space and Enter act. Letters are left to the text fields.
+    fn settings_key(
+        &mut self,
+        ctx: &egui::Context,
+        key: Key,
+        shift: bool,
+        ctrl: bool,
+        cmd: bool,
+    ) -> bool {
+        if ctrl || cmd {
+            return false;
+        }
+        // A focused text field owns the keyboard.
+        if ctx.memory(|m| m.focused().is_some()) {
+            return false;
+        }
+        let tabs = SETTINGS_SECTIONS.len();
+        if self.settings_tab >= tabs {
+            self.settings_tab = tabs - 1;
+        }
+        let count = self.settings_focus_count();
+        let total = count + 1;
+        if self.settings_rail_focus {
+            match key {
+                Key::ArrowUp | Key::ArrowLeft => {
+                    self.settings_tab = (self.settings_tab + tabs - 1) % tabs;
+                    self.settings_focus = 0;
+                    true
+                }
+                Key::ArrowDown | Key::ArrowRight => {
+                    self.settings_tab = (self.settings_tab + 1) % tabs;
+                    self.settings_focus = 0;
+                    true
+                }
+                Key::Tab | Key::Enter | Key::Space => {
+                    self.settings_rail_focus = false;
+                    self.settings_focus = 0;
+                    true
+                }
+                _ => false,
+            }
+        } else {
+            self.settings_focus = self.settings_focus.min(total.saturating_sub(1));
+            match key {
+                Key::Tab => {
+                    if shift {
+                        if self.settings_focus == 0 {
+                            self.settings_rail_focus = true;
+                        } else {
+                            self.settings_focus -= 1;
+                        }
+                    } else {
+                        self.settings_focus += 1;
+                        if self.settings_focus >= total {
+                            self.settings_rail_focus = true;
+                            self.settings_focus = 0;
+                        }
+                    }
+                    true
+                }
+                Key::ArrowUp | Key::ArrowDown => {
+                    if key == Key::ArrowDown {
+                        if self.settings_focus < total.saturating_sub(1) {
+                            self.settings_focus += 1;
+                        }
+                    } else if self.settings_focus > 0 {
+                        self.settings_focus -= 1;
+                    }
+                    true
+                }
+                Key::ArrowLeft | Key::ArrowRight => {
+                    let direction = if key == Key::ArrowLeft { -1 } else { 1 };
+                    if self.settings_tab == 0
+                        && matches!(self.settings_focus, 11..=13)
+                    {
+                        self.settings_adjust(ctx, self.settings_focus, direction as f32);
+                    } else if self.settings_focus < count {
+                        self.settings_focus =
+                            (self.settings_focus as i32 + direction).clamp(0, count as i32 - 1)
+                                as usize;
+                    }
+                    true
+                }
+                Key::Space | Key::Enter => {
+                    self.settings_activate(ctx, self.settings_focus);
+                    true
+                }
+                _ => false,
+            }
+        }
+    }
+
+    /// Activate the focused settings control. `count` itself is the reset action.
+    fn settings_activate(&mut self, ctx: &egui::Context, focus: usize) {
+        let count = self.settings_focus_count();
+        if focus >= count {
+            let now = ctx.input(|i| i.time);
+            let armed = self.reset_asked.is_some_and(|t| now - t < 5.0);
+            if armed {
+                self.reset_asked = None;
+                self.reset_defaults(ctx);
+                self.settings_rail_focus = true;
+                self.settings_focus = 0;
+            } else {
+                self.reset_asked = Some(now);
+            }
+            return;
+        }
+        match self.settings_tab {
+            0 => self.settings_toggle_page(ctx, focus),
+            1 => {
+                let mono = self.typo.mono_voices.len();
+                if focus < mono {
+                    self.apply_typography(ctx, focus, self.typo.prose_idx);
+                } else {
+                    self.apply_typography(ctx, self.typo.mono_idx, focus - mono);
+                }
+            }
+            2 => self.set_theme(ctx, focus),
+            3 => {
+                self.store.config.lsp.enabled = !self.store.config.lsp.enabled;
+                self.store.save_config();
+                self.start_discovery();
+            }
+            _ => {}
+        }
+    }
+
+    fn settings_toggle_page(&mut self, ctx: &egui::Context, focus: usize) {
+        let cfg = &mut self.store.config;
+        match focus {
+            0 => cfg.wrap = !cfg.wrap,
+            1 => cfg.guides = !cfg.guides,
+            2 => cfg.serif_comments = !cfg.serif_comments,
+            3 => cfg.focus_lens = !cfg.focus_lens,
+            4 => cfg.line_numbers = !cfg.line_numbers,
+            5 => cfg.compress_blank = !cfg.compress_blank,
+            6 => cfg.distilled = !cfg.distilled,
+            7 => {
+                cfg.frameless = !cfg.frameless;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(!cfg.frameless));
+            }
+            8 => cfg.markdown = !cfg.markdown,
+            9 => cfg.code_only = !cfg.code_only,
+            10 => cfg.show_hidden = !cfg.show_hidden,
+            _ => {}
+        }
+        self.store.save_config();
+        self.style_dirty = true;
+        if focus >= 9 {
+            let root = self.folder.as_ref().map(|f| f.root.clone());
+            if let Some(root) = root {
+                let focus_path = self.open.as_ref().map(|o| o.path.clone());
+                self.open_folder(&root, focus_path);
+            }
+        }
+    }
+
+    /// Left and right on the three page sliders.
+    fn settings_adjust(&mut self, ctx: &egui::Context, focus: usize, direction: f32) {
+        match focus {
+            11 => {
+                let next = (self.store.config.measure as f32 + direction)
+                    .clamp(crate::catalog::MEASURE_MIN as f32, crate::catalog::MEASURE_MAX as f32);
+                self.store.config.measure = next.round() as usize;
+                self.style_dirty = true;
+            }
+            12 => {
+                self.store.config.leading = (self.store.config.leading + direction * 0.02)
+                    .clamp(crate::catalog::LEADING_MIN, crate::catalog::LEADING_MAX);
+                self.style_dirty = true;
+            }
+            13 => {
+                self.scale = (self.scale + direction * 0.02)
+                    .clamp(crate::catalog::SCALE_MIN, crate::catalog::SCALE_MAX);
+                self.store.config.font_scale = self.scale;
+                self.style_dirty = true;
+                self.rebuild_metrics(ctx);
+            }
+            _ => {}
+        }
+        self.store.save_config();
     }
 
     /// Settings: a modal screen, a rail of sections, and one section at a time.
@@ -3176,8 +3600,19 @@ impl Zenith {
         let head = self.typo.prose_id(14.5 * self.scale);
         let small = self.typo.ui_id(11.5 * self.scale);
         let values = self.typo.code_id(11.5 * self.scale);
-        let width = 560.0;
-        let rail = 118.0;
+        // The sheet grows with the type and the window; it never keeps a 560 pt column
+        // when the reader has asked for 1.8x type.
+        let screen = ctx.content_rect();
+        let width = (560.0 * self.scale)
+            .clamp(560.0, 820.0)
+            .min((screen.width() - 40.0).max(560.0));
+        let rail = (118.0 * self.scale).clamp(118.0, 160.0);
+        let content = width - rail - 78.0;
+        // A two-column page is only honest while the longest toggle label and its box
+        // fit a column.
+        let label_w =
+            19.0 * (12.5 * self.scale) * 0.5 + (12.5 * self.scale) * 0.88 + 9.0;
+        let single = ((content - 12.0) * 0.5) < label_w;
         let mut open = self.show_settings;
         let mut changed = false;
         let mut lsp_changed = false;
@@ -3217,7 +3652,6 @@ impl Zenith {
                 );
                 ui.add_space(14.0);
 
-                let content = width - rail - 78.0;
                 let body_top = ui.cursor().top();
                 let mut rail_edge = 0.0;
                 ui.horizontal_top(|ui| {
@@ -3230,12 +3664,24 @@ impl Zenith {
                             let text = RichText::new(*name).font(head.clone()).color(if selected {
                                 pal.ink
                             } else {
-                                pal.ink_faint
+                                pal.ink_soft
                             });
                             let response =
                                 ui.add(egui::Label::new(text).sense(egui::Sense::click()));
+                            if selected && self.settings_rail_focus {
+                                ui.painter().rect_filled(
+                                    Rect::from_min_size(
+                                        Pos2::new(response.rect.left() - 8.0, response.rect.top() + 2.0),
+                                        vec2(2.0, (response.rect.height() - 4.0).max(2.0)),
+                                    ),
+                                    CornerRadius::same(1),
+                                    pal.accent,
+                                );
+                            }
                             if response.clicked() {
                                 self.settings_tab = i;
+                                self.settings_rail_focus = true;
+                                self.settings_focus = 0;
                             }
                         }
                         rail_edge = ui.min_rect().right();
@@ -3248,48 +3694,87 @@ impl Zenith {
                         // A fixed minimum height keeps the screen from jumping as the
                         // reader moves down the rail.
                         ui.set_min_height(296.0);
+                        let focus = if self.settings_rail_focus {
+                            None
+                        } else {
+                            Some(self.settings_focus)
+                        };
                         match self.settings_tab {
                             // -------------------------------------------- page
                             0 => {
-                                let half = (content - 12.0) * 0.5;
-                                ui.horizontal_top(|ui| {
+                                if single {
                                     let cfg = &mut self.store.config;
                                     ui.vertical(|ui| {
-                                        ui.set_width(half);
+                                        ui.set_width(content);
+                                        let mut base = 0;
                                         changed |= toggles(ui, &font, &pal, &mut [
                                             ("soft wrap", &mut cfg.wrap),
                                             ("indentation whispers", &mut cfg.guides),
                                             ("comments as prose", &mut cfg.serif_comments),
                                             ("focus lens", &mut cfg.focus_lens),
                                             ("line numbers", &mut cfg.line_numbers),
-                                        ]);
-                                    });
-                                    ui.vertical(|ui| {
-                                        ui.set_width(half);
-                                        changed |= toggles(ui, &font, &pal, &mut [
                                             ("compress blank lines", &mut cfg.compress_blank),
                                             ("distilled types", &mut cfg.distilled),
                                             ("themed window bar", &mut cfg.frameless),
                                             ("render markdown", &mut cfg.markdown),
-                                        ]);
-                                        // The tree's own two questions, which are about
-                                        // what to read rather than how to set it. They
-                                        // re-read the folder as they change, so they
-                                        // still answer on the frame they are clicked.
+                                        ], focus, &mut base);
                                         ui.add_space(4.0);
                                         ui.label(
                                             RichText::new("the tree")
                                                 .font(small.clone())
-                                                .color(pal.ink_faint),
+                                                .color(pal.ink_soft),
                                         );
                                         let tree = toggles(ui, &font, &pal, &mut [
                                             ("source files only", &mut cfg.code_only),
                                             ("include hidden files", &mut cfg.show_hidden),
-                                        ]);
+                                        ], focus, &mut base);
                                         changed |= tree;
                                         tree_changed |= tree;
                                     });
-                                });
+                                } else {
+                                    let half = (content - 12.0) * 0.5;
+                                    let mut left = 0;
+                                    let mut right = 5;
+                                    let mut tree_base = 9;
+                                    ui.horizontal_top(|ui| {
+                                        let cfg = &mut self.store.config;
+                                        ui.vertical(|ui| {
+                                            ui.set_width(half);
+                                            changed |= toggles(ui, &font, &pal, &mut [
+                                                ("soft wrap", &mut cfg.wrap),
+                                                ("indentation whispers", &mut cfg.guides),
+                                                ("comments as prose", &mut cfg.serif_comments),
+                                                ("focus lens", &mut cfg.focus_lens),
+                                                ("line numbers", &mut cfg.line_numbers),
+                                            ], focus, &mut left);
+                                        });
+                                        ui.vertical(|ui| {
+                                            ui.set_width(half);
+                                            changed |= toggles(ui, &font, &pal, &mut [
+                                                ("compress blank lines", &mut cfg.compress_blank),
+                                                ("distilled types", &mut cfg.distilled),
+                                                ("themed window bar", &mut cfg.frameless),
+                                                ("render markdown", &mut cfg.markdown),
+                                            ], focus, &mut right);
+                                            // The tree's own two questions, which are
+                                            // about what to read rather than how to set
+                                            // it. They re-read the folder as they change,
+                                            // so they still answer on the clicked frame.
+                                            ui.add_space(4.0);
+                                            ui.label(
+                                                RichText::new("the tree")
+                                                    .font(small.clone())
+                                                    .color(pal.ink_soft),
+                                            );
+                                            let tree = toggles(ui, &font, &pal, &mut [
+                                                ("source files only", &mut cfg.code_only),
+                                                ("include hidden files", &mut cfg.show_hidden),
+                                            ], focus, &mut tree_base);
+                                            changed |= tree;
+                                            tree_changed |= tree;
+                                        });
+                                    });
+                                }
                                 ui.add_space(6.0);
                                 let cfg = &mut self.store.config;
                                 let mut measure = cfg.measure as f32;
@@ -3305,6 +3790,7 @@ impl Zenith {
                                             ..=crate::catalog::MEASURE_MAX as f32,
                                         decimals: 0,
                                     },
+                                    focus == Some(11),
                                 ) {
                                     cfg.measure = measure.round() as usize;
                                     changed = true;
@@ -3321,6 +3807,7 @@ impl Zenith {
                                             ..=crate::catalog::LEADING_MAX,
                                         decimals: 2,
                                     },
+                                    focus == Some(12),
                                 );
                                 changed |= line_slider(
                                     ui,
@@ -3334,18 +3821,20 @@ impl Zenith {
                                             ..=crate::catalog::SCALE_MAX,
                                         decimals: 2,
                                     },
+                                    focus == Some(13),
                                 );
                             }
                             // -------------------------------------------- type
                             1 => {
                                 let column = (content - 16.0) * 0.5;
+                                let mono_len = self.typo.mono_voices.len();
                                 ui.horizontal_top(|ui| {
                                     ui.vertical(|ui| {
                                         ui.set_width(column);
                                         ui.label(
                                             RichText::new("code")
                                                 .font(small.clone())
-                                                .color(pal.ink_faint),
+                                                .color(pal.ink_soft),
                                         );
                                         for (i, v) in self.typo.mono_voices.iter().enumerate() {
                                             let selected = i == self.typo.mono_idx;
@@ -3354,6 +3843,14 @@ impl Zenith {
                                                 .font(font.clone())
                                                 .color(if ok { pal.ink_soft } else { pal.ink_faint });
                                             let r = ui.selectable_label(selected, text);
+                                            if focus == Some(i) {
+                                                ui.painter().rect_stroke(
+                                                    r.rect.shrink(1.0),
+                                                    CornerRadius::same(ROW_RADIUS),
+                                                    Stroke::new(1.0, pal.accent),
+                                                    egui::StrokeKind::Inside,
+                                                );
+                                            }
                                             if r.clicked() {
                                                 new_mono = i;
                                             }
@@ -3367,7 +3864,7 @@ impl Zenith {
                                         ui.label(
                                             RichText::new("prose")
                                                 .font(small.clone())
-                                                .color(pal.ink_faint),
+                                                .color(pal.ink_soft),
                                         );
                                         for (i, v) in self.typo.prose_voices.iter().enumerate() {
                                             let selected = i == self.typo.prose_idx;
@@ -3375,6 +3872,14 @@ impl Zenith {
                                                 .font(font.clone())
                                                 .color(pal.ink_soft);
                                             let r = ui.selectable_label(selected, text);
+                                            if focus == Some(mono_len + i) {
+                                                ui.painter().rect_stroke(
+                                                    r.rect.shrink(1.0),
+                                                    CornerRadius::same(ROW_RADIUS),
+                                                    Stroke::new(1.0, pal.accent),
+                                                    egui::StrokeKind::Inside,
+                                                );
+                                            }
                                             if r.clicked() {
                                                 new_prose = i;
                                             }
@@ -3394,7 +3899,7 @@ impl Zenith {
                                 ui.label(
                                     RichText::new(format!("interface: {chrome}"))
                                         .font(small.clone())
-                                        .color(pal.ink_faint),
+                                        .color(pal.ink_soft),
                                 );
                                 if self.typo.bundled_fallback {
                                     ui.label(
@@ -3402,7 +3907,7 @@ impl Zenith {
                                             "no system fonts found: egui's bundled faces are in use",
                                         )
                                         .font(small.clone())
-                                        .color(pal.ink_faint),
+                                        .color(pal.ink_soft),
                                     );
                                 }
                             }
@@ -3416,8 +3921,14 @@ impl Zenith {
                                     ui.horizontal(|ui| {
                                         for p in row {
                                             let chosen = p.name == self.palette.name;
+                                            let tile_h = 84.0 * self.scale.min(1.5);
+                                            let index = theme::THEMES
+                                                .iter()
+                                                .position(|t| t.name == p.name)
+                                                .unwrap_or(0);
+                                            let focused = focus == Some(index);
                                             let (rect, response) = ui.allocate_exact_size(
-                                                vec2(tile_w, 84.0),
+                                                vec2(tile_w, tile_h),
                                                 egui::Sense::click(),
                                             );
                                             theme_tile(
@@ -3425,7 +3936,7 @@ impl Zenith {
                                                 rect,
                                                 p,
                                                 &sample,
-                                                chosen,
+                                                TileState { chosen, focused },
                                                 &self.typo,
                                                 self.scale,
                                             );
@@ -3447,13 +3958,16 @@ impl Zenith {
                                 }
                             }
                             // -------------------------------------------- language
-                            _ => {
+                            3 => {
                                 let mut on = self.store.config.lsp.enabled;
+                                let mut base = 0;
                                 if toggles(
                                     ui,
                                     &font,
                                     &pal,
                                     &mut [("start language servers", &mut on)],
+                                    focus,
+                                    &mut base,
                                 ) {
                                     self.store.config.lsp.enabled = on;
                                     changed = true;
@@ -3468,7 +3982,7 @@ impl Zenith {
                                              has a server for",
                                         )
                                         .font(small.clone())
-                                        .color(pal.ink_faint),
+                                        .color(pal.ink_soft),
                                     );
                                 }
                                 for kind in self.lsp_kinds.clone() {
@@ -3482,7 +3996,7 @@ impl Zenith {
                                         let ink = if state == "failed" {
                                             pal.tone(Tone::Invalid)
                                         } else {
-                                            pal.ink_faint
+                                            pal.ink_soft
                                         };
                                         ui.label(
                                             RichText::new(state).font(small.clone()).color(ink),
@@ -3492,7 +4006,7 @@ impl Zenith {
                                         ui.label(
                                             RichText::new(why)
                                                 .font(small.clone())
-                                                .color(pal.ink_faint),
+                                                .color(pal.ink_soft),
                                         );
                                     }
                                     let discovered = self
@@ -3540,6 +4054,75 @@ impl Zenith {
                                     ui.add_space(8.0);
                                 }
                             }
+                            // -------------------------------------------- keys
+                            4 => {
+                                ui.visuals_mut().extreme_bg_color = pal.panel_deep;
+                                let edit = ui.add(
+                                    egui::TextEdit::singleline(&mut self.keys_query)
+                                        .hint_text("filter keys")
+                                        .font(self.typo.ui_id(12.5 * self.scale))
+                                        .desired_width(content)
+                                        .frame(Frame::NONE),
+                                );
+                                ui.painter().hline(
+                                    edit.rect.x_range(),
+                                    edit.rect.bottom() + 2.0,
+                                    Stroke::new(1.0, pal.edge),
+                                );
+                                ui.add_space(8.0);
+                                let query = self.keys_query.to_lowercase();
+                                ScrollArea::vertical()
+                                    .id_salt("keys")
+                                    .max_height(280.0)
+                                    .scroll_bar_visibility(
+                                        egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
+                                    )
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        for (group, rows) in HELP_GROUPS {
+                                            let matching: Vec<&(&str, &str)> = rows
+                                                .iter()
+                                                .filter(|(k, v)| {
+                                                    query.is_empty()
+                                                        || k.to_lowercase().contains(&query)
+                                                        || v.to_lowercase().contains(&query)
+                                                })
+                                                .collect();
+                                            if matching.is_empty() {
+                                                continue;
+                                            }
+                                            ui.label(
+                                                RichText::new(group.to_uppercase())
+                                                    .font(self.typo.ui_id(9.5 * self.scale))
+                                                    .color(pal.ink_soft)
+                                                    .extra_letter_spacing(0.1 * self.scale),
+                                            );
+                                            ui.add_space(2.0);
+                                            egui::Grid::new(format!("keys-{group}"))
+                                                .num_columns(2)
+                                                .spacing([16.0, 3.0])
+                                                .show(ui, |ui| {
+                                                    for &(k, v) in matching {
+                                                        ui.label(
+                                                            RichText::new(k)
+                                                                .font(self.typo.code_id(
+                                                                    11.5 * self.scale,
+                                                                ))
+                                                                .color(pal.accent),
+                                                        );
+                                                        ui.label(
+                                                            RichText::new(v)
+                                                                .font(small.clone())
+                                                                .color(pal.ink_soft),
+                                                        );
+                                                        ui.end_row();
+                                                    }
+                                                });
+                                            ui.add_space(8.0);
+                                        }
+                                    });
+                            }
+                            _ => {}
                         }
                     });
                 });
@@ -3564,13 +4147,49 @@ impl Zenith {
                 ui.add_space(10.0);
                 let now = ui.input(|i| i.time);
                 let armed = self.reset_asked.is_some_and(|t| now - t < 5.0);
-                let text = if armed { "yes, reset" } else { "restore defaults" };
-                let colour = if armed { pal.tone(Tone::Invalid) } else { pal.ink_faint };
+                let reset_focused = !self.settings_rail_focus
+                    && self.settings_focus == self.settings_focus_count();
+                let text = if armed { "restore defaults?" } else { "restore defaults" };
+                let colour = if armed { pal.tone(Tone::Invalid) } else { pal.ink_soft };
+                let galley = ui.painter().layout_no_wrap(text.to_string(), small.clone(), colour);
+                let button_h = (small.size * 2.2).max(26.0);
+                let button_w = galley.size().x + 20.0;
                 ui.horizontal(|ui| {
                     ui.add_space(20.0);
-                    let reset = ui.add(
-                        egui::Label::new(RichText::new(text).font(small.clone()).color(colour))
-                            .sense(egui::Sense::click()),
+                    let (rect, reset) = ui.allocate_exact_size(
+                        vec2(button_w, button_h),
+                        egui::Sense::click(),
+                    );
+                    let fill = if reset.is_pointer_button_down_on() {
+                        theme::alpha(pal.ink, 30)
+                    } else if reset.hovered() {
+                        theme::alpha(pal.ink, 16)
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    ui.painter().rect_filled(rect, CornerRadius::same(4), fill);
+                    ui.painter().rect_stroke(
+                        rect,
+                        CornerRadius::same(4),
+                        Stroke::new(
+                            1.0,
+                            if armed {
+                                pal.tone(Tone::Invalid)
+                            } else if reset_focused {
+                                pal.accent
+                            } else {
+                                pal.edge
+                            },
+                        ),
+                        egui::StrokeKind::Inside,
+                    );
+                    ui.painter().galley(
+                        Pos2::new(
+                            rect.center().x - galley.size().x * 0.5,
+                            rect.center().y - galley.size().y * 0.5,
+                        ),
+                        galley,
+                        colour,
                     );
                     if reset.clicked() {
                         if armed {
@@ -4319,7 +4938,6 @@ impl Zenith {
         if self.smoke.as_ref().map(|s| s.frame) == Some(0) {
             match self.smoke.as_ref().map(|s| s.phase) {
                 Some(0) => {
-                    self.zen = false;
                     self.store.config.focus_lens = false;
                     self.store.config.distilled = false;
                     self.caret = vim::Caret::default();
@@ -4335,7 +4953,6 @@ impl Zenith {
                     }
                 }
                 _ => {
-                    self.zen = true;
                     self.store.config.focus_lens = true;
                     let nested = self
                         .folder
@@ -4410,8 +5027,8 @@ impl Zenith {
 
         match smoke.phase {
             0 => {
-                // Phase two: zen mode with the focus lens, reading zenith's own layout
-                // engine — a file with real nesting, so the lens has work to do.
+                // Phase two: the focus lens, reading zenith's own layout engine — a
+                // file with real nesting, so the lens has work to do.
                 smoke.phase = 1;
                 smoke.requested = false;
                 smoke.asked = 0;
@@ -4564,12 +5181,18 @@ fn sample_tokens(hl: &Highlighter) -> Vec<SampleLine> {
 /// One theme, shown by being used: its paper, its inks, its faces, and the sample set in
 /// them. `chosen` draws the accent around it rather than a fill, so the preview is never
 /// tinted by the fact that it is the one in force.
+#[derive(Clone, Copy, Default)]
+struct TileState {
+    chosen: bool,
+    focused: bool,
+}
+
 fn theme_tile(
     ui: &egui::Ui,
     rect: Rect,
     palette: &Palette,
     sample: &[SampleLine],
-    chosen: bool,
+    state: TileState,
     typo: &Typography,
     scale: f32,
 ) {
@@ -4579,8 +5202,14 @@ fn theme_tile(
         rect,
         CornerRadius::same(TILE_RADIUS),
         Stroke::new(
-            if chosen { 1.5 } else { 1.0 },
-            if chosen { palette.accent } else { palette.edge },
+            if state.chosen || state.focused { 1.5 } else { 1.0 },
+            if state.focused {
+                palette.ink_soft
+            } else if state.chosen {
+                palette.accent
+            } else {
+                palette.edge
+            },
         ),
         egui::StrokeKind::Inside,
     );
@@ -4646,6 +5275,7 @@ fn line_slider(
     label_font: &egui::FontId,
     value_font: &egui::FontId,
     spec: Slider<'_>,
+    focused: bool,
 ) -> bool {
     let Slider {
         label,
@@ -4655,8 +5285,9 @@ fn line_slider(
     } = spec;
     let (low, high) = (*range.start(), *range.end());
     let width = ui.available_width();
+    let height = (label_font.size * 2.35).max(30.0);
     let (rect, response) =
-        ui.allocate_exact_size(vec2(width, 30.0), egui::Sense::click_and_drag());
+        ui.allocate_exact_size(vec2(width, height), egui::Sense::click_and_drag());
 
     let mut changed = false;
     if response.dragged() || response.clicked() {
@@ -4671,6 +5302,14 @@ fn line_slider(
     }
 
     let painter = ui.painter();
+    if focused {
+        painter.rect_stroke(
+            rect.shrink(1.0),
+            CornerRadius::same(ROW_RADIUS),
+            Stroke::new(1.0, pal.accent),
+            egui::StrokeKind::Inside,
+        );
+    }
     let text = format!("{value:.*}", decimals);
     let galley = painter.layout_no_wrap(text, value_font.clone(), pal.ink);
     let value_w = galley.size().x;
@@ -4715,10 +5354,14 @@ fn toggles(
     font: &FontId,
     pal: &Palette,
     rows: &mut [(&str, &mut bool)],
+    focus: Option<usize>,
+    base: &mut usize,
 ) -> bool {
     let mut changed = false;
     for (label, value) in rows.iter_mut() {
-        changed |= check(ui, font, pal, label, value);
+        let focused = focus == Some(*base);
+        *base += 1;
+        changed |= check(ui, font, pal, label, value, focused);
     }
     changed
 }
@@ -4728,16 +5371,32 @@ fn toggles(
 /// Not egui's checkbox: that is a filled blob that reads as a pill. These are paper
 /// statements — a hairline square when off, the same square with an ink check when on.
 /// A circle would mean "choose one of these"; these are independent.
-fn check(ui: &mut Ui, font: &FontId, pal: &Palette, label: &str, value: &mut bool) -> bool {
+fn check(
+    ui: &mut Ui,
+    font: &FontId,
+    pal: &Palette,
+    label: &str,
+    value: &mut bool,
+    focused: bool,
+) -> bool {
+    let row_h = (font.size * 1.65).max(20.0);
     let (rect, resp) =
-        ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::click());
+        ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
     let hovered = resp.hovered();
     if hovered {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(ROW_RADIUS), theme::alpha(pal.ink, 10));
     }
+    if focused {
+        ui.painter().rect_stroke(
+            rect.shrink(1.0),
+            CornerRadius::same(ROW_RADIUS),
+            Stroke::new(1.0, pal.accent),
+            egui::StrokeKind::Inside,
+        );
+    }
 
-    let side = 11.0;
+    let side = (font.size * 0.88).max(11.0);
     let box_rect = Rect::from_min_size(
         Pos2::new(rect.left() + 1.0, rect.center().y - side * 0.5),
         vec2(side, side),
@@ -4865,6 +5524,37 @@ fn resize_handles(ui: &mut Ui) {
         if resp.drag_started() {
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+        }
+    }
+}
+
+/// The four marks inside the bloom's bubbles: a tree, a list, a looking glass, a pair of
+/// sliders. Drawn, not typed, so they are the same weight on every machine.
+fn draw_bloom_mark(painter: &egui::Painter, c: Pos2, which: usize, ink: Color32) {
+    let stroke = Stroke::new(1.2, ink);
+    match which {
+        0 => {
+            painter.line_segment([c + vec2(0.0, 4.0), c + vec2(0.0, -1.0)], stroke);
+            painter.line_segment([c + vec2(0.0, -1.0), c + vec2(-4.0, -4.0)], stroke);
+            painter.line_segment([c + vec2(0.0, -1.0), c + vec2(4.0, -4.0)], stroke);
+        }
+        1 => {
+            for (dy, half) in [(-4.0, 5.0), (0.0, 3.0), (4.0, 5.0)] {
+                painter.line_segment(
+                    [c + vec2(-half, dy), c + vec2(half, dy)],
+                    stroke,
+                );
+            }
+        }
+        2 => {
+            painter.circle_stroke(c + vec2(-1.0, -1.0), 4.0, stroke);
+            painter.line_segment([c + vec2(2.0, 2.0), c + vec2(5.0, 5.0)], stroke);
+        }
+        _ => {
+            painter.line_segment([c + vec2(-5.0, -3.0), c + vec2(5.0, -3.0)], stroke);
+            painter.line_segment([c + vec2(-5.0, 3.0), c + vec2(5.0, 3.0)], stroke);
+            painter.circle_filled(c + vec2(-2.0, -3.0), 1.4, ink);
+            painter.circle_filled(c + vec2(2.0, 3.0), 1.4, ink);
         }
     }
 }
@@ -5222,6 +5912,8 @@ fn apply_style(ctx: &egui::Context, pal: &Palette, typo: &Typography, scale: f32
     visuals.selection.bg_fill = theme::alpha(pal.accent, 60);
     visuals.selection.stroke = Stroke::new(1.0, pal.accent);
     visuals.hyperlink_color = pal.accent;
+    // Hint text is text: `ink_faint` is for marks, not for instructions.
+    visuals.weak_text_color = Some(pal.ink_soft);
     visuals.override_text_color = None;
     visuals.widgets.noninteractive.bg_fill = pal.panel;
     visuals.widgets.noninteractive.weak_bg_fill = pal.panel;
@@ -5263,44 +5955,66 @@ fn apply_style(ctx: &egui::Context, pal: &Palette, typo: &Typography, scale: f32
     });
 }
 
-const HELP_ROWS: &[(&str, &str)] = &[
-    ("j k, ↑ ↓", "down and up a line"),
-    ("w b e", "next word, previous word, end of word"),
-    ("0 ^ $", "start of line, first non-blank, end of line"),
-    ("{ }", "previous and next paragraph"),
-    ("%", "jump to the matching bracket"),
-    ("ctrl-d ctrl-u", "half a page down and up"),
-    ("space ctrl-f, ⇧space ctrl-b", "a whole page"),
-    ("gg / G", "top / bottom of the file"),
-    ("H M L", "top, middle, bottom of the screen"),
-    ("zz zt zb", "centre, or put the line at the top / bottom"),
-    ("n N", "next and previous search match"),
-    ("[ ]", "previous / next chapter (the outline)"),
-    ("ctrl-o ctrl-i", "back and forward through where you have been, across files"),
-    ("gd", "go to the definition of what is under the cursor"),
-    ("J K", "next / previous file in the folder"),
-    ("j k l h", "in the tree: move, open, and back out"),
-    ("enter, G, gg", "in the tree: open, last row, first row"),
-    ("⌘P or ⌘K or ctrl-p", "find a file in the folder"),
-    ("/ or ⌘F", "search inside this file"),
-    ("tab", "move the keyboard into the tree"),
-    ("o", "contents panel"),
-    ("Z", "zen mode — no chrome at all"),
-    ("f", "focus lens — dim everything but this block"),
-    ("d", "distilled: fade types and punctuation away"),
-    ("y Y", "copy the block / the line"),
-    ("m", "bookmark this file"),
-    ("s or ⌘,", "settings"),
-    ("escape", "close anything, and leave zen mode"),
-    ("1-6", "pick a theme"),
-    ("- =", "smaller / larger type"),
-    ("#", "toggle line numbers"),
-    ("x", "render markdown, or its source"),
-    ("r", "re-read from disk"),
-    ("q", "close the file — and go back to the one you came from"),
-    ("{mod}Q", "quit zenith"),
-    ("⌘O", "open a folder to read"),
+const HELP_GROUPS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "reading",
+        &[
+            ("j k, ↑ ↓", "down and up a line"),
+            ("w b e", "next word, previous word, end of word"),
+            ("0 ^ $", "start of line, first non-blank, end of line"),
+            ("{ }", "previous and next paragraph"),
+            ("%", "jump to the matching bracket"),
+            ("ctrl-d ctrl-u", "half a page down and up"),
+            ("space ctrl-f, ⇧space ctrl-b", "a whole page"),
+            ("gg / G", "top / bottom of the file"),
+            ("H M L", "top, middle, bottom of the screen"),
+            ("zz zt zb", "centre, or put the line at the top / bottom"),
+            ("n N", "next and previous search match"),
+            ("[ ]", "previous / next chapter (the contents)"),
+            ("ctrl-o ctrl-i", "back and forward through everywhere you have been"),
+            ("gd", "go to the definition of what is under the cursor"),
+        ],
+    ),
+    (
+        "files and the index",
+        &[
+            ("J K", "next / previous file in the folder"),
+            ("tab", "open the index and move the keyboard into it"),
+            ("j k l h", "in the index: move, open, back out"),
+            ("enter, G, gg", "in the index: open, last row, first row"),
+            ("⌘P or ⌘K or ctrl-p", "find a file in the folder"),
+            ("/ or ⌘F", "find inside this file"),
+            ("q", "close the file, and go back to the one you came from"),
+            ("⌘O", "open a folder to read"),
+        ],
+    ),
+    (
+        "views",
+        &[
+            ("o", "contents"),
+            ("f", "focus lens: dim everything but this block"),
+            ("d", "distilled: fade types and punctuation away"),
+            ("y Y", "copy the block / the line"),
+            ("m", "bookmark this file"),
+            ("1-6", "pick a theme"),
+            ("- =", "smaller / larger type"),
+            ("#", "toggle line numbers"),
+            ("x", "render markdown, or its source"),
+            ("r", "re-read from disk"),
+        ],
+    ),
+    (
+        "settings and the window",
+        &[
+            ("s or ⌘,", "settings"),
+            ("?", "this page"),
+            ("escape", "close whatever is open"),
+            ("{mod}Q", "quit zenith"),
+        ],
+    ),
 ];
+
+
 
 #[cfg(test)]
 mod key_tests {

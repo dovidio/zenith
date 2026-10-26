@@ -24,11 +24,12 @@ cargo run --release -- ~/code/some-project
 Navigation is vim's, as far as a reader needs it: `j k`, `w b e`, `0 ^ $`, `{ }`, `%`,
 `gg G`, `H M L`, `zz zt zb`, `ctrl-d ctrl-u`, `[ ]` for chapters, `gd` to follow a name to
 where it is defined, and `ctrl-o` / `ctrl-i` to go back and forward through everywhere you
-have been. The folder tree takes the
-keyboard too: `tab` to enter it, `j k` to move, `l` or `enter` to open a file or fold a
-folder, `h` to back out, `esc` to return to the page. Two finders, deliberately separate:
-`⌘P` (or `ctrl-p`) finds *a file* in the open folder, `/` (or `⌘F`) searches *inside the
-file* you are reading. Press `?` in the app for the whole map.
+have been. The page opens alone; a small mark at the top opens four doors — the index, the
+contents, the launcher and settings. `tab` opens the index with the keyboard in it: `j k`
+to move, `l` or `enter` to open a file or fold a folder, `h` to back out, `esc` to return
+to the page. Two finders, deliberately separate: `⌘P` (or `⌘K`, or `ctrl-p`) finds *a
+file* in the open folder, `/` (or `⌘F`) searches *inside the file* you are reading. The
+key map lives in Settings › Keys; `?` opens that page.
 
 The look is a system, not a mood: the six palettes, the three voices, the shape of a
 sheet and the things this program refuses are written down in [DESIGN.md](DESIGN.md).
@@ -151,8 +152,8 @@ a place, not a colour swatch:
 ## Opening a project
 
 Point it at a folder — `zenith ~/code/some-project`, `⌘O`, or drag a folder onto the
-window — and the tree on the left is that folder. A file works too, and the tree shows the
-project it belongs to. With no argument it reopens the last folder, or the one you are
+window — and the index is that folder. A file works too, and the index shows the project
+it belongs to. With no argument it reopens the last folder, or the one you are
 standing in if that looks like a project, and otherwise it waits, quietly, for you to
 choose.
 
@@ -172,8 +173,8 @@ tells a server the document has changed: it opens the file, asks, and closes it.
 
 A definition is often not in the folder you are reading: it is in a dependency, or in the
 standard library. Zenith follows it anyway — reading the standard library is legitimate
-reading — and the strip at the foot of the page says so, naming the file you came from and
-the key that goes back. `ctrl-o` walks back through everywhere you have been, across files;
+reading — and a line at the foot of the page says so, naming the file you came from and the
+key that goes back. `ctrl-o` walks back through everywhere you have been, across files;
 `q` puts the file down and returns to the one underneath it, which is what `:bd` does in
 vim, in a program that has no command line to type it into.
 
@@ -190,7 +191,7 @@ be a rustup shim whose component is missing: it is there, it is executable, and 
 with `Unknown binary 'rust-analyzer' in official toolchain`. So discovery is a table and a
 search — including the directories a window opened from the Finder cannot see, because the
 desktop hands it `/usr/bin:/bin:/usr/sbin:/sbin` — and the *handshake* is the verification.
-When a server refuses, the strip at the foot of the page quotes the server's own words,
+When a server refuses, a line at the foot of the page quotes the server's own words,
 which is usually the exact command that fixes it.
 
 Starting one has consequences: analysing a project means running its build scripts. That
@@ -204,23 +205,23 @@ is ready when you press `gd` — and this turns them all off:
 enabled = false
 ```
 
-…or the switch in the settings panel (`s`), which also lists the languages in the folder,
+…or the switch in the settings sheet (`s`), which also lists the languages in the folder,
 what each one's server is doing, and a field to point at a binary yourself when discovery
-guesses wrong. The panel has no tabs any more: the sections stand in a column on the left,
-because there are five of them and one of them needs room for a path.
+guesses wrong. The sheet has a rail of sections rather than a tab bar: five of them, and
+one needs room for a path.
 
 Every question a server asks in return is answered "nothing": no capabilities registered,
 no configuration supplied, no edit ever applied.
 
-The contents panel comes from the server too, when there is one. A grammar can say where
+The contents drawer comes from the server too, when there is one. A grammar can say where
 a declaration starts; only the language itself knows that a method belongs inside an
-`impl` and a variant inside its `enum`, so the panel indents them that way. With no server
+`impl` and a variant inside its `enum`, so the drawer indents them that way. With no server
 the panel falls back to reading the grammar and nothing is missing from the page.
 
 The handshake is not readiness. A server that has not finished reading the project answers
 "nothing is defined there", which is true and useless, so the client watches the server's
-own progress reports and asks again rather than repeating a lie — the strip says *still
-reading this project* while it waits.
+own progress reports and asks again rather than repeating a lie — a line at the foot of the
+page says *still reading this project* while it waits.
 
 ## It does not change your code
 

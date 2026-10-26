@@ -615,7 +615,7 @@ mod tests {
         let mut c = Chords::default();
         assert_eq!(c.feed('z'), Feed::Pending);
         // `⇧Z` arrives as 'Z': not a continuation of `z`, so it must reach the
-        // ordinary handler — this is the key that leaves zen mode.
+        // ordinary handler rather than being swallowed by the prefix.
         assert_eq!(c.feed('Z'), Feed::Pass);
         assert!(!c.is_pending(), "the prefix must not survive a failed chord");
     }

@@ -932,7 +932,7 @@ pub fn paint_header(
         Align2::LEFT_TOP,
         path,
         path_font,
-        palette.ink_faint,
+        palette.ink_soft,
     );
     y += size * 1.5;
 
