@@ -292,30 +292,50 @@ permanent sidebar.
 ### The launcher
 
 The room's search, and one of the bloom's four bubbles. A sheet 560 pt wide, one third of
-the way down the window, opened by its bubble or with `⌘K` (or `ctrl-K`). It behaves like a
-spotlight: one field, a few results, no menus. Its input is chrome 16 pt, with no box: a
-hairline under the line is the only boundary. The placeholder is `a file, a symbol, or a
-view`.
+the way down the window at 1.00×, opened by its bubble or with `⌘K` (or `ctrl-K`). It
+behaves like a spotlight: one field, a few results, no menus. Its input is chrome 16 pt,
+with no box: a hairline under the line is the only boundary. The placeholder is
+`a file, a view, or an action`.
 
-The results are a short, ranked list, not a manual: names in the code face, views and
-settings in chrome, 28 pt rows, selected with a wash and a 2 pt accent tab. There is no
-hand cursor. It never shows more than eight rows; a launcher that becomes a menu is a menu,
-and the answer to a longer list is a more specific query.
+The results are a short, ranked list, not a manual: file names in the code face, views and
+actions in chrome, 28 pt rows, selected with a wash and a 2 pt accent tab. There is no hand
+cursor. It never shows more than eight rows; a launcher that becomes a menu is a menu, and
+the answer to a longer list is a more specific query. At 1.30× and above the sheet moves
+up to the top air, and its body can scroll, so eight rows at 1.80× are still eight rows,
+not a sheet clipped by the window.
 
-It is contextual. With a file open, `Here` comes first — `Contents`, then the file's own
-symbols. Then `Folder` — `Index`, its files and `Open folder…`. Then `Zenith` —
-`Settings`, `Keys`, and the six themes. With no file open, the folder and recent places
-come first. Typing `theme` surfaces the atmospheres; typing `keys` surfaces the key page.
+The empty state is contextual, in three groups. `HERE` comes first — `Contents`, then
+`Search this file`. `FOLDER` follows — `Index`, the matching files, and `Open folder…`
+when there is no file open or no folder yet. `ZENITH` carries the page's own switches and doors — `Focus lens`, `Soft wrap`, `Line
+numbers`, `Distilled`, `Render markdown`, `Next theme` / `Previous theme`, `Larger type` /
+`Smaller type`, `Settings` and `Keys`. With no file open the `HERE` group is absent; with
+no folder, `Open folder…` is the only folder action. The list is curated to eight; the rest
+is one query away.
 
-It launches places and views, not motions. `j`, `k`, `gd` and the rest are the page's
-grammar, and they never appear as commands here. The bloom shows the four doors; the
-launcher is the one for anything that is not a place in the index or the contents. It is
-where the reading state advertises what else the program can do; the empty page has one
-door of its own.
+A query flattens the groups and ranks the results. Commands beat files on a tie; a file is
+still a first-class result. Typing `theme` surfaces the two theme steps before the source
+file named `theme.rs`; typing `line` surfaces `Line numbers`, not `Contents` because its
+keywords include `outline`; typing `app` is a file search again. The launcher is where the
+reading state advertises what else the program can do; the empty page has one door of its
+own.
 
-`⌘P` opens it scoped to files; `s` and `⌘,` open settings directly. These are back doors
-for people who already know them. No key is advertised anywhere; the bloom shows the
-doors instead, and the empty page still offers `Open a folder…`.
+An action with a key carries it as a **keycap** — the real shortcut, in code 10.5 pt, in a
+`panel_deep` recess with a 1 pt `edge` hairline and a 3 pt corner. It is a key, not a
+badge, and it is the one place the page advertises a shortcut: the reader can use the
+launcher once, learn the key, and take the direct route the next time. Actions that toggle
+something also carry their current state as a chrome word immediately after the name —
+`Focus lens off`, `Soft wrap on` — so the list is a set of switches, not a set of
+instructions. `Soft wrap` has no key and therefore no keycap; it is honest about that
+rather than inventing one.
+
+It launches places, views and the page's switches, not motions. `j`, `k`, `gd` and the rest
+are the page's grammar, and they never appear as commands here. The bloom shows the four
+doors; the launcher is the one for anything that is not a place in the index or the
+contents.
+
+`⌘P` opens the same sheet scoped to files; `s` and `⌘,` open settings directly. These are
+back doors for people who already know them. The complete key map is in Settings › Keys;
+`?` opens it.
 
 `esc` or a click outside closes it; the arrows move; enter or a click opens.
 
@@ -408,8 +428,8 @@ thing is a sheet's shadow; the one moving thing is the bloom.
 
 - **Chrome by default.** No permanent masthead, no pinned sidebar, no status bar, no
   toolbar. Zen is not a mode to enter; it is the state you start in.
-- **A shortcut legend.** No hints at the foot, no `?` overlay. What the program can do is
-  in the bloom and the launcher; the complete list is in Settings › Keys.
+- **A shortcut legend.** No hints at the foot, no `?` overlay. A command may carry its own
+  key in the launcher; the complete list is in Settings › Keys.
 - **A status bar.** Notices are one line at the foot of the page and then they are gone.
 - **A hand cursor.** The arrow is the native pointer; the I-beam is for fields. The hand
   belongs to links on the web.

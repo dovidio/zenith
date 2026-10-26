@@ -416,6 +416,8 @@ pub struct Zenith {
     bloom_hover_opened: bool,
     page_center_x: f32,
     palette_open: bool,
+    palette_opened_frame: usize,
+    palette_files_only: bool,
     query: String,
     palette_sel: usize,
     search_open: bool,
@@ -549,6 +551,8 @@ impl Zenith {
             bloom_hover_opened: false,
             page_center_x: 0.0,
             palette_open: false,
+            palette_opened_frame: 0,
+            palette_files_only: false,
             query: String::new(),
             palette_sel: 0,
             search_open: false,
@@ -579,6 +583,9 @@ impl Zenith {
         }
         if std::env::var("ZENITH_FORCE_PALETTE").is_ok() {
             app.open_palette();
+            if std::env::var("ZENITH_PALETTE_FILES").is_ok() {
+                app.palette_files_only = true;
+            }
             if let Ok(q) = std::env::var("ZENITH_PALETTE_QUERY") {
                 app.query = q;
             }
@@ -1098,8 +1105,12 @@ impl Zenith {
                     self.pick_folder();
                     continue;
                 }
-                if (cmd && matches!(key, Key::P | Key::K)) || (ctrl && key == Key::P) {
+                if cmd && key == Key::K {
                     self.open_palette();
+                    continue;
+                }
+                if (cmd || ctrl) && key == Key::P {
+                    self.open_palette_files();
                     continue;
                 }
                 if key == Key::F && (cmd || ctrl) {
@@ -1305,7 +1316,7 @@ impl Zenith {
             }
             // `/` is how a reader looks for a file, and this is the file list.
             Key::Slash => {
-                self.open_palette();
+                self.open_palette_files();
                 false
             }
             _ => false,
@@ -1379,6 +1390,7 @@ impl Zenith {
             Key::Y => Some(Act::CopyBlock),
             Key::D => Some(Act::Distilled),
             Key::X => Some(Act::Markdown),
+            Key::T => Some(Act::NextTheme),
             Key::Slash => Some(Act::Search),
             Key::Minus => Some(Act::Smaller),
             Key::Equals => Some(Act::Larger),
@@ -1398,9 +1410,11 @@ impl Zenith {
             Key::K => Some(Act::PrevFile),
             Key::M => Some(Act::Bookmark),
             Key::N => Some(Act::SearchPrev),
+            Key::Num3 => Some(Act::LineNumbers), // ⇧3 is `#`
             Key::Num4 => Some(Act::LineEnd),   // ⇧4 is `$`
             Key::Num5 => Some(Act::BracketMatch), // ⇧5 is `%`
             Key::Num6 => Some(Act::LineFirst), // ⇧6 is `^`
+            Key::T => Some(Act::PrevTheme),
             Key::Space => Some(Act::PageUp),
             _ => None,
         };
@@ -1458,6 +1472,34 @@ impl Zenith {
                 let caret = vim::landing(&self.open.as_ref().unwrap().doc, line);
                 self.jump_to(caret);
             }
+            Act::Theme(idx) => {
+                self.set_theme(ctx, idx);
+                self.say(format!("theme: {}", self.palette.name));
+            }
+            Act::NextTheme | Act::PrevTheme => {
+                let current = theme::THEMES
+                    .iter()
+                    .position(|p| p.name == self.palette.name)
+                    .unwrap_or(0);
+                let count = theme::THEMES.len();
+                let next = if matches!(act, Act::NextTheme) {
+                    (current + 1) % count
+                } else {
+                    (current + count - 1) % count
+                };
+                self.set_theme(ctx, next);
+                self.say(format!("theme: {}", self.palette.name));
+            }
+            Act::LineNumbers => {
+                self.store.config.line_numbers = !self.store.config.line_numbers;
+                self.store.save_config();
+                self.style_dirty = true;
+                self.say(if self.store.config.line_numbers {
+                    "line numbers on"
+                } else {
+                    "line numbers off"
+                });
+            }
             Act::Focus => {
                 self.store.config.focus_lens = !self.store.config.focus_lens;
                 self.store.save_config();
@@ -1510,7 +1552,6 @@ impl Zenith {
             Act::Larger => self.bump_scale(0.06, ctx),
             Act::Reload => self.reload(),
             Act::CloseFile => self.close_file(),
-            _ => {}
         }
     }
 
@@ -1550,8 +1591,114 @@ impl Zenith {
         self.show_settings = false;
         self.tree_focus = false;
         self.palette_open = true;
+        self.palette_opened_frame = self.frame;
+        self.palette_files_only = false;
         self.query.clear();
         self.palette_sel = 0;
+    }
+
+    /// `⌘P` / `ctrl-P` keep the narrow promise: this is the file finder, not the
+    /// command sheet. `⌘K` opens the launcher.
+    fn open_palette_files(&mut self) {
+        self.open_palette();
+        self.palette_files_only = true;
+    }
+
+    /// Which launcher commands make sense in this state?
+    fn launch_available(&self, action: Launch) -> bool {
+        match action {
+            Launch::Contents
+            | Launch::Search
+            | Launch::CopyBlock
+            | Launch::CloseFile
+            | Launch::Bookmark
+            | Launch::Reload => self.open.is_some(),
+            Launch::Markdown => self.open.as_ref().is_some_and(|o| o.prose),
+            Launch::Index => self.folder.is_some(),
+            Launch::OpenFolder => true,
+            _ => true,
+        }
+    }
+
+    /// The state a launcher row carries, not the command it runs.
+    fn launch_detail(&self, action: Launch) -> Option<String> {
+        let on_off = |value: bool| Some(if value { "on" } else { "off" }.to_string());
+        match action {
+            Launch::FocusLens => on_off(self.store.config.focus_lens),
+            Launch::SoftWrap => on_off(self.store.config.wrap),
+            Launch::LineNumbers => on_off(self.store.config.line_numbers),
+            Launch::Distilled => on_off(self.store.config.distilled),
+            Launch::Markdown => on_off(self.store.config.markdown),
+            Launch::NextTheme | Launch::PrevTheme => Some(self.palette.name.to_string()),
+            Launch::Larger | Launch::Smaller => Some(format!("{:.2}×", self.scale)),
+            _ => None,
+        }
+    }
+
+    fn launch_row(&self, spec: &'static CommandSpec, score: i32) -> LaunchRow {
+        LaunchRow::Command {
+            spec,
+            detail: self.launch_detail(spec.action),
+            score,
+        }
+    }
+
+    /// Run one command from the launcher. The launcher closes first; the command opens
+    /// whatever surface it means to open.
+    fn launch(&mut self, action: Launch, ctx: &egui::Context) {
+        self.palette_open = false;
+        match action {
+            Launch::Contents => {
+                self.show_panels = false;
+                self.show_outline = true;
+                self.show_settings = false;
+                self.search_open = false;
+                self.tree_focus = false;
+            }
+            Launch::Search => self.open_search(),
+            Launch::CopyBlock => self.copy_to_clipboard(ctx, false),
+            Launch::CloseFile => self.close_file(),
+            Launch::Bookmark => self.toggle_bookmark(),
+            Launch::Reload => self.reload(),
+            Launch::Index => {
+                self.show_panels = true;
+                self.show_outline = false;
+                self.show_settings = false;
+                self.search_open = false;
+                self.tree_focus = true;
+                if self.tree_sel.is_none() {
+                    self.tree_sel = self.tree_index().map(|i| self.tree_rows[i].key());
+                }
+                self.tree_moved = true;
+            }
+            Launch::OpenFolder => self.pick_folder(),
+            Launch::FocusLens => self.run_action(Act::Focus, ctx),
+            Launch::SoftWrap => self.toggle_soft_wrap(),
+            Launch::LineNumbers => self.run_action(Act::LineNumbers, ctx),
+            Launch::Distilled => self.run_action(Act::Distilled, ctx),
+            Launch::Markdown => self.run_action(Act::Markdown, ctx),
+            Launch::NextTheme => self.run_action(Act::NextTheme, ctx),
+            Launch::PrevTheme => self.run_action(Act::PrevTheme, ctx),
+            Launch::Larger => self.run_action(Act::Larger, ctx),
+            Launch::Smaller => self.run_action(Act::Smaller, ctx),
+            Launch::Settings => {
+                self.show_panels = false;
+                self.show_outline = false;
+                self.show_settings = true;
+                self.settings_tab = 0;
+                self.settings_rail_focus = true;
+                self.settings_focus = 0;
+            }
+            Launch::Keys => {
+                self.show_panels = false;
+                self.show_outline = false;
+                self.show_settings = true;
+                self.settings_tab = 4;
+                self.settings_rail_focus = true;
+                self.settings_focus = 0;
+                self.keys_query.clear();
+            }
+        }
     }
 
     /// Convert a content-space offset into a line index.
@@ -1701,6 +1848,17 @@ impl Zenith {
         };
     }
 
+    fn toggle_soft_wrap(&mut self) {
+        self.store.config.wrap = !self.store.config.wrap;
+        self.store.save_config();
+        self.style_dirty = true;
+        self.say(if self.store.config.wrap {
+            "soft wrap on"
+        } else {
+            "soft wrap off"
+        });
+    }
+
     fn bump_scale(&mut self, delta: f32, ctx: &egui::Context) {
         self.scale = (self.scale + delta).clamp(0.7, 2.2);
         self.store.config.font_scale = self.scale;
@@ -1764,6 +1922,9 @@ enum Act {
     Smaller,
     Larger,
     Theme(usize),
+    NextTheme,
+    PrevTheme,
+    LineNumbers,
     // files and chapters
     NextFile,
     PrevFile,
@@ -3127,8 +3288,18 @@ impl Zenith {
     fn palette_overlay(&mut self, ctx: &egui::Context) {
         let pal = self.palette;
         let screen = ctx.content_rect();
-        let width = (screen.width() * 0.46).clamp(360.0, 720.0);
-        let pos = Pos2::new(screen.center().x - width * 0.5, screen.top() + 96.0);
+        let width = (560.0 * self.scale)
+            .clamp(560.0, 820.0)
+            .min((screen.width() - 40.0).max(360.0));
+        // The launcher sits a third of the way down, like a spotlight, not against the
+        // top edge like a toolbar.
+        let top = if self.scale > 1.3 || screen.height() <= 700.0 {
+            screen.top() + 72.0
+        } else {
+            screen.top() + screen.height() / 3.0
+        };
+        let pos = Pos2::new(screen.center().x - width * 0.5, top);
+        let needle = self.query.trim().to_string();
 
         // Matching files. The list is capped, but the reader is told how many were
         // matched; a silent cap makes a file look absent.
@@ -3140,7 +3311,7 @@ impl Zenith {
                         .iter()
                         .enumerate()
                         .filter_map(|(i, f)| {
-                            fuzzy::match_path(&f.rel, &self.query)
+                            fuzzy::match_path(&f.rel, &needle)
                                 .map(|h| (h.score, i, h.positions))
                         })
                         .collect();
@@ -3151,27 +3322,123 @@ impl Zenith {
                 }
                 None => (Vec::new(), 0),
             };
-        let file_rows: Vec<(String, bool)> = match &self.folder {
+        let file_rows: Vec<LaunchRow> = match &self.folder {
             Some(s) => matches
                 .iter()
-                .map(|(_, i, _)| {
-                    let f = &s.files[*i];
-                    (f.rel.clone(), self.store.is_favorite(&f.path))
+                .map(|(score, idx, positions)| {
+                    let f = &s.files[*idx];
+                    LaunchRow::File {
+                        rel: f.rel.clone(),
+                        path: f.path.clone(),
+                        marked: self.store.is_favorite(&f.path),
+                        positions: positions.clone(),
+                        score: *score,
+                    }
                 })
                 .collect(),
             None => Vec::new(),
         };
-        let positions: Vec<Vec<usize>> = matches.iter().map(|(_, _, p)| p.clone()).collect();
+
+        let mut rows: Vec<LaunchRow> = Vec::new();
+        if self.palette_files_only {
+            // `⌘P` keeps the old, narrow promise: files only, no command menu.
+            rows.extend(file_rows.iter().take(8).cloned());
+        } else if needle.is_empty() {
+            // A curated eight: here, the folder, and the page's own switches. The rest
+            // is one query away; the launcher is a result list, not a menu.
+            let mut here: Vec<LaunchRow> = Vec::new();
+            for action in [Launch::Contents, Launch::Search] {
+                if !self.launch_available(action) {
+                    continue;
+                }
+                if let Some(spec) = LAUNCH_COMMANDS.iter().find(|s| s.action == action) {
+                    here.push(self.launch_row(spec, 0));
+                }
+            }
+
+            let mut folder: Vec<LaunchRow> = Vec::new();
+            if self.launch_available(Launch::Index) {
+                if let Some(spec) = LAUNCH_COMMANDS
+                    .iter()
+                    .find(|s| s.action == Launch::Index)
+                {
+                    folder.push(self.launch_row(spec, 0));
+                }
+            }
+            if self.open.is_none() || self.folder.is_none() {
+                if let Some(spec) = LAUNCH_COMMANDS
+                    .iter()
+                    .find(|s| s.action == Launch::OpenFolder)
+                {
+                    folder.push(self.launch_row(spec, 0));
+                }
+            }
+            folder.extend(file_rows.iter().take(2).cloned());
+
+            let mut zenith: Vec<LaunchRow> = Vec::new();
+            for action in [
+                Launch::FocusLens,
+                Launch::SoftWrap,
+                Launch::Settings,
+                Launch::Keys,
+                Launch::LineNumbers,
+                Launch::Distilled,
+                Launch::NextTheme,
+                Launch::Larger,
+                Launch::Smaller,
+                Launch::Markdown,
+                Launch::PrevTheme,
+            ] {
+                if !self.launch_available(action) {
+                    continue;
+                }
+                if let Some(spec) = LAUNCH_COMMANDS.iter().find(|s| s.action == action) {
+                    zenith.push(self.launch_row(spec, 0));
+                }
+            }
+
+            rows.extend(here);
+            rows.extend(folder);
+            let room = 8usize.saturating_sub(rows.len());
+            rows.extend(zenith.into_iter().take(room));
+        } else {
+            for spec in LAUNCH_COMMANDS {
+                if !self.launch_available(spec.action) {
+                    continue;
+                }
+                if let Some(score) = launch_command_score(spec, &needle) {
+                    rows.push(self.launch_row(spec, score));
+                }
+            }
+            rows.extend(file_rows.iter().cloned());
+            // A query is a ranked list, not a directory: the best match comes first,
+            // and a command beats a file on a tie. The contextual groups belong to the
+            // empty state, where they help browsing rather than searching.
+            rows.sort_by(|a, b| {
+                b.score()
+                    .cmp(&a.score())
+                    .then_with(|| a.is_file().cmp(&b.is_file()))
+                    .then_with(|| a.group().rank().cmp(&b.group().rank()))
+            });
+            rows.truncate(8);
+        }
+
+        let row_count = rows.len();
+        self.palette_sel = self.palette_sel.min(row_count.saturating_sub(1));
+        let hint = if self.palette_files_only {
+            "find a file in this folder"
+        } else {
+            "a file, a view, or an action"
+        };
 
         let mut chosen: Option<usize> = None;
         let mut close = false;
+        let input_font = self.typo.ui_id(16.0 * self.scale);
 
-        let font = self.typo.code_id(12.5 * self.scale);
-        let input_font = self.typo.ui_id(15.0 * self.scale);
-
-        egui::Window::new("find")
+        let launcher = egui::Window::new("launcher")
             .title_bar(false)
             .resizable(false)
+            .movable(false)
             .collapsible(false)
             .fixed_pos(pos)
             .fixed_size(vec2(width, 0.0))
@@ -3187,13 +3454,16 @@ impl Zenith {
                 ui.visuals_mut().extreme_bg_color = pal.panel_deep;
                 let resp = ui.add(
                     egui::TextEdit::singleline(&mut self.query)
-                        .hint_text("find a file in this folder")
+                        .hint_text(hint)
                         .font(input_font.clone())
                         .desired_width(width - 24.0)
                         .frame(Frame::NONE),
                 );
                 if !resp.has_focus() {
                     resp.request_focus();
+                }
+                if resp.changed() {
+                    self.palette_sel = 0;
                 }
                 ui.add_space(6.0);
                 ui.painter().hline(
@@ -3214,101 +3484,284 @@ impl Zenith {
                 if kesc {
                     close = true;
                 }
-                if kd {
-                    self.palette_sel = (self.palette_sel + 1) % file_rows.len().max(1);
+                if kd && row_count > 0 {
+                    self.palette_sel = (self.palette_sel + 1) % row_count;
                 }
-                if ku {
+                if ku && row_count > 0 {
                     self.palette_sel = self
                         .palette_sel
                         .checked_sub(1)
-                        .unwrap_or_else(|| file_rows.len().saturating_sub(1));
+                        .unwrap_or(row_count.saturating_sub(1));
                 }
-                if kenter {
-                    chosen = Some(self.palette_sel);
+                if kenter && row_count > 0 {
+                    chosen = Some(self.palette_sel.min(row_count - 1));
                 }
 
-                for (i, (rel, marked)) in file_rows.iter().enumerate() {
+                let row_h = (28.0 * self.scale).clamp(28.0, 46.0);
+                let group_count = if self.palette_files_only || !needle.is_empty() {
+                    0
+                } else {
+                    let mut count = 0;
+                    let mut last: Option<LaunchGroup> = None;
+                    for row in &rows {
+                        if last != Some(row.group()) {
+                            count += 1;
+                            last = Some(row.group());
+                        }
+                    }
+                    count
+                };
+                let content_h = rows.len() as f32 * (row_h + 2.0)
+                    + group_count as f32 * (28.0 + 14.0 * self.scale)
+                    + 44.0 * self.scale;
+                let max_body = (screen.height() - top - 104.0).max(120.0);
+                let body_h = content_h.min(max_body);
+                // The sheet has to be allowed to be shorter than its rows at 1.8x.
+                // Allocating a fixed body first is what lets the scroll area clip and
+                // scroll inside it, instead of collapsing the whole sheet to one row.
+                ui.allocate_ui_with_layout(
+                    vec2(ui.available_width(), body_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.spacing_mut().scroll.floating = false;
+                        ui.spacing_mut().scroll.foreground_color = true;
+                        ui.spacing_mut().scroll.bar_width = 5.0;
+                        ScrollArea::vertical()
+                            .id_salt("launcher-results")
+                            .max_height(body_h)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                let command_font = self.typo.ui_id(13.0 * self.scale);
+                let detail_font = self.typo.ui_id(11.5 * self.scale);
+                let file_font = self.typo.code_id(12.5 * self.scale);
+                let group_font = self.typo.ui_id(9.5 * self.scale);
+                let key_font = self.typo.code_id(10.5 * self.scale);
+                let mut last_group: Option<LaunchGroup> = None;
+
+                for (i, row) in rows.iter().enumerate() {
+                    if !self.palette_files_only && needle.is_empty() {
+                        let group = row.group();
+                        if last_group != Some(group) {
+                            ui.add_space(if last_group.is_none() { 2.0 } else { 9.0 });
+                            paint_tracked(
+                                ui.painter(),
+                                Pos2::new(ui.min_rect().left() + 10.0, ui.cursor().top() + 2.0),
+                                Align2::LEFT_TOP,
+                                group.label(),
+                                group_font.clone(),
+                                pal.ink_soft,
+                                0.10 * 9.5 * self.scale,
+                            );
+                            ui.add_space((14.0 * self.scale).max(14.0));
+                            last_group = Some(group);
+                        }
+                    }
+
                     let selected = i == self.palette_sel;
-                    let (rect, resp) = ui
-                        .allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
+                    let (rect, resp) = ui.allocate_exact_size(
+                        vec2(ui.available_width(), row_h),
+                        Sense::click(),
+                    );
                     if selected {
                         ui.painter().rect_filled(
-                            resp.rect,
+                            rect,
                             CornerRadius::same(4),
-                            theme::alpha(pal.accent, 26),
+                            pal.selection,
                         );
-                    }
-                    let mut job = egui::text::LayoutJob::default();
-                    job.wrap.max_width = ui.available_width() - 18.0;
-                    let dims = positions.get(i).cloned().unwrap_or_default();
-                    for (ci, ch) in rel.chars().enumerate() {
-                        let hit = dims.binary_search(&ci).is_ok();
-                        let mut f = TextFormat {
-                            font_id: font.clone(),
-                            color: if hit && selected { pal.ink } else { pal.ink_soft },
-                            ..Default::default()
-                        };
-                        if hit {
-                            f.underline = Stroke::new(1.0, pal.accent_soft);
-                        }
-                        job.append(&ch.to_string(), 0.0, f);
-                    }
-                    let g = ui.painter().layout_job(job);
-                    ui.painter()
-                        .galley(Pos2::new(rect.left() + 2.0, rect.center().y - g.size().y * 0.5), g, pal.ink);
-                    if *marked {
-                        ui.painter().text(
-                            Pos2::new(rect.right() - 2.0, rect.center().y),
-                            Align2::RIGHT_CENTER,
-                            self.typo.marks.pick("✦"),
-                            font.clone(),
+                        ui.painter().rect_filled(
+                            Rect::from_min_size(
+                                Pos2::new(rect.left() + 1.0, rect.top() + 5.0),
+                                vec2(2.0, (row_h - 10.0).max(2.0)),
+                            ),
+                            CornerRadius::same(1),
                             pal.accent,
                         );
+                    } else if resp.hovered() {
+                        ui.painter().rect_filled(
+                            rect,
+                            CornerRadius::same(4),
+                            theme::alpha(pal.ink, 8),
+                        );
+                    }
+                    if selected {
+                        ui.scroll_to_rect(rect, None);
+                    }
+
+                    let ink = if selected { pal.ink } else { pal.ink_soft };
+                    match row {
+                        LaunchRow::Command { spec, detail, .. } => {
+                            let label = ui.painter().text(
+                                Pos2::new(rect.left() + 10.0 * self.scale, rect.center().y),
+                                Align2::LEFT_CENTER,
+                                spec.label,
+                                command_font.clone(),
+                                ink,
+                            );
+                            if let Some(detail) = detail {
+                                let detail_ink = if detail == "on" {
+                                    pal.accent
+                                } else {
+                                    pal.ink_soft
+                                };
+                                ui.painter().text(
+                                    Pos2::new(
+                                        label.right() + 8.0 * self.scale,
+                                        rect.center().y,
+                                    ),
+                                    Align2::LEFT_CENTER,
+                                    detail,
+                                    detail_font.clone(),
+                                    detail_ink,
+                                );
+                            }
+                            if let Some(shortcut) = spec.shortcut {
+                                let galley = ui.painter().layout_no_wrap(
+                                    shortcut.to_string(),
+                                    key_font.clone(),
+                                    ink,
+                                );
+                                let pad = 5.0 * self.scale;
+                                let chip_h = (18.0 * self.scale).clamp(18.0, 24.0);
+                                let chip_w = galley.size().x + pad * 2.0;
+                                let chip = Rect::from_min_size(
+                                    Pos2::new(
+                                        rect.right() - 8.0 * self.scale - chip_w,
+                                        rect.center().y - chip_h * 0.5,
+                                    ),
+                                    vec2(chip_w, chip_h),
+                                );
+                                ui.painter().rect_filled(chip, CornerRadius::same(3), pal.panel_deep);
+                                ui.painter().rect_stroke(
+                                    chip,
+                                    CornerRadius::same(3),
+                                    Stroke::new(1.0, pal.edge),
+                                    egui::StrokeKind::Inside,
+                                );
+                                ui.painter().galley(
+                                    Pos2::new(
+                                        chip.center().x - galley.size().x * 0.5,
+                                        chip.center().y - galley.size().y * 0.5,
+                                    ),
+                                    galley,
+                                    ink,
+                                );
+                            }
+                        }
+                        LaunchRow::File {
+                            rel,
+                            marked,
+                            positions,
+                            ..
+                        } => {
+                            let mut job = egui::text::LayoutJob::default();
+                            job.wrap.max_width = rect.width() - 20.0 * self.scale
+                                - if *marked { 18.0 * self.scale } else { 0.0 };
+                            for (ci, ch) in rel.chars().enumerate() {
+                                let hit = positions.binary_search(&ci).is_ok();
+                                let mut f = TextFormat {
+                                    font_id: file_font.clone(),
+                                    color: ink,
+                                    ..Default::default()
+                                };
+                                if hit {
+                                    f.underline = Stroke::new(1.0, pal.accent_soft);
+                                }
+                                job.append(&ch.to_string(), 0.0, f);
+                            }
+                            let g = ui.painter().layout_job(job);
+                            ui.painter().galley(
+                                Pos2::new(
+                                    rect.left() + 6.0 * self.scale,
+                                    rect.center().y - g.size().y * 0.5,
+                                ),
+                                g,
+                                pal.ink,
+                            );
+                            if *marked {
+                                ui.painter().text(
+                                    Pos2::new(
+                                        rect.right() - 8.0 * self.scale,
+                                        rect.center().y,
+                                    ),
+                                    Align2::RIGHT_CENTER,
+                                    self.typo.marks.pick("✦"),
+                                    file_font.clone(),
+                                    pal.accent,
+                                );
+                            }
+                        }
                     }
                     if resp.clicked() {
                         chosen = Some(i);
                     }
                 }
-                if file_rows.is_empty() {
+
+                let files_shown = rows.iter().filter(|r| r.is_file()).count();
+                let commands_shown = rows.len() - files_shown;
+                ui.add_space(6.0 * self.scale);
+                if rows.is_empty() {
                     ui.painter().text(
-                        Pos2::new(ui.min_rect().left() + 2.0, ui.cursor().top() + 6.0),
+                        Pos2::new(ui.min_rect().left() + 10.0, ui.cursor().top() + 3.0),
                         Align2::LEFT_TOP,
                         "nothing matches",
-                        font.clone(),
+                        self.typo.ui_id(12.5 * self.scale),
                         pal.ink_soft,
                     );
-                    ui.add_space(18.0);
+                    ui.add_space(18.0 * self.scale);
                 } else {
-                    let note = if file_rows.len() < matched_total {
-                        format!(
-                            "{} of {} files · type to narrow",
-                            file_rows.len(),
-                            matched_total
-                        )
-                    } else {
-                        format!(
-                            "{} file{}",
-                            matched_total,
-                            if matched_total == 1 { "" } else { "s" }
-                        )
-                    };
-                    ui.add_space(4.0);
+                    let mut note = String::new();
+                    if files_shown > 0 {
+                        if files_shown < matched_total {
+                            note = format!("{files_shown} of {matched_total} files");
+                        } else {
+                            note = format!(
+                                "{files_shown} file{}",
+                                if matched_total == 1 { "" } else { "s" }
+                            );
+                        }
+                    }
+                    if commands_shown > 0 {
+                        if !note.is_empty() {
+                            note.push_str(" · ");
+                        }
+                        note.push_str(&format!(
+                            "{commands_shown} action{}",
+                            if commands_shown == 1 { "" } else { "s" }
+                        ));
+                    }
                     ui.painter().text(
-                        Pos2::new(ui.min_rect().left() + 2.0, ui.cursor().top()),
+                        Pos2::new(ui.min_rect().left() + 10.0, ui.cursor().top() + 3.0),
                         Align2::LEFT_TOP,
                         note,
                         self.typo.ui_id(10.5 * self.scale),
                         pal.ink_soft,
                     );
-                    ui.add_space(16.0);
+                    ui.add_space(18.0 * self.scale);
                 }
+                            });
+                    },
+                );
             });
 
+        if !close
+            && self.frame > self.palette_opened_frame
+            && ctx.input(|i| i.pointer.primary_clicked())
+            && ctx
+                .input(|i| i.pointer.interact_pos())
+                .is_some_and(|p| {
+                    launcher
+                        .as_ref()
+                        .is_none_or(|window| !window.response.rect.contains(p))
+                })
+        {
+            close = true;
+        }
+
         if let Some(i) = chosen {
-            if let Some((_, idx, _)) = matches.get(i) {
-                if let Some(s) = &self.folder {
-                    let path = s.files[*idx].path.clone();
-                    self.open_file(&path);
+            if let Some(row) = rows.get(i).cloned() {
+                match row {
+                    LaunchRow::Command { spec, .. } => self.launch(spec.action, ctx),
+                    LaunchRow::File { path, .. } => self.open_file(&path),
                 }
             }
             close = true;
@@ -5965,6 +6418,268 @@ fn apply_style(ctx: &egui::Context, pal: &Palette, typo: &Typography, scale: f32
     });
 }
 
+
+// ---------------------------------------------------------------------------
+// The launcher
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Launch {
+    Contents,
+    Search,
+    CopyBlock,
+    CloseFile,
+    Bookmark,
+    Reload,
+    Index,
+    OpenFolder,
+    FocusLens,
+    SoftWrap,
+    LineNumbers,
+    Distilled,
+    Markdown,
+    NextTheme,
+    PrevTheme,
+    Larger,
+    Smaller,
+    Settings,
+    Keys,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LaunchGroup {
+    Here,
+    Folder,
+    Zenith,
+}
+
+impl LaunchGroup {
+    fn rank(self) -> u8 {
+        match self {
+            LaunchGroup::Here => 0,
+            LaunchGroup::Folder => 1,
+            LaunchGroup::Zenith => 2,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            LaunchGroup::Here => "HERE",
+            LaunchGroup::Folder => "FOLDER",
+            LaunchGroup::Zenith => "ZENITH",
+        }
+    }
+}
+
+struct CommandSpec {
+    action: Launch,
+    label: &'static str,
+    group: LaunchGroup,
+    shortcut: Option<&'static str>,
+    keywords: &'static str,
+}
+
+const LAUNCH_COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        action: Launch::Contents,
+        label: "Contents",
+        group: LaunchGroup::Here,
+        shortcut: Some("o"),
+        keywords: "outline symbols headings document",
+    },
+    CommandSpec {
+        action: Launch::Search,
+        label: "Search this file",
+        group: LaunchGroup::Here,
+        shortcut: Some("/"),
+        keywords: "find in file grep search",
+    },
+    CommandSpec {
+        action: Launch::CopyBlock,
+        label: "Copy block",
+        group: LaunchGroup::Here,
+        shortcut: Some("y"),
+        keywords: "clipboard yank copy",
+    },
+    CommandSpec {
+        action: Launch::CloseFile,
+        label: "Close file",
+        group: LaunchGroup::Here,
+        shortcut: Some("q"),
+        keywords: "close put down file",
+    },
+    CommandSpec {
+        action: Launch::Bookmark,
+        label: "Bookmark",
+        group: LaunchGroup::Here,
+        shortcut: Some("M"),
+        keywords: "favourite favorite star mark",
+    },
+    CommandSpec {
+        action: Launch::Reload,
+        label: "Reload file",
+        group: LaunchGroup::Here,
+        shortcut: Some("r"),
+        keywords: "reload refresh disk reread",
+    },
+    CommandSpec {
+        action: Launch::Index,
+        label: "Index",
+        group: LaunchGroup::Folder,
+        shortcut: Some("tab"),
+        keywords: "tree files folder index sidebar",
+    },
+    CommandSpec {
+        action: Launch::OpenFolder,
+        label: "Open folder…",
+        group: LaunchGroup::Folder,
+        shortcut: Some("⌘O"),
+        keywords: "open project directory folder",
+    },
+    CommandSpec {
+        action: Launch::FocusLens,
+        label: "Focus lens",
+        group: LaunchGroup::Zenith,
+        shortcut: Some("f"),
+        keywords: "dim attention focus zen lens",
+    },
+    CommandSpec {
+        action: Launch::SoftWrap,
+        label: "Soft wrap",
+        group: LaunchGroup::Zenith,
+        shortcut: None,
+        keywords: "wrap lines soft",
+    },
+    CommandSpec {
+        action: Launch::LineNumbers,
+        label: "Line numbers",
+        group: LaunchGroup::Zenith,
+        shortcut: Some("#"),
+        keywords: "numbers gutter lines",
+    },
+    CommandSpec {
+        action: Launch::Distilled,
+        label: "Distilled",
+        group: LaunchGroup::Zenith,
+        shortcut: Some("d"),
+        keywords: "types punctuation simplify distill",
+    },
+    CommandSpec {
+        action: Launch::Markdown,
+        label: "Render markdown",
+        group: LaunchGroup::Zenith,
+        shortcut: Some("x"),
+        keywords: "markdown render preview source",
+    },
+    CommandSpec {
+        action: Launch::NextTheme,
+        label: "Next theme",
+        group: LaunchGroup::Zenith,
+        shortcut: Some("t"),
+        keywords: "theme palette colour color atmosphere next",
+    },
+    CommandSpec {
+        action: Launch::PrevTheme,
+        label: "Previous theme",
+        group: LaunchGroup::Zenith,
+        shortcut: Some("T"),
+        keywords: "theme palette colour color atmosphere previous",
+    },
+    CommandSpec {
+        action: Launch::Larger,
+        label: "Larger type",
+        group: LaunchGroup::Zenith,
+        shortcut: Some("="),
+        keywords: "type font size larger zoom",
+    },
+    CommandSpec {
+        action: Launch::Smaller,
+        label: "Smaller type",
+        group: LaunchGroup::Zenith,
+        shortcut: Some("-"),
+        keywords: "type font size smaller zoom",
+    },
+    CommandSpec {
+        action: Launch::Settings,
+        label: "Settings",
+        group: LaunchGroup::Zenith,
+        shortcut: Some("s"),
+        keywords: "preferences options settings",
+    },
+    CommandSpec {
+        action: Launch::Keys,
+        label: "Keys",
+        group: LaunchGroup::Zenith,
+        shortcut: Some("?"),
+        keywords: "shortcuts keymap keyboard help keys",
+    },
+];
+
+fn launch_command_score(spec: &CommandSpec, query: &str) -> Option<i32> {
+    if query.is_empty() {
+        return Some(0);
+    }
+    let q = query.to_lowercase();
+    let label = spec.label.to_lowercase();
+    if label == q {
+        return Some(300);
+    }
+    if label.starts_with(&q) {
+        return Some(240 - (label.len() as i32 - q.len() as i32).min(40));
+    }
+    if label.contains(&q) {
+        return Some(180);
+    }
+    let mut score = 0;
+    for word in spec.keywords.split_whitespace() {
+        if word == q {
+            score = score.max(160);
+        } else if word.starts_with(&q) {
+            score = score.max(140);
+        }
+    }
+    if score > 0 {
+        return Some(score);
+    }
+    fuzzy::match_path(spec.label, &q)
+        .map(|hit| (hit.score - 20).max(1))
+}
+
+#[derive(Clone)]
+enum LaunchRow {
+    Command {
+        spec: &'static CommandSpec,
+        detail: Option<String>,
+        score: i32,
+    },
+    File {
+        rel: String,
+        path: PathBuf,
+        marked: bool,
+        positions: Vec<usize>,
+        score: i32,
+    },
+}
+
+impl LaunchRow {
+    fn group(&self) -> LaunchGroup {
+        match self {
+            LaunchRow::Command { spec, .. } => spec.group,
+            LaunchRow::File { .. } => LaunchGroup::Folder,
+        }
+    }
+
+    fn score(&self) -> i32 {
+        match self {
+            LaunchRow::Command { score, .. } | LaunchRow::File { score, .. } => *score,
+        }
+    }
+
+    fn is_file(&self) -> bool {
+        matches!(self, LaunchRow::File { .. })
+    }
+}
+
 const HELP_GROUPS: &[(&str, &[(&str, &str)])] = &[
     (
         "reading",
@@ -5992,7 +6707,8 @@ const HELP_GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("tab", "open the index and move the keyboard into it"),
             ("j k l h", "in the index: move, open, back out"),
             ("enter, G, gg", "in the index: open, last row, first row"),
-            ("⌘P or ⌘K or ctrl-p", "find a file in the folder"),
+            ("⌘K", "the launcher: files, views, actions"),
+            ("⌘P or ctrl-p", "find a file in the folder"),
             ("/ or ⌘F", "find inside this file"),
             ("q", "close the file, and go back to the one you came from"),
             ("⌘O", "open a folder to read"),
@@ -6005,7 +6721,8 @@ const HELP_GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("f", "focus lens: dim everything but this block"),
             ("d", "distilled: fade types and punctuation away"),
             ("y Y", "copy the block / the line"),
-            ("m", "bookmark this file"),
+            ("M", "bookmark this file"),
+            ("t T", "next / previous theme"),
             ("1-6", "pick a theme"),
             ("- =", "smaller / larger type"),
             ("#", "toggle line numbers"),
@@ -6154,5 +6871,46 @@ mod tree_tests {
     fn a_folder_inside_an_open_folder_belongs_to_it() {
         let rows = vec![dir("src", 0, true), dir("src/app", 1, true)];
         assert_eq!(parent_index(&rows, 1), Some(0));
+    }
+}
+
+#[cfg(test)]
+mod launcher_tests {
+    use super::{
+        CommandSpec, LAUNCH_COMMANDS, Launch, launch_command_score,
+    };
+
+    fn spec(action: Launch) -> &'static CommandSpec {
+        LAUNCH_COMMANDS
+            .iter()
+            .find(|s| s.action == action)
+            .expect("a command for every action")
+    }
+
+    #[test]
+    fn line_finds_line_numbers_not_contents() {
+        // `Contents` has the keyword "outline"; a keyword may not be found by its
+        // middle. Typing "line" means the gutter, not the table of contents.
+        assert!(launch_command_score(spec(Launch::Contents), "line").is_none());
+        assert!(launch_command_score(spec(Launch::LineNumbers), "line").is_some());
+    }
+
+    #[test]
+    fn theme_and_focus_find_their_actions() {
+        assert!(launch_command_score(spec(Launch::NextTheme), "theme").is_some());
+        assert!(launch_command_score(spec(Launch::PrevTheme), "theme").is_some());
+        assert!(launch_command_score(spec(Launch::FocusLens), "focus").is_some());
+        assert!(launch_command_score(spec(Launch::Keys), "shortcuts").is_some());
+    }
+
+    #[test]
+    fn the_keycaps_are_the_keys_the_page_uses() {
+        assert_eq!(spec(Launch::Bookmark).shortcut, Some("M"));
+        assert_eq!(spec(Launch::LineNumbers).shortcut, Some("#"));
+        assert_eq!(spec(Launch::NextTheme).shortcut, Some("t"));
+        assert_eq!(spec(Launch::PrevTheme).shortcut, Some("T"));
+        assert_eq!(spec(Launch::Settings).shortcut, Some("s"));
+        assert_eq!(spec(Launch::Keys).shortcut, Some("?"));
+        assert_eq!(spec(Launch::SoftWrap).shortcut, None, "soft wrap has no key");
     }
 }

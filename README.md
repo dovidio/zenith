@@ -27,9 +27,13 @@ where it is defined, and `ctrl-o` / `ctrl-i` to go back and forward through ever
 have been. The page opens alone; a small mark at the top opens four doors — the index, the
 contents, the launcher and settings. `tab` opens the index with the keyboard in it: `j k`
 to move, `l` or `enter` to open a file or fold a folder, `h` to back out, `esc` to return
-to the page. Two finders, deliberately separate: `⌘P` (or `⌘K`, or `ctrl-p`) finds *a
-file* in the open folder, `/` (or `⌘F`) searches *inside the file* you are reading. The
-key map lives in Settings › Keys; `?` opens that page.
+to the page. `⌘K` opens the launcher: one field for files, views and the page's own actions.
+`⌘P` (or `ctrl-p`) keeps that sheet scoped to files; `/` (or `⌘F`) searches *inside the file*
+you are reading. The launcher can toggle focus lens, soft wrap, line numbers, distilled
+type and rendered Markdown, cycle the themes, change the type size, and take you to the
+index or contents. Toggles carry their current state, and every keyed action carries its
+key beside the name, so the launcher is where the shortcuts are learned; the complete map
+lives in Settings › Keys, and `?` opens that page.
 
 The look is a system, not a mood: the six palettes, the three voices, the shape of a
 sheet and the things this program refuses are written down in [DESIGN.md](DESIGN.md).

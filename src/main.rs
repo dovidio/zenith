@@ -198,16 +198,16 @@ READING KEYS:
     tab                       open the index and move the keyboard into it
     o                         contents
     /  or ⌘F                  find inside this file
-    ⌘P, ⌘K or ctrl-p          find a file in the folder
+    ⌘K                        the launcher: files, views, actions
+    ⌘P or ctrl-p              find a file in the folder
     s  or ⌘,                  settings
     ?                         the key map (Settings › Keys)
     esc                       close what is open
     gd                        go to the definition of what is under the cursor
-    b                         bookmark this file
+    M                         bookmark this file
+    t / T                     next / previous theme
     q                         close the file, back to the one you came from
     ⌘O                        open a folder
-    ⌘,                        settings panel
-    ?                         help
 ";
 
 fn die(msg: &str) -> ! {
