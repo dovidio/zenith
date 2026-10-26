@@ -283,6 +283,8 @@ pub struct Zenith {
     lsp_path_dirty: std::collections::BTreeSet<String>,
     /// The theme tiles' sample, toned once and painted six times.
     theme_preview: Option<Vec<SampleLine>>,
+    /// When "restore defaults" was first clicked, so the second click has to be meant.
+    reset_asked: Option<f64>,
     /// A search for those servers, running in the background.
     discovering: Option<Discovery>,
     /// Servers that have been started, at most one per language and folder.
@@ -428,6 +430,7 @@ impl Zenith {
             lsp_kinds: Vec::new(),
             lsp_path_dirty: std::collections::BTreeSet::new(),
             theme_preview: None,
+            reset_asked: None,
             discovering: None,
             servers: Vec::new(),
             nav: None,
@@ -1597,6 +1600,10 @@ impl Zenith {
             self.palette = *p;
             self.store.config.theme = p.name.to_string();
             self.store.save_config();
+            // The page is not the only thing with ink in it: every widget egui draws takes
+            // its colours from the palette too, and a panel still wearing the old one is
+            // how you end up with a dark slider on a light page.
+            apply_style(ctx, p, &self.typo, self.scale);
             // Whatever the system still draws — menus, the title bar if it is visible, a
             // window manager's own preferences — should agree with the page.
             ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(if p.is_dark() {
@@ -3036,12 +3043,14 @@ impl Zenith {
         let title = self.typo.prose_id(20.0 * self.scale);
         let head = self.typo.prose_id(14.5 * self.scale);
         let small = self.typo.ui_id(11.5 * self.scale);
+        let values = self.typo.code_id(11.5 * self.scale);
         let width = 560.0;
         let rail = 118.0;
         let mut open = self.show_settings;
         let mut changed = false;
         let mut lsp_changed = false;
         let mut tree_changed = false;
+        let mut reset_settings = false;
         let mut restart: Option<String> = None;
         let mut new_mono = self.typo.mono_idx;
         let mut new_prose = self.typo.prose_idx;
@@ -3096,6 +3105,28 @@ impl Zenith {
                                 self.settings_tab = i;
                             }
                         }
+                        ui.add_space(22.0);
+                        // Reverting is the one thing here that cannot be undone by
+                        // putting it back, so it asks twice: the first click turns the
+                        // words into the question.
+                        let now = ui.input(|i| i.time);
+                        let armed = self.reset_asked.is_some_and(|t| now - t < 5.0);
+                        let text = if armed { "yes, reset" } else { "restore defaults" };
+                        let colour = if armed { pal.tone(Tone::Invalid) } else { pal.ink_faint };
+                        let reset = ui.add(
+                            egui::Label::new(
+                                RichText::new(text).font(small.clone()).color(colour),
+                            )
+                            .sense(egui::Sense::click()),
+                        );
+                        if reset.clicked() {
+                            if armed {
+                                self.reset_asked = None;
+                                reset_settings = true;
+                            } else {
+                                self.reset_asked = Some(now);
+                            }
+                        }
                         rail_edge = ui.min_rect().right();
                     });
                     ui.add_space(18.0);
@@ -3148,19 +3179,47 @@ impl Zenith {
                                         tree_changed |= tree;
                                     });
                                 });
-                                ui.add_space(10.0);
+                                ui.add_space(6.0);
                                 let cfg = &mut self.store.config;
-                                ui.add(
-                                    egui::Slider::new(&mut cfg.measure, 40..=160)
-                                        .text(RichText::new("measure").font(font.clone())),
+                                let mut measure = cfg.measure as f32;
+                                if line_slider(
+                                    ui,
+                                    &pal,
+                                    &font,
+                                    &values,
+                                    Slider {
+                                        label: "measure",
+                                        value: &mut measure,
+                                        range: 40.0..=160.0,
+                                        decimals: 0,
+                                    },
+                                ) {
+                                    cfg.measure = measure.round() as usize;
+                                    changed = true;
+                                }
+                                changed |= line_slider(
+                                    ui,
+                                    &pal,
+                                    &font,
+                                    &values,
+                                    Slider {
+                                        label: "leading",
+                                        value: &mut cfg.leading,
+                                        range: 1.2..=2.2,
+                                        decimals: 2,
+                                    },
                                 );
-                                ui.add(
-                                    egui::Slider::new(&mut cfg.leading, 1.2..=2.2)
-                                        .text(RichText::new("leading").font(font.clone())),
-                                );
-                                ui.add(
-                                    egui::Slider::new(&mut self.scale, 0.7..=2.0)
-                                        .text(RichText::new("type size").font(font.clone())),
+                                changed |= line_slider(
+                                    ui,
+                                    &pal,
+                                    &font,
+                                    &values,
+                                    Slider {
+                                        label: "type size",
+                                        value: &mut self.scale,
+                                        range: 0.7..=2.0,
+                                        decimals: 2,
+                                    },
                                 );
                             }
                             // -------------------------------------------- type
@@ -3385,6 +3444,9 @@ impl Zenith {
                 }
             });
 
+        if reset_settings {
+            self.reset_defaults(ctx);
+        }
         if let Some(id) = restart {
             self.restart_server(&id);
         }
@@ -3420,6 +3482,42 @@ impl Zenith {
             open = false;
         }
         self.show_settings = open;
+    }
+
+    /// Put every piece of taste back to how it shipped.
+    ///
+    /// The servers' paths stay: a path is something the reader went and found on their own
+    /// machine, not a preference, and throwing it away would cost them the search again.
+    fn reset_defaults(&mut self, ctx: &egui::Context) {
+        let mut fresh = crate::catalog::Config::default();
+        fresh.lsp.servers = std::mem::take(&mut self.store.config.lsp.servers);
+        self.store.config = fresh;
+        self.scale = self.store.config.font_scale;
+        self.palette = theme::by_name(&self.store.config.theme);
+        self.typo = typography::build(0, 0, 0);
+        ctx.set_fonts(self.typo.defs.clone());
+        apply_style(ctx, &self.palette, &self.typo, self.scale);
+        self.rebuild_metrics(ctx);
+        self.store.save_config();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(
+            !self.store.config.frameless,
+        ));
+        ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(
+            if self.palette.is_dark() {
+                egui::SystemTheme::Dark
+            } else {
+                egui::SystemTheme::Light
+            },
+        ));
+        // The tree's filters and the servers both follow the defaults.
+        match self.folder.as_ref().map(|f| f.root.clone()) {
+            Some(root) => {
+                let focus = self.open.as_ref().map(|o| o.path.clone());
+                self.open_folder(&root, focus);
+            }
+            None => self.start_discovery(),
+        }
+        self.say("back to the defaults");
     }
 
     /// What a language's server is doing, and why, for the settings panel.
@@ -4386,6 +4484,89 @@ fn theme_tile(
         }
         y += step;
     }
+}
+
+/// One of the page's numbers: what it is called, where it is stored, and how to write it.
+struct Slider<'a> {
+    label: &'a str,
+    value: &'a mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    decimals: usize,
+}
+
+/// A slider for a page made of hairlines.
+///
+/// egui's own is a pill on a rail with the number in a rounded box — the one piece of
+/// chrome in this program that looks like a form. This one is the house style: the label
+/// and its value on one line, the value set in the code face where it can be read, and a
+/// rule under them filled in the accent up to the hand.
+fn line_slider(
+    ui: &mut Ui,
+    pal: &Palette,
+    label_font: &egui::FontId,
+    value_font: &egui::FontId,
+    spec: Slider<'_>,
+) -> bool {
+    let Slider {
+        label,
+        value,
+        range,
+        decimals,
+    } = spec;
+    let (low, high) = (*range.start(), *range.end());
+    let width = ui.available_width();
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(width, 30.0), egui::Sense::click_and_drag());
+
+    let mut changed = false;
+    if response.dragged() || response.clicked() {
+        if let Some(pos) = response.interact_pointer_pos() {
+            let t = ((pos.x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
+            let wanted = low + t * (high - low);
+            if (wanted - *value).abs() > f32::EPSILON {
+                *value = wanted;
+                changed = true;
+            }
+        }
+    }
+
+    let painter = ui.painter();
+    let text = format!("{value:.*}", decimals);
+    let galley = painter.layout_no_wrap(text, value_font.clone(), pal.ink);
+    let value_w = galley.size().x;
+    painter.text(
+        Pos2::new(rect.left(), rect.top()),
+        Align2::LEFT_TOP,
+        label,
+        label_font.clone(),
+        pal.ink_soft,
+    );
+    painter.galley(
+        Pos2::new(rect.right() - value_w, rect.top()),
+        galley,
+        pal.ink,
+    );
+
+    // The track: a rule across, filled to the hand, with the hand a tick on it.
+    let y = rect.bottom() - 8.0;
+    let fraction = ((*value - low) / (high - low)).clamp(0.0, 1.0);
+    let hand = if response.hovered() || response.dragged() {
+        pal.accent
+    } else {
+        pal.ink_soft
+    };
+    painter.hline(rect.x_range(), y, Stroke::new(1.0, pal.edge));
+    painter.hline(
+        rect.left()..=(rect.left() + fraction * rect.width()),
+        y,
+        Stroke::new(1.5, pal.accent),
+    );
+    painter.vline(
+        rect.left() + fraction * rect.width(),
+        egui::Rangef::new(y - 5.0, y + 5.0),
+        Stroke::new(1.5, hand),
+    );
+    changed
 }
 
 /// A column of rendered checkboxes, drawn as one grid so the settings panel stays short.
