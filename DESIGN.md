@@ -280,7 +280,10 @@ grammar, and they never appear as commands here. The launcher is where the readi
 advertises what the program can do; the empty page has one door of its own.
 
 `⌘P` opens it scoped to files; `s` and `⌘,` open settings directly. These are back doors
-for people who already know them. Nothing in the reading state advertises a key.
+for people who already know them. Nothing in the reading state advertises a key: this is
+the one place the design chooses calm over discoverability. The mark is the visible door,
+and the empty page always offers `Open a folder…`, so a new reader is never completely
+stuck.
 
 `esc` or a click outside closes it; the arrows move; enter or a click opens.
 
