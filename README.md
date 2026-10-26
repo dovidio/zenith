@@ -30,6 +30,9 @@ folder, `h` to back out, `esc` to return to the page. Two finders, deliberately 
 `⌘P` (or `ctrl-p`) finds *a file* in the open folder, `/` (or `⌘F`) searches *inside the
 file* you are reading. Press `?` in the app for the whole map.
 
+The look is a system, not a mood: the six palettes, the three voices, the shape of a
+sheet and the things this program refuses are written down in [DESIGN.md](DESIGN.md).
+
 ---
 
 ## Why it does not look like your editor

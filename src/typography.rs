@@ -83,6 +83,7 @@ static FAMILIES: &[(Role, Family)] = &[
     (Role::Prose, fam("New York", &["newyork"], "elegant, but its underscore is a hairline")),
     (Role::Prose, fam("Iowan Old Style", &["iowanoldstyle"], "a book face: warm, calligraphic")),
     (Role::Prose, fam("Charter", &["charter"], "designed to survive cheap printing")),
+    (Role::Prose, fam("Newsreader", &["newsreader"], "a screen serif with newsroom briskness")),
     (Role::Prose, fam("Source Serif", &["sourceserif"], "a screen serif with real italics")),
     (Role::Prose, fam("EB Garamond", &["ebgaramond"], "the renaissance letter")),
     (Role::Prose, fam("Garamond", &["garamond"], "old-style, quiet")),
@@ -103,6 +104,7 @@ static FAMILIES: &[(Role, Family)] = &[
     // ---- chrome ----
     (Role::Ui, fam("SF Pro", &["sfns", "sfpro"], "the system voice")),
     (Role::Ui, fam("Inter", &["inter"], "neutral, made for screens")),
+    (Role::Ui, fam("Work Sans", &["worksans"], "a grotesque for interfaces and labels")),
     (Role::Ui, fam("Helvetica Neue", &["helveticaneue", "helvetica"], "neutral, invisible")),
     (Role::Ui, fam("Avenir Next", &["avenirnext", "avenir"], "geometric warmth")),
     (Role::Ui, fam("Optima", &["optima"], "humanist, flared; good for labels")),

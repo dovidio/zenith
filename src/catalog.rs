@@ -11,6 +11,20 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+/// The designed range of the page's three numbers.
+///
+/// The range is part of the design, not of the config: a measure wider than 100
+/// characters is no longer a measure, and a page can be made legible without being made
+/// a different design. Values outside the range are brought back into it once, when the
+/// configuration is read, so the hand on a slider and the number beside it never
+/// disagree.
+pub const MEASURE_MIN: usize = 60;
+pub const MEASURE_MAX: usize = 100;
+pub const LEADING_MIN: f32 = 1.30;
+pub const LEADING_MAX: f32 = 1.90;
+pub const SCALE_MIN: f32 = 0.80;
+pub const SCALE_MAX: f32 = 1.80;
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Config {
@@ -119,6 +133,15 @@ impl Default for Config {
     }
 }
 
+impl Config {
+    /// Bring taste written by hand, or by an older zenith, inside the page's range.
+    pub fn settle(&mut self) {
+        self.measure = self.measure.clamp(MEASURE_MIN, MEASURE_MAX);
+        self.leading = self.leading.clamp(LEADING_MIN, LEADING_MAX);
+        self.font_scale = self.font_scale.clamp(SCALE_MIN, SCALE_MAX);
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(default)]
 pub struct Session {
@@ -146,7 +169,7 @@ impl Store {
             eprintln!("zenith: config dir {dir:?} is not writable ({e}); running in memory");
             ephemeral = true;
         }
-        let config = match std::fs::read_to_string(dir.join("config.toml")) {
+        let mut config = match std::fs::read_to_string(dir.join("config.toml")) {
             Ok(s) => match toml::from_str::<Config>(&s) {
                 Ok(c) => c,
                 Err(e) => {
@@ -156,6 +179,7 @@ impl Store {
             },
             Err(_) => Config::default(),
         };
+        config.settle();
         let session = match std::fs::read_to_string(dir.join("session.toml")) {
             Ok(s) => toml::from_str::<Session>(&s).unwrap_or_default(),
             Err(_) => Session::default(),
@@ -306,6 +330,18 @@ trusted = ["/Users/someone/code/thing"]
         let config: Config = toml::from_str(old).unwrap();
         assert_eq!(config.measure, 72);
         assert!(config.lsp.enabled, "servers are on unless turned off");
+    }
+
+    #[test]
+    fn a_page_setting_outside_the_page_is_brought_back() {
+        // A config is a text file, and a text file can say anything. The slider must not
+        // show a hand at one end and a number from beyond it.
+        let mut config: Config =
+            toml::from_str("measure = 160\nleading = 2.4\nfont_scale = 0.4\n").unwrap();
+        config.settle();
+        assert_eq!(config.measure, MEASURE_MAX);
+        assert_eq!(config.leading, LEADING_MAX);
+        assert_eq!(config.font_scale, SCALE_MIN);
     }
 
     #[test]

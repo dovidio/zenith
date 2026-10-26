@@ -146,6 +146,64 @@ fn launch(opts: Startup) {
 /// The settings rail, top to bottom.
 const SETTINGS_SECTIONS: [&str; 4] = ["Page", "Type", "Theme", "Language"];
 
+// ---------------------------------------------------------------------------
+// The shape of the furniture
+// ---------------------------------------------------------------------------
+
+/// The only generous corner in the program: a sheet laid on the desk.
+const SHEET_RADIUS: u8 = 14;
+/// A theme swatch is a card, not a sheet.
+const TILE_RADIUS: u8 = 8;
+/// A row's wash and a control's corner.
+const ROW_RADIUS: u8 = 4;
+/// Letterspacing for a label that should read as a printed plate, in ems.
+const LABEL_TRACKING: f32 = 0.12;
+/// The masthead is the one place that is tracked a little wider.
+const MASTHEAD_TRACKING: f32 = 0.14;
+
+/// The shadow under a sheet: paper lifted off the desk, not a light source.
+fn sheet_shadow(pal: &Palette) -> egui::epaint::Shadow {
+    egui::epaint::Shadow {
+        offset: [0, 18],
+        blur: 48,
+        spread: 0,
+        color: Color32::from_black_alpha(if pal.is_dark() { 110 } else { 46 }),
+    }
+}
+
+/// Text that has been letterspaced.
+///
+/// egui's `Painter::text` cannot track a run, and the two places that need tracking —
+/// the masthead and the panel plates — are exactly the places where tracking is the
+/// difference between a label and tiny UI. Returns the rectangle it occupied, so a run
+/// can be followed by another.
+#[allow(clippy::too_many_arguments)]
+fn paint_tracked(
+    painter: &egui::Painter,
+    pos: Pos2,
+    align: Align2,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    tracking: f32,
+) -> Rect {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        text,
+        0.0,
+        TextFormat {
+            font_id: font,
+            extra_letter_spacing: tracking,
+            color,
+            ..Default::default()
+        },
+    );
+    let galley = painter.layout_job(job);
+    let rect = align.anchor_size(pos, galley.size());
+    painter.galley(rect.min, galley, color);
+    rect
+}
+
 /// What a theme is shown by: a few lines of the sort of thing this program is for.
 ///
 /// Short enough to fit in a tile, and written to use every tone the page has — a doc
@@ -1732,7 +1790,24 @@ impl eframe::App for Zenith {
                         Some(path) if self.open.as_ref().map(|o| &o.path) != Some(&path) => {
                             self.open_file(&path)
                         }
-                        Some(path) => self.expand_to(&path),
+                        Some(path) => {
+                            // The file was opened before the walk had finished, so it
+                            // only knew its bare file name. The folder now knows where it
+                            // lives, and the masthead is supposed to say so.
+                            if let Some(rel) = self
+                                .folder
+                                .as_ref()
+                                .and_then(|s| s.file(&path).map(|f| f.rel.clone()))
+                            {
+                                if let Some(open) = self.open.as_mut() {
+                                    if open.path == path {
+                                        open.rel = rel;
+                                        self.title_dirty = true;
+                                    }
+                                }
+                            }
+                            self.expand_to(&path);
+                        }
                         None => {}
                     }
                     self.start_discovery();
@@ -1957,8 +2032,8 @@ impl Zenith {
 
     fn top_bar(&mut self, ui: &mut Ui) {
         let pal = self.palette;
-        let font = self.typo.ui_id(12.5 * self.scale);
-        let strong = self.typo.prose_id(15.0 * self.scale);
+        let dir_font = self.typo.ui_id(12.0 * self.scale);
+        let file_font = self.typo.code_id(12.5 * self.scale);
         let ctx = ui.ctx().clone();
         // On macOS the system still draws its title and its traffic lights over the top of
         // the window, and a transparent title bar does not stop it — the title is drawn
@@ -1970,7 +2045,7 @@ impl Zenith {
             .as_ref()
             .map(|o| o.rel.split('/').map(|s| s.to_string()).collect())
             .unwrap_or_default();
-        egui::Panel::top("zenith-top")
+        let panel_rect = egui::Panel::top("zenith-top")
             .resizable(false)
             .exact_size(40.0 + strip)
             .show_separator_line(false)
@@ -2014,37 +2089,61 @@ impl Zenith {
                 let bar_rect = ui.max_rect();
                 let y = bar_rect.top() + strip + (bar_rect.height() - strip) * 0.5;
                 let painter = ui.painter();
-                let mark = painter.text(
+                // An imprint, not a logo: spaced small caps, the quietest ink.
+                let brand_size = 10.5 * self.scale;
+                let mark = paint_tracked(
+                    painter,
                     Pos2::new(bar_rect.left() + 1.0, y),
                     Align2::LEFT_CENTER,
                     "ZENITH",
-                    self.typo.prose_id(13.0 * self.scale),
+                    self.typo.ui_id(brand_size),
                     pal.ink_faint,
+                    MASTHEAD_TRACKING * brand_size,
                 );
-                let mut x = mark.right() + 18.0;
-                for (i, c) in crumbs.iter().enumerate() {
-                    let last = i + 1 == crumbs.len();
-                    let f = if last { strong.clone() } else { font.clone() };
-                    let color = if last { pal.ink } else { pal.ink_soft };
-                    let r = painter.text(Pos2::new(x, y), Align2::LEFT_CENTER, c, f, color);
-                    x = r.right() + 4.0;
-                    if !last {
-                        let s = painter.text(
+                let mark_sep = |x: f32, painter: &egui::Painter| -> f32 {
+                    painter
+                        .text(
                             Pos2::new(x, y),
                             Align2::LEFT_CENTER,
                             self.typo.marks.pick("›"),
-                            font.clone(),
+                            self.typo.ui_id(11.5 * self.scale),
                             pal.ink_faint,
-                        );
-                        x = s.right() + 4.0;
+                        )
+                        .right()
+                };
+                let mut x = mark.right() + 12.0;
+                if !crumbs.is_empty() {
+                    x = mark_sep(x, painter) + 10.0;
+                }
+                for (i, c) in crumbs.iter().enumerate() {
+                    let last = i + 1 == crumbs.len();
+                    // A path is made of names from the codebase, so the file itself is
+                    // set in the code face; the folders are chrome and step back.
+                    let f = if last { file_font.clone() } else { dir_font.clone() };
+                    let color = if last { pal.ink } else { pal.ink_faint };
+                    let r = painter.text(Pos2::new(x, y), Align2::LEFT_CENTER, c, f, color);
+                    x = r.right() + 6.0;
+                    if !last {
+                        x = mark_sep(x, painter) + 6.0;
                     }
                 }
-            });
+            })
+            .response
+            .rect;
+        // The frame is drawn, not implied: one hairline under the masthead.
+        ui.painter().hline(
+            panel_rect.x_range(),
+            panel_rect.bottom() - 0.5,
+            Stroke::new(1.0, pal.edge),
+        );
     }
 
     fn status_bar(&mut self, ui: &mut Ui) {
         let pal = self.palette;
-        let font = self.typo.ui_id(11.5 * self.scale);
+        // The left half of the rail is measurements, so it is set in the code face. The
+        // invitation on the right is a sentence, so it is set in chrome.
+        let metrics = self.typo.code_id(11.0 * self.scale);
+        let font = self.typo.ui_id(11.0 * self.scale);
         let now = ui.input(|i| i.time);
 
         // What the strip says, when there is something to say. The position readout is
@@ -2091,17 +2190,16 @@ impl Zenith {
         } else if self.tree_focus {
             keys("tree: j k move · l open · h back · G end · / find · esc to the page").to_string()
         } else {
-            keys("{mod}P find file · / search in file · Z zen · f focus · tab tree · ? keys")
-                .to_string()
+            keys("{mod}P find file · Z zen · ? keys").to_string()
         };
-        egui::Panel::bottom("zenith-status")
+        let panel_rect = egui::Panel::bottom("zenith-status")
             .resizable(false)
-            .exact_size(26.0)
+            .exact_size(24.0)
             .show_separator_line(false)
             .frame(
                 Frame::NONE
                     .fill(pal.panel)
-                    .inner_margin(Margin::symmetric(14, 4)),
+                    .inner_margin(Margin::symmetric(14, 3)),
             )
             .show(ui, |ui| {
                 let y = ui.min_rect().center().y;
@@ -2109,7 +2207,7 @@ impl Zenith {
                     Pos2::new(ui.min_rect().left(), y),
                     Align2::LEFT_CENTER,
                     left,
-                    font.clone(),
+                    metrics.clone(),
                     ink,
                 );
                 ui.painter().text(
@@ -2119,7 +2217,14 @@ impl Zenith {
                     font.clone(),
                     pal.ink_faint,
                 );
-            });
+            })
+            .response
+            .rect;
+        ui.painter().hline(
+            panel_rect.x_range(),
+            panel_rect.top() + 0.5,
+            Stroke::new(1.0, pal.edge),
+        );
     }
 
     /// The folder panel's rows, in the order they appear on screen.
@@ -2137,7 +2242,7 @@ impl Zenith {
 
     fn folder_panel(&mut self, ui: &mut Ui) {
         let pal = self.palette;
-        let font = self.typo.ui_id(PANEL_ROW_FONT * self.scale);
+        let font = self.typo.code_id(PANEL_ROW_FONT * self.scale);
         let label_font = self.typo.ui_id(PANEL_LABEL_FONT * self.scale);
 
         // Collect what we need before mutating. The rows come from the one list the
@@ -2151,11 +2256,11 @@ impl Zenith {
         let mut clicked_file: Option<PathBuf> = None;
         let mut toggled_dir: Option<String> = None;
 
-        egui::Panel::left("zenith-folder")
+        let panel_rect = egui::Panel::left("zenith-folder")
             .resizable(true)
-            .default_size(266.0)
-            .min_size(180.0)
-            .max_size(460.0)
+            .default_size(252.0)
+            .min_size(200.0)
+            .max_size(340.0)
             .show_separator_line(false)
             .frame(
                 Frame::NONE
@@ -2173,12 +2278,14 @@ impl Zenith {
                         Stroke::new(1.0, pal.edge),
                     );
                     ui.add_space(6.0);
-                    ui.painter().text(
+                    paint_tracked(
+                        ui.painter(),
                         Pos2::new(ui.cursor().left() + 1.0, ui.cursor().top() + PANEL_LABEL_DROP),
                         Align2::LEFT_CENTER,
-                        format!("FOLDER · {folder_name}"),
+                        &format!("FOLDER · {folder_name}"),
                         label_font.clone(),
                         pal.ink_faint,
+                        LABEL_TRACKING * PANEL_LABEL_FONT * self.scale,
                     );
                 }
                 if let Some(s) = &self.folder {
@@ -2209,7 +2316,7 @@ impl Zenith {
                     if s.filtered > 0 {
                         let note = format!(
                             "{} file{} not shown: not source, hidden, or build output \
-                             (settings › folder)",
+                             (settings › page)",
                             s.filtered,
                             if s.filtered == 1 { "" } else { "s" }
                         );
@@ -2283,7 +2390,9 @@ impl Zenith {
                             }
                         }
                     });
-            });
+            })
+            .response
+            .rect;
 
         if let Some(rel) = toggled_dir {
             if !self.expanded.remove(&rel) {
@@ -2293,13 +2402,19 @@ impl Zenith {
         if let Some(path) = clicked_file {
             self.open_file(&path);
         }
+        // One hairline between the desk and the page, not a gap.
+        ui.painter().vline(
+            panel_rect.right() - 0.5,
+            panel_rect.y_range(),
+            Stroke::new(1.0, pal.edge),
+        );
     }
 
 
 
     fn outline_panel(&mut self, ui: &mut Ui) {
         let pal = self.palette;
-        let font = self.typo.ui_id(PANEL_ROW_FONT * self.scale);
+        let font = self.typo.code_id(PANEL_ROW_FONT * self.scale);
         let label_font = self.typo.ui_id(PANEL_LABEL_FONT * self.scale);
         let glyph_font = self.typo.code_id(11.0 * self.scale);
 
@@ -2336,11 +2451,11 @@ impl Zenith {
         let some_open = self.open.is_some();
         let mut jump: Option<usize> = None;
 
-        egui::Panel::right("zenith-outline")
+        let panel_rect = egui::Panel::right("zenith-outline")
             .resizable(true)
-            .default_size(280.0)
+            .default_size(240.0)
             .min_size(180.0)
-            .max_size(460.0)
+            .max_size(340.0)
             .show_separator_line(false)
             .frame(
                 Frame::NONE
@@ -2348,12 +2463,23 @@ impl Zenith {
                     .inner_margin(Margin::symmetric(PANEL_MARGIN_X, PANEL_MARGIN_Y)),
             )
             .show(ui, |ui| {
-                ui.painter().text(
+                // The same rule and the same rhythm as the folder panel, so the two
+                // plates sit on one line across the page.
+                ui.add_space(6.0);
+                ui.painter().hline(
+                    ui.min_rect().left()..=ui.min_rect().right(),
+                    ui.cursor().top(),
+                    Stroke::new(1.0, pal.edge),
+                );
+                ui.add_space(6.0);
+                paint_tracked(
+                    ui.painter(),
                     Pos2::new(ui.cursor().left() + 1.0, ui.cursor().top() + PANEL_LABEL_DROP),
                     Align2::LEFT_CENTER,
                     "CONTENTS",
                     label_font.clone(),
                     pal.ink_faint,
+                    LABEL_TRACKING * PANEL_LABEL_FONT * self.scale,
                 );
                 ui.add_space(PANEL_LABEL_GAP);
                 if !some_open {
@@ -2406,7 +2532,16 @@ impl Zenith {
                         }
                     });
                 let _ = title;
-            });
+            })
+            .response
+            .rect;
+
+        // The same hairline as the folder panel's, on its own side.
+        ui.painter().vline(
+            panel_rect.left() + 0.5,
+            panel_rect.y_range(),
+            Stroke::new(1.0, pal.edge),
+        );
 
         if let Some(line) = jump {
             let caret = self
@@ -2771,7 +2906,7 @@ impl Zenith {
         let mut chosen: Option<usize> = None;
         let mut close = false;
 
-        let font = self.typo.ui_id(13.0 * self.scale);
+        let font = self.typo.code_id(12.5 * self.scale);
         let input_font = self.typo.ui_id(15.0 * self.scale);
 
         egui::Window::new("find")
@@ -2784,14 +2919,9 @@ impl Zenith {
                 Frame::NONE
                     .fill(pal.panel)
                     .stroke(Stroke::new(1.0, pal.edge))
-                    .corner_radius(CornerRadius::same(8))
+                    .corner_radius(CornerRadius::same(SHEET_RADIUS))
                     .inner_margin(Margin::symmetric(12, 10))
-                    .shadow(egui::epaint::Shadow {
-                        offset: [0, 8],
-                        blur: 24,
-                        spread: 0,
-                        color: Color32::from_black_alpha(60),
-                    }),
+                    .shadow(sheet_shadow(&pal)),
             )
             .show(ctx, |ui| {
                 ui.visuals_mut().extreme_bg_color = pal.panel_deep;
@@ -2947,8 +3077,9 @@ impl Zenith {
                 Frame::NONE
                     .fill(pal.panel)
                     .stroke(Stroke::new(1.0, pal.edge))
-                    .corner_radius(CornerRadius::same(6))
-                    .inner_margin(Margin::symmetric(10, 6)),
+                    .corner_radius(CornerRadius::same(SHEET_RADIUS))
+                    .inner_margin(Margin::symmetric(10, 6))
+                    .shadow(sheet_shadow(&pal)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -3010,8 +3141,9 @@ impl Zenith {
                 Frame::NONE
                     .fill(pal.panel)
                     .stroke(Stroke::new(1.0, pal.edge))
-                    .corner_radius(CornerRadius::same(8))
-                    .inner_margin(Margin::symmetric(18, 16)),
+                    .corner_radius(CornerRadius::same(SHEET_RADIUS))
+                    .inner_margin(Margin::symmetric(18, 16))
+                    .shadow(sheet_shadow(&pal)),
             )
             .show(ctx, |ui| {
                 ui.label(
@@ -3066,7 +3198,8 @@ impl Zenith {
                 Frame::NONE
                     .fill(pal.panel)
                     .stroke(Stroke::new(1.0, pal.edge))
-                    .corner_radius(CornerRadius::same(10)),
+                    .corner_radius(CornerRadius::same(SHEET_RADIUS))
+                    .shadow(sheet_shadow(&pal)),
             )
             .show(ctx, |ui| {
                 ui.set_width(width);
@@ -3085,8 +3218,8 @@ impl Zenith {
                 ui.add_space(14.0);
 
                 let content = width - rail - 78.0;
+                let body_top = ui.cursor().top();
                 let mut rail_edge = 0.0;
-                let mut block: Option<Rect> = None;
                 ui.horizontal_top(|ui| {
                     ui.add_space(20.0);
                     // ---- the rail ----
@@ -3103,28 +3236,6 @@ impl Zenith {
                                 ui.add(egui::Label::new(text).sense(egui::Sense::click()));
                             if response.clicked() {
                                 self.settings_tab = i;
-                            }
-                        }
-                        ui.add_space(22.0);
-                        // Reverting is the one thing here that cannot be undone by
-                        // putting it back, so it asks twice: the first click turns the
-                        // words into the question.
-                        let now = ui.input(|i| i.time);
-                        let armed = self.reset_asked.is_some_and(|t| now - t < 5.0);
-                        let text = if armed { "yes, reset" } else { "restore defaults" };
-                        let colour = if armed { pal.tone(Tone::Invalid) } else { pal.ink_faint };
-                        let reset = ui.add(
-                            egui::Label::new(
-                                RichText::new(text).font(small.clone()).color(colour),
-                            )
-                            .sense(egui::Sense::click()),
-                        );
-                        if reset.clicked() {
-                            if armed {
-                                self.reset_asked = None;
-                                reset_settings = true;
-                            } else {
-                                self.reset_asked = Some(now);
                             }
                         }
                         rail_edge = ui.min_rect().right();
@@ -3190,7 +3301,8 @@ impl Zenith {
                                     Slider {
                                         label: "measure",
                                         value: &mut measure,
-                                        range: 40.0..=160.0,
+                                        range: crate::catalog::MEASURE_MIN as f32
+                                            ..=crate::catalog::MEASURE_MAX as f32,
                                         decimals: 0,
                                     },
                                 ) {
@@ -3205,7 +3317,8 @@ impl Zenith {
                                     Slider {
                                         label: "leading",
                                         value: &mut cfg.leading,
-                                        range: 1.2..=2.2,
+                                        range: crate::catalog::LEADING_MIN
+                                            ..=crate::catalog::LEADING_MAX,
                                         decimals: 2,
                                     },
                                 );
@@ -3217,7 +3330,8 @@ impl Zenith {
                                     Slider {
                                         label: "type size",
                                         value: &mut self.scale,
-                                        range: 0.7..=2.0,
+                                        range: crate::catalog::SCALE_MIN
+                                            ..=crate::catalog::SCALE_MAX,
                                         decimals: 2,
                                     },
                                 );
@@ -3428,20 +3542,46 @@ impl Zenith {
                             }
                         }
                     });
-                    ui.add_space(16.0);
-                    block = Some(ui.min_rect());
                 });
-                ui.add_space(20.0);
+                ui.add_space(16.0);
 
-                // The rule between the rail and the page, drawn last so it sits between
-                // them rather than under either.
-                if let Some(r) = block {
-                    ui.painter().vline(
-                        rail_edge + 9.0,
-                        r.y_range(),
-                        Stroke::new(1.0, pal.edge),
+                // ---- the footer ----
+                // Reverting is the one thing here that cannot be undone by putting it
+                // back by hand, so it lives alone under its own rule, and asks twice.
+                let footer_y = ui.cursor().top();
+                ui.painter().hline(
+                    (ui.min_rect().left() + 20.0)..=(ui.min_rect().right() - 20.0),
+                    footer_y,
+                    Stroke::new(1.0, pal.edge),
+                );
+                // The rail's rule runs the whole way to the footer, not just past the
+                // last tab: it divides the sheet, not the list.
+                ui.painter().vline(
+                    rail_edge + 9.0,
+                    egui::Rangef::new(body_top, footer_y),
+                    Stroke::new(1.0, pal.edge),
+                );
+                ui.add_space(10.0);
+                let now = ui.input(|i| i.time);
+                let armed = self.reset_asked.is_some_and(|t| now - t < 5.0);
+                let text = if armed { "yes, reset" } else { "restore defaults" };
+                let colour = if armed { pal.tone(Tone::Invalid) } else { pal.ink_faint };
+                ui.horizontal(|ui| {
+                    ui.add_space(20.0);
+                    let reset = ui.add(
+                        egui::Label::new(RichText::new(text).font(small.clone()).color(colour))
+                            .sense(egui::Sense::click()),
                     );
-                }
+                    if reset.clicked() {
+                        if armed {
+                            self.reset_asked = None;
+                            reset_settings = true;
+                        } else {
+                            self.reset_asked = Some(now);
+                        }
+                    }
+                });
+                ui.add_space(14.0);
             });
 
         if reset_settings {
@@ -4434,10 +4574,10 @@ fn theme_tile(
     scale: f32,
 ) {
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(4), palette.paper);
+    painter.rect_filled(rect, CornerRadius::same(TILE_RADIUS), palette.paper);
     painter.rect_stroke(
         rect,
-        CornerRadius::same(4),
+        CornerRadius::same(TILE_RADIUS),
         Stroke::new(
             if chosen { 1.5 } else { 1.0 },
             if chosen { palette.accent } else { palette.edge },
@@ -4578,12 +4718,65 @@ fn toggles(
 ) -> bool {
     let mut changed = false;
     for (label, value) in rows.iter_mut() {
-        changed |= ui
-            .checkbox(value, RichText::new(*label).font(font.clone()))
-            .changed();
+        changed |= check(ui, font, pal, label, value);
     }
-    let _ = pal;
     changed
+}
+
+/// One statement that is either true or false.
+///
+/// Not egui's checkbox: that is a filled blob that reads as a pill. These are paper
+/// statements — a hairline square when off, the same square with an ink check when on.
+/// A circle would mean "choose one of these"; these are independent.
+fn check(ui: &mut Ui, font: &FontId, pal: &Palette, label: &str, value: &mut bool) -> bool {
+    let (rect, resp) =
+        ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::click());
+    let hovered = resp.hovered();
+    if hovered {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(ROW_RADIUS), theme::alpha(pal.ink, 10));
+    }
+
+    let side = 11.0;
+    let box_rect = Rect::from_min_size(
+        Pos2::new(rect.left() + 1.0, rect.center().y - side * 0.5),
+        vec2(side, side),
+    );
+    let stroke = if *value {
+        theme::alpha(pal.ink, 160)
+    } else if hovered {
+        pal.ink_soft
+    } else {
+        theme::alpha(pal.ink, 70)
+    };
+    ui.painter().rect_stroke(
+        box_rect,
+        CornerRadius::same(2),
+        Stroke::new(1.0, stroke),
+        egui::StrokeKind::Inside,
+    );
+    if *value {
+        let c = box_rect.center();
+        let ink = Stroke::new(1.1, pal.ink);
+        ui.painter()
+            .line_segment([c + vec2(-2.8, -0.2), c + vec2(-0.7, 2.0)], ink);
+        ui.painter()
+            .line_segment([c + vec2(-0.7, 2.0), c + vec2(2.8, -2.2)], ink);
+    }
+    ui.painter().text(
+        Pos2::new(box_rect.right() + 8.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        font.clone(),
+        if *value { pal.ink } else { pal.ink_soft },
+    );
+
+    if resp.clicked() {
+        *value = !*value;
+        true
+    } else {
+        false
+    }
 }
 
 
@@ -4601,9 +4794,9 @@ const PANEL_MARGIN_X: i8 = 8;
 const PANEL_MARGIN_Y: i8 = 8;
 const PANEL_LABEL_DROP: f32 = 7.0;
 const PANEL_LABEL_GAP: f32 = 30.0;
-const PANEL_ROW_H: f32 = 21.0;
-const PANEL_ROW_FONT: f32 = 12.5;
-const PANEL_LABEL_FONT: f32 = 10.5;
+const PANEL_ROW_H: f32 = 22.0;
+const PANEL_ROW_FONT: f32 = 12.0;
+const PANEL_LABEL_FONT: f32 = 10.0;
 
 /// How wide three window buttons are, so the dragging area can stop before them.
 fn window_buttons_width() -> f32 {
@@ -4723,6 +4916,16 @@ fn row(
     if selected {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(4), pal.selection);
+        // The same mark the page puts beside the line you are on, in miniature: a
+        // bookmark tab, so the eye finds the active row before it reads it.
+        ui.painter().rect_filled(
+            Rect::from_min_max(
+                Pos2::new(rect.left(), rect.top() + 2.0),
+                Pos2::new(rect.left() + 2.0, rect.bottom() - 2.0),
+            ),
+            CornerRadius::same(1),
+            theme::alpha(pal.accent, 190),
+        );
     } else if resp.hovered() {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(4), theme::alpha(pal.ink, 10));
@@ -4747,12 +4950,20 @@ fn row(
         x = g.right() + 6.0;
     }
     let right_w = right
-        .map(|r| r.chars().count() as f32 * font.size * 0.58 + 10.0)
+        .map(|r| r.chars().count() as f32 * font.size * 0.60 + 10.0)
         .unwrap_or(6.0);
     let avail = (rect.right() - right_w - x).max(10.0);
-    let max_chars = (avail / (font.size * 0.52)) as usize;
+    // Both panels are set in the code face, whose advance is 0.6 em.
+    let max_chars = (avail / (font.size * 0.60)) as usize;
     let label = truncate(text, max_chars);
-    painter.text(Pos2::new(x, y), Align2::LEFT_CENTER, label, font.clone(), ink);
+    let cut = label != text;
+    painter.text(
+        Pos2::new(x, y),
+        Align2::LEFT_CENTER,
+        &label,
+        font.clone(),
+        ink,
+    );
     if let Some(r) = right {
         painter.text(
             Pos2::new(rect.right() - 4.0, y),
@@ -4762,7 +4973,13 @@ fn row(
             pal.ink_faint,
         );
     }
-    resp
+    // A name the panel could not fit is still a name the reader needs. Hovering is the
+    // only way to ask for it, and it costs nothing when the row already fits.
+    if cut {
+        resp.on_hover_text(RichText::new(text).font(font.clone()))
+    } else {
+        resp
+    }
 }
 
 fn truncate(s: &str, max_chars: usize) -> String {
@@ -5001,7 +5218,7 @@ fn apply_style(ctx: &egui::Context, pal: &Palette, typo: &Typography, scale: f32
     visuals.extreme_bg_color = pal.panel_deep;
     visuals.faint_bg_color = theme::alpha(pal.ink, 8);
     visuals.window_stroke = Stroke::new(1.0, pal.edge);
-    visuals.window_corner_radius = CornerRadius::same(8);
+    visuals.window_corner_radius = CornerRadius::same(SHEET_RADIUS);
     visuals.selection.bg_fill = theme::alpha(pal.accent, 60);
     visuals.selection.stroke = Stroke::new(1.0, pal.accent);
     visuals.hyperlink_color = pal.accent;
@@ -5012,6 +5229,7 @@ fn apply_style(ctx: &egui::Context, pal: &Palette, typo: &Typography, scale: f32
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, pal.ink_soft);
     visuals.widgets.inactive.bg_fill = pal.panel_deep;
     visuals.widgets.inactive.weak_bg_fill = theme::alpha(pal.ink, 10);
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, theme::alpha(pal.ink, 26));
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, pal.ink_soft);
     visuals.widgets.hovered.bg_fill = theme::alpha(pal.accent, 26);
     visuals.widgets.hovered.weak_bg_fill = theme::alpha(pal.accent, 34);
@@ -5028,7 +5246,7 @@ fn apply_style(ctx: &egui::Context, pal: &Palette, typo: &Typography, scale: f32
         &mut visuals.widgets.active,
         &mut visuals.widgets.open,
     ] {
-        w.corner_radius = CornerRadius::same(5);
+        w.corner_radius = CornerRadius::same(4);
     }
     ctx.set_visuals(visuals);
 
@@ -5082,7 +5300,6 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("q", "close the file — and go back to the one you came from"),
     ("{mod}Q", "quit zenith"),
     ("⌘O", "open a folder to read"),
-    ("gd", "go to definition (no language server configured yet)"),
 ];
 
 #[cfg(test)]
