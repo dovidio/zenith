@@ -2354,23 +2354,33 @@ impl Zenith {
 
                 for (i, target) in targets.into_iter().enumerate() {
                     let at = dot_center + (target - dot_center) * open_t;
-                    let hit = Rect::from_center_size(Pos2::new(at.x, at.y + 7.0), vec2(56.0, 48.0));
-                    let response = ui.interact(hit, dot_id.with(("bubble", i)), Sense::click());
-                    let hovered = response.hovered();
-                    if hovered {
-                        self.bloom_seen = true;
-                        self.bloom_last_touch = now;
-                    }
-                    if response.clicked() {
-                        self.bloom_open = false;
-                        self.bloom_visible = false;
-                        self.bloom_seen = true;
-                        self.summon(i);
-                    }
                     let alpha = (open_t * vis_t * 255.0) as u8;
                     if alpha == 0 {
                         continue;
                     }
+                    // While the doors are still on top of the dot, they must not be
+                    // hit-testable: a click meant to open the bloom would land on
+                    // whichever door happened to be painted last (SETTINGS).
+                    let hovered = if open_t > 0.85 {
+                        let hit =
+                            Rect::from_center_size(Pos2::new(at.x, at.y + 7.0), vec2(56.0, 48.0));
+                        let response =
+                            ui.interact(hit, dot_id.with(("bubble", i)), Sense::click());
+                        let hovered = response.hovered();
+                        if hovered {
+                            self.bloom_seen = true;
+                            self.bloom_last_touch = now;
+                        }
+                        if response.clicked() {
+                            self.bloom_open = false;
+                            self.bloom_visible = false;
+                            self.bloom_seen = true;
+                            self.summon(i);
+                        }
+                        hovered
+                    } else {
+                        false
+                    };
                     let ink = if hovered {
                         pal.ink
                     } else {
