@@ -1,10 +1,10 @@
-# Zenith — the design
+# Zenith — editorial code
 
-How this program looks, and why. It describes what is built, not a mood board for
-something adjacent: every number here has a home in the source, and the source wins if
-the two ever disagree. The palettes live in `src/theme.rs`, the voices are chosen in
-`src/typography.rs`, and `zenith --css` prints both as CSS so the site and the app
-cannot drift apart.
+The design system behind the reading room. How this program looks, and why. It
+describes what is built, not a mood board for something adjacent: every number here has
+a home in the source, and the source wins if the two ever disagree. The palettes live in
+`src/theme.rs`, the voices are chosen in `src/typography.rs`, and `zenith --css` prints
+both as CSS so the site and the app cannot drift apart.
 
 The system is tonal rather than Material, discovered rather than bundled, and written
 for a program with no buttons to press.
