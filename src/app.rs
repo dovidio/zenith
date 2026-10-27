@@ -368,6 +368,8 @@ pub struct Zenith {
     review_peek: Option<usize>,
     /// Where the reader was in the review before a definition pulled them away.
     review_return: Option<Place>,
+    /// Whether the changed-file strip should bring the current file back into view.
+    review_strip_scroll: bool,
     /// A screenshot hook: start the review once the folder walk lands.
     review_after_load: bool,
     /// Every language server found on this machine for the languages this folder holds.
@@ -543,6 +545,7 @@ impl Zenith {
             review_hover: None,
             review_peek: None,
             review_return: None,
+            review_strip_scroll: false,
             review_after_load: false,
             caret: vim::Caret::default(),
             chords: vim::Chords::default(),
@@ -1363,6 +1366,9 @@ impl Zenith {
                     });
                 });
                 if let Some(files) = &files {
+                    ui.spacing_mut().scroll.floating = false;
+                    ui.spacing_mut().scroll.foreground_color = true;
+                    ui.spacing_mut().scroll.bar_width = 4.0;
                     ScrollArea::horizontal()
                         .id_salt("review-files")
                         .auto_shrink([false, true])
@@ -1387,6 +1393,9 @@ impl Zenith {
                                             response.rect.bottom(),
                                             Stroke::new(1.5, pal.accent),
                                         );
+                                        if self.review_strip_scroll {
+                                            response.scroll_to_me(Some(egui::Align::Center));
+                                        }
                                     }
                                     response.clone().on_hover_text(format!(
                                         "{} · {}",
@@ -1399,8 +1408,40 @@ impl Zenith {
                                 }
                             });
                         });
+                    self.review_strip_scroll = false;
                 }
             });
+    }
+
+    fn review_bar_height(&self) -> f32 {
+        if self.review.is_some() || self.review_load.is_some() {
+            (64.0 * self.scale).clamp(64.0, 104.0)
+        } else {
+            0.0
+        }
+    }
+
+    fn review_bloom_height(&self) -> f32 {
+        if self.review.is_some() || self.review_load.is_some() {
+            (34.0 * self.scale).clamp(34.0, 48.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// A sheet's top: never tucked under the review bars, and never higher than the
+    /// top air at large type. The base sheet hides the bloom band, so it only clears the
+    /// review bar; the launcher clears both.
+    fn sheet_top(&self, screen: Rect, high: bool, include_bloom: bool) -> f32 {
+        let bars = self.review_bar_height()
+            + if include_bloom { self.review_bloom_height() } else { 0.0 }
+            + if self.review_bar_height() > 0.0 { 16.0 } else { 0.0 };
+        let floor = screen.top() + bars;
+        if high {
+            floor.max(screen.top() + 72.0)
+        } else {
+            (screen.top() + screen.height() / 3.0).max(floor)
+        }
     }
 
     fn review_base_overlay(&mut self, ctx: &egui::Context) {
@@ -1409,11 +1450,8 @@ impl Zenith {
         let width = (560.0 * self.scale)
             .clamp(560.0, 820.0)
             .min((screen.width() - 40.0).max(360.0));
-        let top = if self.scale > 1.3 || screen.height() <= 700.0 {
-            screen.top() + 72.0
-        } else {
-            screen.top() + screen.height() / 3.0
-        };
+        let high = self.scale > 1.3 || screen.height() <= 700.0;
+        let top = self.sheet_top(screen, high, false);
         let pos = Pos2::new(screen.center().x - width * 0.5, top);
 
         let branches = self.review_branches.clone();
@@ -1614,6 +1652,9 @@ impl Zenith {
                         LABEL_TRACKING * 9.5 * self.scale,
                     );
                     ui.add_space(17.0 * self.scale);
+                    ui.spacing_mut().scroll.floating = false;
+                    ui.spacing_mut().scroll.foreground_color = true;
+                    ui.spacing_mut().scroll.bar_width = 4.0;
                     ScrollArea::vertical()
                         .id_salt("review-bases")
                         .max_height((148.0 * self.scale).min(screen.height() * 0.28))
@@ -1709,8 +1750,11 @@ impl Zenith {
                     }
                 });
                 let y = ui.cursor().top();
-                ui.painter()
-                    .hline(left..=right, y, Stroke::new(1.0, pal.edge));
+                ui.painter().hline(
+                    left..=right,
+                    y,
+                    Stroke::new(1.0, if field_focused { pal.accent } else { pal.edge }),
+                );
 
                 if !self.review_error.is_empty() {
                     ui.add_space(8.0 * self.scale);
@@ -1729,7 +1773,7 @@ impl Zenith {
                 let hint = if field_focused {
                     "enter  review    ·    esc  close"
                 } else {
-                    "j k  choose    ·    enter  review    ·    tab  type    ·    esc  close"
+                    "J K  choose    ·    enter  review    ·    tab  type    ·    esc  close"
                 };
                 ui.painter().text(
                     ui.cursor().left_top(),
@@ -1819,6 +1863,7 @@ impl Zenith {
         self.review_hover = None;
         self.review_peek = None;
         self.review_return = None;
+        self.review_strip_scroll = true;
         self.caret = vim::Caret::default();
         self.pending = Pending::Start;
         self.scroll = 0.0;
@@ -3309,6 +3354,19 @@ impl eframe::App for Zenith {
         // any summoned surface is open.
         self.bloom(&ctx);
 
+        // Settings already owns an egui Modal with the same backdrop; the other sheets
+        // are plain Windows and need the scrim supplied here.
+        let sheet_open = self.palette_open || self.search_open || self.show_review_base;
+        if sheet_open {
+            let screen = ctx.content_rect();
+            let _ = ui.interact(screen, ui.id().with("sheet-scrim"), Sense::click());
+            ui.painter().rect_filled(
+                screen,
+                CornerRadius::ZERO,
+                theme::alpha(pal.ink, 44),
+            );
+        }
+
         if self.palette_open {
             self.palette_overlay(&ctx);
         }
@@ -4370,11 +4428,8 @@ impl Zenith {
             .min((screen.width() - 40.0).max(360.0));
         // The launcher sits a third of the way down, like a spotlight, not against the
         // top edge like a toolbar.
-        let top = if self.scale > 1.3 || screen.height() <= 700.0 {
-            screen.top() + 72.0
-        } else {
-            screen.top() + screen.height() / 3.0
-        };
+        let high = self.scale > 1.3 || screen.height() <= 700.0;
+        let top = self.sheet_top(screen, high, true);
         let pos = Pos2::new(screen.center().x - width * 0.5, top);
         let needle = self.query.trim().to_string();
 
