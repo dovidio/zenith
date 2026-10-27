@@ -438,12 +438,9 @@ pub struct Zenith {
     /// The bloom is the one piece of chrome that offers itself. Its state is frame
     /// timing, not taste; `started` at -1 until the first frame can measure time.
     bloom_open: bool,
-    bloom_visible: bool,
     bloom_started: f64,
     bloom_last_touch: f64,
-    bloom_seen: bool,
     bloom_hover_since: Option<f64>,
-    bloom_hover_opened: bool,
     page_center_x: f32,
     palette_open: bool,
     palette_opened_frame: usize,
@@ -584,12 +581,9 @@ impl Zenith {
             settings_focus: 0,
             keys_query: String::new(),
             bloom_open: true,
-            bloom_visible: true,
             bloom_started: -1.0,
             bloom_last_touch: 0.0,
-            bloom_seen: false,
             bloom_hover_since: None,
-            bloom_hover_opened: false,
             page_center_x: 0.0,
             palette_open: false,
             palette_opened_frame: 0,
@@ -848,6 +842,12 @@ impl Zenith {
     }
 
     fn open_file_plain(&mut self, path: &Path) {
+        if self.open.is_none() {
+            // The first page earns the words once; after that the dot is the mark and
+            // the words are there for a reader who reaches for it.
+            self.bloom_open = true;
+            self.bloom_last_touch = 0.0;
+        }
         self.nav = None;
         self.remember_position();
         if self.open.as_ref().map(|o| o.path.as_path()) != Some(path) {
@@ -1050,6 +1050,8 @@ impl Zenith {
         self.review_index = 0;
         self.review_hover = None;
         self.review_peek = None;
+        self.bloom_open = true;
+        self.bloom_last_touch = 0.0;
         self.review_base = base.clone();
         self.show_review_base = false;
         self.review_error.clear();
@@ -1077,13 +1079,147 @@ impl Zenith {
         self.show_review_base = true;
     }
 
-    /// In review, the bloom is one quiet line of doors, not a constellation. The
-    /// change set is the work; the top stays a masthead, and the four words still open
-    /// the same four surfaces.
-    fn review_bloom_bar(&mut self, ui: &mut Ui) {
+    /// The bloom is one accent dot, with four words that unfurl when asked. At rest
+    /// it is a mark; on hover it opens a short line of doors. The words stay while the
+    /// pointer is on them, then fold away. The dot and line are the app's only motion.
+    fn bloom_hover(&mut self, hovered: bool, now: f64) {
+        if hovered {
+            self.bloom_last_touch = now;
+            if self.bloom_open {
+                self.bloom_hover_since = None;
+            } else {
+                let since = *self.bloom_hover_since.get_or_insert(now);
+                if now - since > 0.16 {
+                    self.bloom_open = true;
+                }
+            }
+        } else {
+            self.bloom_hover_since = None;
+            if self.bloom_open && now - self.bloom_last_touch > 2.6 {
+                self.bloom_open = false;
+            }
+        }
+    }
+
+    /// Draw the bloom line: the dot travels from the centre to the start of the line as
+    /// the four words settle out of it. `alpha` is the top-of-page fade; `open_t` is the
+    /// dot/words expansion. Returns whether the dot or a word is under the pointer.
+    fn paint_bloom_line(
+        &mut self,
+        ui: &mut Ui,
+        center: Pos2,
+        open_t: f32,
+        alpha: f32,
+        now: f64,
+    ) -> bool {
+        if alpha <= 0.001 {
+            return false;
+        }
         let pal = self.palette;
         let font = self.typo.ui_id(9.5 * self.scale.min(1.15));
         let tracking = 0.13 * 9.5 * self.scale.min(1.15);
+        let galleys: Vec<_> = BLOOM_LABELS
+            .iter()
+            .map(|label| {
+                let mut job = egui::text::LayoutJob::default();
+                job.append(
+                    label,
+                    0.0,
+                    TextFormat {
+                        font_id: font.clone(),
+                        extra_letter_spacing: tracking,
+                        color: pal.ink_soft,
+                        ..Default::default()
+                    },
+                );
+                ui.painter().layout_job(job)
+            })
+            .collect();
+        let dot_w = 10.0 * self.scale;
+        let gap = 19.0 * self.scale;
+        let total: f32 = dot_w
+            + gap
+            + galleys.iter().map(|g| g.size().x).sum::<f32>()
+            + gap * (galleys.len().saturating_sub(1)) as f32;
+        let dot_center = Pos2::new(
+            center.x - (total * 0.5 - dot_w * 0.5) * open_t,
+            center.y,
+        );
+        let dot_rect = Rect::from_center_size(dot_center, vec2(28.0, 28.0));
+        let dot = ui.interact(dot_rect, ui.id().with("bloom-dot"), Sense::click());
+        let dot_hover = dot.hovered();
+        let mut hovered = dot_hover;
+        if dot.clicked() {
+            self.bloom_open = !self.bloom_open;
+            self.bloom_last_touch = now;
+            if self.bloom_open {
+                self.bloom_hover_since = None;
+            } else {
+                // A click that folds the words must not be undone by the pointer that
+                // is still resting on the dot; it re-arms when the pointer leaves.
+                self.bloom_hover_since = Some(now + 10.0);
+            }
+        }
+        let dot_ink = theme::alpha(pal.accent, (alpha * 255.0) as u8);
+        ui.painter()
+            .circle_filled(dot_center, 3.5 * self.scale.min(1.2), dot_ink);
+        if dot_hover {
+            ui.painter().circle_stroke(
+                dot_center,
+                10.0 * self.scale.min(1.1),
+                Stroke::new(1.0, dot_ink),
+            );
+        }
+        if open_t <= 0.01 {
+            return hovered;
+        }
+        let word_alpha = (alpha * open_t * 255.0) as u8;
+        if word_alpha == 0 {
+            return hovered;
+        }
+        let mut x = dot_center.x + dot_w * 0.5 + gap;
+        for (i, galley) in galleys.into_iter().enumerate() {
+            let size = galley.size();
+            let hit = Rect::from_min_size(
+                Pos2::new(x - 3.0, center.y - size.y * 0.5 - 4.0),
+                vec2(size.x + 6.0, size.y + 8.0),
+            );
+            let response = ui.interact(hit, ui.id().with(("bloom-word", i)), Sense::click());
+            let word_hover = response.hovered();
+            hovered |= word_hover;
+            if response.clicked() {
+                self.bloom_open = false;
+                self.bloom_last_touch = now;
+                self.bloom_hover_since = Some(now + 10.0);
+                self.summon(i);
+            }
+            let color = if word_hover { pal.ink } else { pal.ink_soft };
+            let mut job = egui::text::LayoutJob::default();
+            job.append(
+                BLOOM_LABELS[i],
+                0.0,
+                TextFormat {
+                    font_id: font.clone(),
+                    extra_letter_spacing: tracking,
+                    color,
+                    ..Default::default()
+                },
+            );
+            let painted = ui.painter().layout_job(job);
+            ui.painter().galley(
+                Pos2::new(x, center.y - painted.size().y * 0.5),
+                painted,
+                theme::alpha(color, word_alpha),
+            );
+            x += size.x + gap;
+        }
+        hovered
+    }
+
+    /// In review the same dot and words live in their own quiet band above the page,
+    /// so scrolling the page cannot put them over the code.
+    fn review_bloom_bar(&mut self, ui: &mut Ui) {
+        let pal = self.palette;
         let height = (34.0 * self.scale).clamp(34.0, 48.0);
         egui::Panel::top("zenith-review-bloom")
             .resizable(false)
@@ -1095,73 +1231,18 @@ impl Zenith {
                     .inner_margin(Margin::symmetric(16, 0)),
             )
             .show(ui, |ui| {
-                let rect = ui.max_rect();
-                let y = rect.center().y;
-                let job = |text: &str| {
-                    let mut job = egui::text::LayoutJob::default();
-                    job.append(
-                        text,
-                        0.0,
-                        TextFormat {
-                            font_id: font.clone(),
-                            extra_letter_spacing: tracking,
-                            color: pal.ink_soft,
-                            ..Default::default()
-                        },
-                    );
-                    ui.painter().layout_job(job)
-                };
-                let galleys: Vec<_> = BLOOM_LABELS.iter().map(|l| job(l)).collect();
-                let dot_w = 10.0 * self.scale;
-                let gap = 19.0 * self.scale;
-                let total: f32 = dot_w
-                    + galleys.iter().map(|g| g.size().x).sum::<f32>()
-                    + gap * (galleys.len().saturating_sub(1)) as f32;
-                let mut x = rect.center().x - total * 0.5;
-                ui.painter().circle_filled(
-                    Pos2::new(x + 3.0 * self.scale, y),
-                    3.5 * self.scale.min(1.2),
-                    pal.accent,
-                );
-                x += dot_w;
-                for (i, galley) in galleys.into_iter().enumerate() {
-                    let size = galley.size();
-                    let hit = Rect::from_min_size(
-                        Pos2::new(x - 3.0, y - size.y * 0.5 - 4.0),
-                        vec2(size.x + 6.0, size.y + 8.0),
-                    );
-                    let response = ui.interact(
-                        hit,
-                        ui.id().with(("review-bloom", i)),
-                        Sense::click(),
-                    );
-                    let color = if response.hovered() {
-                        pal.ink
-                    } else {
-                        pal.ink_soft
-                    };
-                    let mut job = egui::text::LayoutJob::default();
-                    job.append(
-                        BLOOM_LABELS[i],
-                        0.0,
-                        TextFormat {
-                            font_id: font.clone(),
-                            extra_letter_spacing: tracking,
-                            color,
-                            ..Default::default()
-                        },
-                    );
-                    let painted = ui.painter().layout_job(job);
-                    ui.painter().galley(
-                        Pos2::new(x, y - painted.size().y * 0.5),
-                        painted,
-                        color,
-                    );
-                    if response.clicked() {
-                        self.summon(i);
-                    }
-                    x += size.x + gap;
+                let now = ui.ctx().input(|i| i.time);
+                if self.bloom_last_touch <= 0.0 {
+                    self.bloom_last_touch = now;
                 }
+                let open_t = ui.ctx().animate_bool_with_time(
+                    egui::Id::new("zenith-review-bloom"),
+                    self.bloom_open,
+                    0.18,
+                );
+                let rect = ui.max_rect();
+                let hovered = self.paint_bloom_line(ui, rect.center(), open_t, 1.0, now);
+                self.bloom_hover(hovered, now);
                 ui.painter().hline(
                     rect.x_range(),
                     rect.bottom() - 0.5,
@@ -1784,7 +1865,6 @@ impl Zenith {
                     self.show_outline = false;
                     self.tree_focus = false;
                     self.bloom_open = false;
-                    self.bloom_visible = false;
                     self.chords.clear();
                     continue;
                 }
@@ -3168,201 +3248,70 @@ impl Zenith {
         );
     }
 
-    /// The bloom: one dot at the top, four doors when it is asked. This is the only
-    /// piece of chrome that offers itself, and the only thing in the program that moves.
+    /// The reading page's bloom: one accent dot at the top, words on intent. It lives
+    /// in the page's top air and nowhere else; the first scroll folds it and fades it,
+    /// so it can never sit over a line of code.
     fn bloom(&mut self, ctx: &egui::Context) {
+        if self.review.is_some() || self.review_load.is_some() {
+            return;
+        }
         let surfaces = self.show_panels
             || self.show_outline
             || self.show_settings
             || self.palette_open
             || self.search_open
-            || self.show_review_base
-            || self.review.is_some()
-            || self.review_load.is_some();
+            || self.show_review_base;
+        if surfaces {
+            self.bloom_open = false;
+            return;
+        }
         let now = ctx.input(|i| i.time);
-        let pal = self.palette;
         if self.bloom_started < 0.0 {
             self.bloom_started = now;
             self.bloom_last_touch = now;
         }
-        if surfaces {
+        if self.bloom_last_touch <= 0.0 {
+            self.bloom_last_touch = now;
+        }
+        let at_top = self.scroll < 4.0;
+        if !at_top {
             self.bloom_open = false;
-            self.bloom_visible = false;
-            self.bloom_seen = true;
-            return;
+            self.bloom_hover_since = None;
         }
 
         let screen = ctx.content_rect();
         let bar = if own_window_buttons() { 40.0 } else { 0.0 };
         let top = screen.top() + bar + self.title_strip() + 14.0;
         let cx = screen.center().x;
-        let hot = Rect::from_center_size(Pos2::new(cx, top + 28.0), vec2(520.0, 80.0));
-        let in_hot = ctx
-            .input(|i| i.pointer.hover_pos())
-            .is_some_and(|p| hot.contains(p));
-        if in_hot {
-            self.bloom_seen = true;
-            self.bloom_visible = true;
-            self.bloom_last_touch = now;
-        }
-        if !self.bloom_seen && now - self.bloom_started > 4.0 {
-            self.bloom_open = false;
-            self.bloom_visible = false;
-        }
-        if self.bloom_open && now - self.bloom_last_touch > 3.5 {
-            self.bloom_open = false;
-            self.bloom_last_touch = now;
-        }
-        if self.bloom_visible && !self.bloom_open && !in_hot && now - self.bloom_last_touch > 2.5
-        {
-            self.bloom_visible = false;
-        }
-
         let dot_id = egui::Id::new("zenith-bloom");
-        let open_t = ctx.animate_bool_with_time(dot_id.with("open"), self.bloom_open, 0.2);
         let vis_t = ctx.animate_bool_with_time(
             dot_id.with("visible"),
-            self.bloom_visible,
-            if self.bloom_visible { 0.16 } else { 0.6 },
+            at_top,
+            if at_top { 0.16 } else { 0.35 },
         );
-        if vis_t <= 0.001 && open_t <= 0.001 {
+        if vis_t <= 0.001 {
             return;
         }
-
-        let dot_center = Pos2::new(cx, top + 7.0);
-        let targets = [
-            Pos2::new(cx - 112.0, top + 56.0),
-            Pos2::new(cx - 40.0, top + 48.0),
-            Pos2::new(cx + 40.0, top + 48.0),
-            Pos2::new(cx + 112.0, top + 56.0),
-        ];
-        let area = egui::Rect::from_min_size(
-            Pos2::new(cx - 144.0, top - 18.0),
-            vec2(288.0, 146.0),
+        let open_t =
+            ctx.animate_bool_with_time(dot_id.with("open"), self.bloom_open, 0.18);
+        let area = Rect::from_center_size(
+            Pos2::new(cx, top + 7.0),
+            vec2(
+                (430.0 * self.scale).clamp(430.0, 620.0),
+                (34.0 * self.scale).clamp(34.0, 48.0),
+            ),
         );
-        let hovers = ctx.input(|i| i.pointer.hover_pos());
-        let labels = self.scroll < 4.0;
-
+        let mut hovered = false;
         egui::Area::new(dot_id)
             .order(egui::Order::Foreground)
             .fixed_pos(area.min)
             .show(ctx, |ui| {
                 ui.set_min_size(area.size());
-                let painter = ui.painter();
-                let base = theme::alpha(pal.ink_soft, (vis_t * 255.0) as u8);
-
-                // The dot, and the ring that appears when the pointer reaches for it.
-                let dot_rect = Rect::from_center_size(dot_center, vec2(28.0, 28.0));
-                let dot = ui.interact(dot_rect, dot_id.with("dot"), Sense::click());
-                let dot_hover = dot.hovered()
-                    || hovers.is_some_and(|p| p.distance(dot_center) <= 10.0);
-                if dot_hover {
-                    self.bloom_seen = true;
-                    self.bloom_last_touch = now;
-                    let since = *self.bloom_hover_since.get_or_insert(now);
-                    if !self.bloom_open && now - since > 0.2 {
-                        self.bloom_open = true;
-                        self.bloom_hover_opened = true;
-                    }
-                } else {
-                    self.bloom_hover_since = None;
-                    self.bloom_hover_opened = false;
-                }
-                if dot.clicked() {
-                    if !self.bloom_hover_opened {
-                        self.bloom_open = !self.bloom_open;
-                    }
-                    self.bloom_hover_since = None;
-                    self.bloom_hover_opened = false;
-                    self.bloom_last_touch = now;
-                    self.bloom_seen = true;
-                }
-                painter.circle_filled(dot_center, 3.5, base);
-                if dot_hover {
-                    painter.circle_stroke(
-                        dot_center,
-                        10.0,
-                        Stroke::new(1.0, theme::alpha(pal.accent, (vis_t * 255.0) as u8)),
-                    );
-                }
-
-                // Stems first, so the bubbles sit on them.
-                for target in targets {
-                    let at = dot_center + (target - dot_center) * open_t;
-                    if open_t > 0.01 {
-                        painter.line_segment(
-                            [dot_center, at],
-                            Stroke::new(
-                                1.0,
-                                theme::alpha(
-                                    pal.ink_faint,
-                                    (open_t * vis_t * 255.0) as u8,
-                                ),
-                            ),
-                        );
-                    }
-                }
-
-                for (i, target) in targets.into_iter().enumerate() {
-                    let at = dot_center + (target - dot_center) * open_t;
-                    let alpha = (open_t * vis_t * 255.0) as u8;
-                    if alpha == 0 {
-                        continue;
-                    }
-                    // While the doors are still on top of the dot, they must not be
-                    // hit-testable: a click meant to open the bloom would land on
-                    // whichever door happened to be painted last (SETTINGS).
-                    let hovered = if open_t > 0.85 {
-                        let hit =
-                            Rect::from_center_size(Pos2::new(at.x, at.y + 7.0), vec2(56.0, 48.0));
-                        let response =
-                            ui.interact(hit, dot_id.with(("bubble", i)), Sense::click());
-                        let hovered = response.hovered();
-                        if hovered {
-                            self.bloom_seen = true;
-                            self.bloom_last_touch = now;
-                        }
-                        if response.clicked() {
-                            self.bloom_open = false;
-                            self.bloom_visible = false;
-                            self.bloom_seen = true;
-                            self.summon(i);
-                        }
-                        hovered
-                    } else {
-                        false
-                    };
-                    let ink = if hovered {
-                        pal.ink
-                    } else {
-                        pal.ink_soft
-                    };
-                    let edge = if hovered {
-                        pal.accent
-                    } else {
-                        pal.ink_faint
-                    };
-                    painter.circle_filled(at, 13.0, theme::alpha(pal.paper, alpha));
-                    painter.circle_stroke(
-                        at,
-                        13.0,
-                        Stroke::new(1.0, theme::alpha(edge, alpha)),
-                    );
-                    draw_bloom_mark(painter, at, i, theme::alpha(ink, alpha));
-                    if labels {
-                        paint_tracked(
-                            painter,
-                            Pos2::new(at.x, at.y + 18.0),
-                            Align2::CENTER_TOP,
-                            BLOOM_LABELS[i],
-                            self.typo.ui_id(9.5 * self.scale.min(1.15)),
-                            theme::alpha(if hovered { pal.ink } else { pal.ink_soft }, alpha),
-                            (0.08 * 9.5 * self.scale.min(1.15)).max(0.0),
-                        );
-                    }
-                }
+                hovered = self.paint_bloom_line(ui, area.center(), open_t, vis_t, now);
             });
-
+        if at_top {
+            self.bloom_hover(hovered, now);
+        }
         if self.bloom_open
             && ctx.input(|i| i.pointer.primary_clicked())
             && ctx
@@ -3371,6 +3320,7 @@ impl Zenith {
         {
             self.bloom_open = false;
             self.bloom_last_touch = now;
+            self.bloom_hover_since = Some(now + 10.0);
         }
     }
 
@@ -6927,37 +6877,6 @@ fn resize_handles(ui: &mut Ui) {
         if resp.drag_started() {
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
-        }
-    }
-}
-
-/// The four marks inside the bloom's bubbles: a tree, a list, a looking glass, a pair of
-/// sliders. Drawn, not typed, so they are the same weight on every machine.
-fn draw_bloom_mark(painter: &egui::Painter, c: Pos2, which: usize, ink: Color32) {
-    let stroke = Stroke::new(1.2, ink);
-    match which {
-        0 => {
-            painter.line_segment([c + vec2(0.0, 4.0), c + vec2(0.0, -1.0)], stroke);
-            painter.line_segment([c + vec2(0.0, -1.0), c + vec2(-4.0, -4.0)], stroke);
-            painter.line_segment([c + vec2(0.0, -1.0), c + vec2(4.0, -4.0)], stroke);
-        }
-        1 => {
-            for (dy, half) in [(-4.0, 5.0), (0.0, 3.0), (4.0, 5.0)] {
-                painter.line_segment(
-                    [c + vec2(-half, dy), c + vec2(half, dy)],
-                    stroke,
-                );
-            }
-        }
-        2 => {
-            painter.circle_stroke(c + vec2(-1.0, -1.0), 4.0, stroke);
-            painter.line_segment([c + vec2(2.0, 2.0), c + vec2(5.0, 5.0)], stroke);
-        }
-        _ => {
-            painter.line_segment([c + vec2(-5.0, -3.0), c + vec2(5.0, -3.0)], stroke);
-            painter.line_segment([c + vec2(-5.0, 3.0), c + vec2(5.0, 3.0)], stroke);
-            painter.circle_filled(c + vec2(-2.0, -3.0), 1.4, ink);
-            painter.circle_filled(c + vec2(2.0, 3.0), 1.4, ink);
         }
     }
 }

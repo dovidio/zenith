@@ -24,8 +24,9 @@ Three consequences run through the system:
 - **The page is the product.** The index, the contents, the launcher and settings exist
   to get you back to it. None of them is allowed to become the interesting thing.
 
-The bloom is the one piece of chrome that offers itself, at startup and when the pointer
-reaches for it. It is how the doors are seen; everything else waits to be asked.
+The bloom is the one piece of chrome that offers itself: a single accent dot at the top of
+the page, and four words that unfurl when the pointer reaches for it. It is how the doors
+are seen; everything else waits to be asked.
 
 ## Three voices
 
@@ -216,7 +217,7 @@ and a 3 pt corner; nothing gets a border, a shadow or a second background colour
 | cursor wash, row wash | 2–4 pt | soft enough not to read as a button |
 | toggles, fields, buttons, small controls | 2–4 pt | tactile, not pill-shaped |
 | theme swatch | 8 pt | a card, not a sheet |
-| bloom bubble | full | the only ring; it is a bubble, not a button |
+| bloom dot | full | one mark, not a button; the hover ring is its only boundary |
 | sheet (launcher, settings, search) | 14 pt | the only generous rounded rectangle |
 
 Fourteen, not twenty-four. A 24 pt corner on a 560 pt sheet reads as a phone app placed on
@@ -230,38 +231,26 @@ hairline the whole way round.
 ### The bloom
 
 The one piece of chrome that offers itself. At the top of the window's content, centered,
-below the desktop's title strip where there is one, 14 pt down, is a 7 pt dot in
-`ink_soft` inside a 28 pt hit area. On hover a 20 pt hairline ring appears around it and the
-dot warms. It is the seed, not a menu.
+below the desktop's title strip where there is one, 14 pt down, is a 7 pt `accent` dot in
+a 28 pt hit area. It is the seed, not a menu.
 
-At startup the bloom is open: the dot and four 26 pt bubbles in a shallow fan below it,
-each with a short hairline stem back to the dot and a name in 9.5 pt chrome, tracked
-0.08 em, beneath it — `INDEX`, `CONTENTS`, `LAUNCHER`, `SETTINGS`. The bubbles are
-paper-filled circles with a 1 pt `edge` ring; the marks inside are drawn, not typed: a trunk
-with two branches, three rules, a ring with a handle, two slider rules. The rings are
-`edge`, the marks `ink_soft`, the labels `ink_faint`; on hover the ring takes `accent`, the
-mark and label take `ink`, and the stem warms. A bubble and its label are one hit area. If
-the reader does nothing for four seconds, the bubbles collapse into the dot and the whole
-bloom dissolves.
+The first page of a session opens the words once: the dot travels to the start of a line and
+the four names settle out of it — `INDEX`, `CONTENTS`, `LAUNCHER`, `SETTINGS` — in 9.5 pt
+chrome, tracked 0.13 em. The unfurl is 180 ms and one movement: the dot leads, the words
+follow. After 2.6 s without a hover the line folds back to the dot. A review opens the words
+once in its own band at the top. Reaching for the dot or a word opens the line again; it
+stays while the pointer is on it and folds 2.6 s after the pointer leaves. Clicking the dot
+folds or opens the line; clicking a word opens its surface and closes the bloom. Nothing in
+the bloom gets a hand; hover is a ring and a change of ink. `esc` or a click elsewhere folds
+the words.
 
-After that it is summoned by approach. The pointer entering the top 56 pt of the window
-within 240 pt of its center brings the dot back; it is a hover zone and never steals a
-click from the page. Clicking the dot buds the four bubbles; clicking it again, or `esc`,
-collapses them. Resting on the dot for 200 ms also buds them, so the icons can be found
-without a click. Clicking a bubble opens its surface and the bloom goes away; a click
-anywhere else collapses it, and on the page that click also places the reading cursor.
-Once summoned, the bloom collapses to the dot after three and a half seconds without a
-hover or a click, and the dot fades two and a half seconds after the pointer leaves the top
-zone; it does not disappear while the pointer is on it. Nothing in the bloom gets a hand;
-hover is a ring and a change of ink.
+The bloom belongs to the top of the page, not to the window. It sits in the 96 pt of air
+above the title block. The first scroll folds the words and fades the dot; scrolling back
+brings the dot back. It never floats over a line of code, and it is hidden while a drawer or
+a sheet is open.
 
-The bloom is fixed to the window, not to the page. At the top of a file it sits in the
-96 pt of air above the title block; when the page is scrolled it floats over the text,
-which is why it is small, paper-filled, and never stays. The names belong to the margin:
-when the bloom floats over scrolled text, the labels are left out and the marks alone are
-enough. It is hidden while a drawer or a sheet is open.
-
-Everything else is summoned; this one has to offer itself, or the doors would be invisible.
+In review the same dot and words live in their own quiet band above the review strip. The
+page scrolls below that band, so the bloom can never cross the code.
 
 ### The index
 
@@ -275,8 +264,8 @@ the drawer is cut with an ellipsis and shown in full on hover.
 
 The tree is a map, not a finder: finding a file is the launcher's job. Choosing a file
 reads it and leaves the index open, so the reader can walk the tree. `esc`, or a click on
-the page, leaves it. Its bubble is the tree mark in the bloom; a keyboard reader reaches
-the same drawer with the launcher's `Index`.
+the page, leaves it. Its word in the bloom is
+`INDEX`; a keyboard reader reaches the same drawer with the launcher's `Index`.
 
 ### The contents
 
@@ -286,13 +275,13 @@ or constant, `+` module. The symbol the cursor is inside is washed and marked wi
 same 2 pt tab as the index. Clicking a symbol moves the page and leaves the drawer open;
 `esc`, or a click on the page, closes it.
 
-It is summoned from its bubble in the bloom, or from the launcher. It is a view, not a
+It is summoned from its word in the bloom, or from the launcher. It is a view, not a
 permanent sidebar.
 
 ### The launcher
 
-The room's search, and one of the bloom's four bubbles. A sheet 560 pt wide, one third of
-the way down the window at 1.00×, opened by its bubble or with `⌘K` (or `ctrl-K`). It
+The room's search, and one of the bloom's four words. A sheet 560 pt wide, one third of
+the way down the window at 1.00×, opened by `LAUNCHER` or with `⌘K` (or `ctrl-K`). It
 behaves like a spotlight: one field, a few results, no menus. Its input is chrome 16 pt,
 with no box: a hairline under the line is the only boundary. The placeholder is
 `a file, a view, or an action`.
@@ -331,8 +320,8 @@ instructions. `Soft wrap` has no key and therefore no keycap; it is honest about
 rather than inventing one.
 
 It launches places, views and the page's switches, not motions. `j`, `k`, `gd` and the rest
-are the page's grammar, and they never appear as commands here. The bloom shows the four
-doors; the launcher is the one for anything that is not a place in the index or the
+are the page's grammar, and they never appear as commands here. The bloom's four words are
+the doors; the launcher is the one for anything that is not a place in the index or the
 contents.
 
 `⌘P` opens the same sheet scoped to files; `s` and `⌘,` open settings directly. These are
@@ -357,12 +346,11 @@ opens it; `g b` chooses what it compares with. The default is the working tree, 
 that is the ordinary uncommitted change. For a colleague's pull request, choose their
 branch as `HEAD` (it is already checked out) and the target branch as the base; the
 comparison starts from their common ancestor, as a pull request does. Staged changes and
-the last commit are one choice each. A branch or commit can be typed. The full bloom
-contracts in review to one line — a single accent dot and four tracked words, `INDEX`,
-`CONTENTS`, `LAUNCHER`, `SETTINGS` — still the same four doors, without the constellation
-of bubbles and stems that belongs to the reading page. The base is never a permanent
-toolbar: a review strip carries `REVIEW`, the branch, the base, the current file count and
-the changed-file strip; `base` opens a summoned sheet. `J K` moves through
+the last commit are one choice each. A branch or commit can be typed. The bloom is the
+same dot and four words in review, held in its own band above the review strip so the page
+cannot scroll under it. The base is never a permanent toolbar: a review strip carries
+`REVIEW`, the branch, the base, the current file count and the changed-file strip; `base`
+opens a summoned sheet. `J K` moves through
 the changed files and `[ ]` through the changes.
 
 The review is a mode, not a page you leave by walking. `gd` to a definition and
@@ -387,7 +375,7 @@ breaking the page. With no changes, the strip stays out of the way and the statu
 
 ### Settings
 
-Summoned by its bubble in the bloom, by the launcher's `Settings`, or with `s` / `⌘,`.
+Summoned by its word in the bloom, by the launcher's `Settings`, or with `s` / `⌘,`.
 A centered sheet 560 pt wide, `panel`, 14 pt corners, 1 pt `edge`, and the sheet shadow.
 A 20 pt serif title, a hairline, then a 118 pt rail of five sections — `Page`, `Type`,
 `Theme`, `Language`, `Keys` — in the prose voice at 14.5 pt, active in `ink`, inactive in
@@ -448,17 +436,15 @@ Finding a *file* is the launcher's job. There is no second file finder.
 ## Motion
 
 The page is still. It never fades, slides, springs or eases; a landing is instant; a drawer
-or a sheet arrives without transition. The bloom is the one exception, because a bubble
-has to come from somewhere.
+or a sheet arrives without transition. The bloom is the one exception, because a dot has to
+become a line.
 
-Opening: the dot's ring divides into four stems, and each bubble is a duplicate of that
-ring — born at the dot at 0.2 scale and zero opacity, travelling along its stem, and
-resolving its own mark as it settles — 200 ms, staggered 30 ms from the centre out.
-Closing: the bubbles return and fade in 140 ms with no stagger. The dot fades in over
-160 ms when the pointer reaches the top, and out over 600 ms when it is left. Idle: the
-bubbles collapse to the dot, and then the dot fades.
+Opening: the dot travels from the centre to the start of the line over 180 ms while the four
+words fade and settle out of it — one movement, no stagger. Closing: the words fade and the
+dot returns to the centre in 180 ms. The dot fades in over 160 ms at the top of the page and
+out over 350 ms as the first scroll takes it away. Idle: the line folds back to the dot.
 
-That is the whole vocabulary: one bud, one dissolve, at the top of the window. The one soft
+That is the whole vocabulary: one unfurl, one fold, at the top of the page. The one soft
 thing is a sheet's shadow; the one moving thing is the bloom.
 
 ## What this system refuses
@@ -472,7 +458,7 @@ thing is a sheet's shadow; the one moving thing is the bloom.
   belongs to links on the web.
 - **A pinned panel.** At most one drawer or sheet at a time, and only when asked for.
 - **Animation everywhere.** The page, the drawers and the sheets arrive and go without a
-  transition. The bloom buds and dissolves; nothing else moves.
+  transition. The bloom unfurls and folds; nothing else moves.
 - **A Material colour hierarchy.** No primary/secondary/tertiary, no containers, no error
   surfaces. Those are the tokens of a program with actions and failures. This one has
   neither.
@@ -483,7 +469,7 @@ thing is a sheet's shadow; the one moving thing is the bloom.
   to be.
 - **Diagnostics as decoration.** No red squiggles, no error counts, no badges. A broken
   thing gets one line at the foot of the page.
-- **Icons.** Every mark is drawn (the bloom's bubbles, carets, the cursor ribbon) or
+- **Icons.** Every mark is drawn (carets, the cursor ribbon, the spine ticks) or
   typographic (`ƒ`, `○`, `+`, `↳`). No icon set, no emoji.
 - **Shadows inside the page.** Elevation belongs to the sheets laid over the page. Text
   is flat.
