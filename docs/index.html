@@ -4,115 +4,212 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Zenith — a reading room for source code</title>
-  <meta name="description" content="A native code reader for projects where people read code rather than write it: a file tree, a page, tones instead of rainbow, and six place-named themes.">
+  <meta name="description" content="A native, read-only code reader: a page and four doors, tones instead of rainbow, and six place-named atmospheres. Experimental, written by an AI.">
+  <meta name="theme-color" content="#f5f1e8" id="theme-color">
+  <meta property="og:title" content="Zenith — a reading room for source code">
+  <meta property="og:description" content="A native, read-only code reader. A page and four doors, six atmospheres, and no write path into your project. Experimental, written by an AI.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://dovidio.github.io/zenith/">
+  <meta property="og:image" content="https://dovidio.github.io/zenith/reading-detail.jpg">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="stylesheet" href="zenith.css">
   <link rel="stylesheet" href="site.css">
   <script>
     (function () {
+      var valid = { lugano: 1, maionese: 1, bibione: 1, kununurra: 1, panittha: 1, newsprint: 1 };
       var t = localStorage.getItem("zenith-theme");
-      if (t && t !== "lugano") document.documentElement.setAttribute("data-theme", t);
+      if (!valid[t]) {
+        t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "kununurra"
+          : "lugano";
+      }
+      document.documentElement.setAttribute("data-theme", t);
     })();
   </script>
 </head>
 <body>
-<main>
-  <h1>Zenith</h1>
-  <p class="tagline">A reading room for source code.</p>
+<main class="sheet">
+  <header class="mast" role="banner">
+    <div class="wordmark">Zenith<small>A reading room for source code.</small></div>
+    <nav class="mast-actions" aria-label="Zenith">
+      <a href="https://github.com/dovidio/zenith">Read the source ↗</a>
+      <a class="run-link" href="#run">Run it ↓</a>
+    </nav>
+  </header>
+  <div class="topline">
+    <span>Specimen No. 01 · The reader</span>
+    <span class="status-top">Experimental · written by an AI · not a product</span>
+  </div>
 
-  <p>
-    A native code <em>reader</em> for projects where people read code rather than write it —
-    reviewing, onboarding, archaeology, study. Not an editor with the editing removed: the
-    whole interface assumes you will never type a character into it.
-  </p>
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="listing-wrap">
+      <div class="file">src/reader.rs <span>~/hack/Projects/zenith</span></div>
+      <h1 id="hero-title">The page is the product.</h1>
+      <p class="path">A native code reader — not an editor with the editing removed.</p>
+      <div class="listing" aria-label="A specimen of the reading page">
+<span class="line comment">/// Everything the interface does returns you to the page.</span>
+<span class="line"><span class="kw">pub fn</span> <span class="call">open</span><span class="punct">(</span>&amp;<span class="kw">mut</span> self<span class="punct">,</span> path<span class="punct">:</span> &amp;<span class="type">Path</span><span class="punct">)</span> -&gt; <span class="type">Result</span>&lt;<span class="punct">()</span>&gt; <span class="punct">{</span></span>
+<span class="line">    <span class="kw">let</span> source <span class="punct">=</span> std<span class="punct">::</span>fs<span class="punct">::</span><span class="call">read_to_string</span><span class="punct">(</span>path<span class="punct">)?;</span></span>
+<span class="line caret">    self.page.<span class="call">set</span><span class="punct">(</span>source<span class="punct">);</span></span>
+<span class="line">    self.cursor <span class="punct">=</span> <span class="type">Caret</span><span class="punct">::</span><span class="call">top</span><span class="punct">();</span></span>
+<span class="line">    <span class="type">Ok</span><span class="punct">(())</span></span>
+<span class="line"><span class="punct">}</span></span>
+<span class="line comment">// There is no save. No lockfile. No cache in the repository.</span>
+<span class="line comment">// A theme is a place, not a colour swatch.</span>
+<span class="line comment">// The bloom is the only chrome that offers itself.</span>
+<span class="line"><span class="kw">for</span> door <span class="kw">in</span> <span class="punct">[</span><span class="str">"index"</span><span class="punct">,</span> <span class="str">"contents"</span><span class="punct">,</span> <span class="str">"launcher"</span><span class="punct">,</span> <span class="str">"settings"</span><span class="punct">]</span> <span class="punct">{</span></span>
+<span class="line">    bloom.<span class="call">offer</span><span class="punct">(</span>door<span class="punct">);</span></span>
+<span class="line"><span class="punct">}</span></span>
+      </div>
+      <p class="specimen-note">The page's typography, set by hand in HTML. The actual window is below.</p>
+    </div>
 
-  <figure>
-    <img src="self-portrait.jpg" alt="Zenith reading its own README: a file tree on the left, a page in the middle, contents and tools on the right.">
-    <figcaption>zenith, reading its own README</figcaption>
-  </figure>
+    <aside class="notes" aria-label="Notes on the room">
+      <div class="note"><b>Read-only is structural.</b><p>There is no write path into the project. The page cannot save, rename or format what you are reading.</p></div>
+      <div class="note"><b>Comments are prose.</b><p>The only English in a source file is set in the reading face; the voice changes even when the line does not.</p></div>
+      <div class="note"><b>Indentation is drawn.</b><p>Leading whitespace becomes a hairline gutter; a block has a shape before it has a count.</p></div>
+      <div class="note"><b>Long lines admit it.</b><p>A wrapped expression carries <span class="wrap-mark">↳</span> in the margin, so it never reads as a new line.</p></div>
+      <div class="note"><b>The cursor is a reading position.</b><p>A ribbon and a 14-alpha wash, not a blinking caret.</p></div>
+    </aside>
+  </section>
 
-  <h2>Run it</h2>
-  <pre><code>git clone https://github.com/dovidio/zenith
+  <section class="themes" aria-labelledby="themes-title">
+    <div class="themes-copy">
+      <h2 id="themes-title">Six atmospheres</h2>
+      <p>Each is a paper, an ink and a tonal ladder — a place, not a light/dark switch. <span class="key">1</span>–<span class="key">6</span> changes the page you are reading.</p>
+    </div>
+    <div class="theme-rack" role="group" aria-label="Theme">
+      <button type="button" data-theme-set="lugano" aria-pressed="false"><i aria-hidden="true"></i>1 Lugano</button>
+      <button type="button" data-theme-set="maionese" aria-pressed="false"><i aria-hidden="true"></i>2 Maionese</button>
+      <button type="button" data-theme-set="bibione" aria-pressed="false"><i aria-hidden="true"></i>3 Bibione</button>
+      <button type="button" data-theme-set="kununurra" aria-pressed="false"><i aria-hidden="true"></i>4 Kununurra</button>
+      <button type="button" data-theme-set="panittha" aria-pressed="false"><i aria-hidden="true"></i>5 Panittha</button>
+      <button type="button" data-theme-set="newsprint" aria-pressed="false"><i aria-hidden="true"></i>6 Newsprint</button>
+    </div>
+    <span id="theme-status" class="sr-only" aria-live="polite"></span>
+  </section>
+
+  <section id="run" class="run" aria-labelledby="run-title">
+    <div class="run-copy">
+      <h2 id="run-title">Run it</h2>
+      <p>A native binary for macOS and Linux. Windows is written for but untested. Zero bundled assets: no fonts, no icons, no images come with the reader.</p>
+      <p class="requirements">Built against egui/eframe 0.35. Requires rustc ≥ 1.92. Language servers are discovered, never installed.</p>
+    </div>
+    <div class="command">
+      <pre tabindex="0" aria-label="Shell commands to run Zenith"><code id="run-command">git clone https://github.com/dovidio/zenith
 cd zenith
 cargo run --release -- ~/code/some-project</code></pre>
-  <p>
-    Built against egui/eframe 0.35. Developed and read on macOS and Linux; Windows is
-    written for but untested. Zero bundled assets: no fonts, no icons, no images.
-    Requires rustc ≥ 1.92.
-  </p>
+      <button class="copy" type="button" data-copy="#run-command">Copy</button>
+      <span class="copy-status" aria-live="polite"></span>
+    </div>
+  </section>
 
-  <h2>Why it does not look like your editor</h2>
-  <ul class="bets">
-    <li><b>Indentation is not whitespace.</b> It is drawn as whisper hairlines in a gutter,
-      one per nesting level, so you feel the shape of a block instead of counting spaces.</li>
-    <li><b>Comments are prose.</b> The only part of a source file written in English is the
-      only part set in a reading face: a serif, italic, in the faintest ink.</li>
-    <li><b>Long lines wrap and declare themselves</b>, marked with <code>↳</code> in the
-      margin, so you never scroll sideways.</li>
-    <li><b>Tones, not rainbow.</b> Each token class sits on a single muted tonal ladder
-      instead of a palette of six competing hues.</li>
-    <li><b>Attention is a gradient.</b> The focus lens dims everything except the block you
-      are reading, like the page coming forward.</li>
-  </ul>
+  <section class="room" aria-labelledby="room-title">
+    <div class="room-copy">
+      <h2 id="room-title">The room</h2>
+      <p>A native code <em>reader</em> for projects where people read code rather than write it — reviewing, onboarding, archaeology, study. Not an editor with the editing removed: the whole interface assumes you will never type a character into it.</p>
+      <p>The page opens alone. A small bloom above it opens the index, the contents, the launcher and settings — one surface at a time, gone when it is done. Read-only is not a mode here; it is the shape of the room.</p>
+      <p>Markdown files render as documents; <code>#</code> inside a fence stays code. Comments are set in the reading face, indentation is drawn as hairlines, and long lines wrap with <span class="wrap-mark">↳</span> in the margin.</p>
+    </div>
+    <figure class="window">
+      <a href="self-portrait.jpg"><img src="reading-detail.jpg" width="1700" height="900" loading="lazy" alt="The actual Zenith window, detail: README.md with its title block, the experimental disclosure, and the first lines of the reading page under the bloom."></a>
+      <figcaption>The actual window, detail · <a href="self-portrait.jpg">full size</a></figcaption>
+    </figure>
+  </section>
 
-  <h2>Six themes</h2>
-  <p>
-    Each is a tonal ladder plus a page, named for something it resembles — a theme is a
-    place, not a colour swatch. <span class="key">1</span>–<span class="key">6</span> pick
-    one, here as in the app.
-  </p>
-  <figure>
-    <img src="themes.jpg" alt="The six themes, each reading the same file in its own ink.">
-    <figcaption>Lugano, Maionese, Bibione, Kununurra, Panittha, Newsprint</figcaption>
-  </figure>
+  <section class="trust" aria-labelledby="trust-title">
+    <h2 id="trust-title">It does not change your code</h2>
+    <p>Files are opened with <code>std::fs::read</code>; there is no save, no lockfile, and no cache directory inside the repository. Its own state — theme, typography, measure, reading positions, bookmarks — lives in <code>~/.config/zenith/</code>, and if that is not writable it degrades to an in-memory session.</p>
+    <p>The only thing it may start on your behalf is a language server, and only for a folder you have opened. It answers one question — where is this defined — and the outline; it never edits.</p>
+  </section>
 
-  <h2>Markdown, as a document</h2>
-  <p>
-    A Markdown file is rendered as the document it describes: headings at heading size,
-    emphasis in the italic face, tables as grids with their columns aligned, quotations on a
-    band with a rule down their edge, and fenced code untouched — a <code>#</code> in a code
-    block is not a heading. <span class="key">x</span> toggles back to the source, because
-    sometimes the source is what you came to read.
-  </p>
-
-  <h2>It does not change your code</h2>
-  <p>
-    Files are opened with <code>std::fs::read</code>; there is no save, no lockfile, and no
-    cache directory inside the repository. Its own state — theme, typography, measure,
-    reading positions, bookmarks — lives in <code>~/.config/zenith/</code>, and if that is
-    not writable it degrades to an in-memory session.
-  </p>
-
-  <hr>
-
-  <p>
-    <a href="https://github.com/dovidio/zenith">The reader, on GitHub</a> ·
-    <a href="https://github.com/dovidio/hugo-zenith">The Hugo theme</a> ·
-    <a href="https://github.com/dovidio/zenith/blob/main/README.md">README</a> ·
-    <a href="https://github.com/dovidio/zenith/blob/main/LICENSE-MIT">MIT</a>
-  </p>
-
-  <div class="bar">
-    <span>theme</span>
-    <button data-theme-set="lugano">1 lugano</button>
-    <button data-theme-set="maionese">2 maionese</button>
-    <button data-theme-set="bibione">3 bibione</button>
-    <button data-theme-set="kununurra">4 kununurra</button>
-    <button data-theme-set="panittha">5 panittha</button>
-    <button data-theme-set="newsprint">6 newsprint</button>
-    <span style="margin-left:auto">written by an AI agent, from a human's direction</span>
-  </div>
+  <section class="close" aria-labelledby="close-title">
+    <div>
+      <h2 id="close-title">Read a codebase without the editor talking back.</h2>
+      <p>The page is the product. Everything else is summoned, then returned.</p>
+    </div>
+    <a class="primary" href="https://github.com/dovidio/zenith">Read the source on GitHub <span>↗</span></a>
+  </section>
 </main>
+
+<footer class="foot">
+  <nav aria-label="Zenith elsewhere">
+    <a href="https://github.com/dovidio/zenith">The reader, on GitHub</a>
+    <a href="https://github.com/dovidio/zenith/blob/main/README.md">README</a>
+    <a href="https://github.com/dovidio/zenith/blob/main/LICENSE-MIT">MIT</a>
+    <a href="https://github.com/dovidio/hugo-zenith">The Hugo theme</a>
+  </nav>
+  <span class="credit">written by an AI agent, from a human's direction</span>
+</footer>
+
 <script>
   (function () {
     var html = document.documentElement;
-    document.querySelectorAll("[data-theme-set]").forEach(function (b) {
+    var buttons = Array.prototype.slice.call(document.querySelectorAll("[data-theme-set]"));
+    var status = document.getElementById("theme-status");
+    var meta = document.getElementById("theme-color");
+
+    function paint(name) {
+      var dark = name === "kununurra" || name === "panittha";
+      html.setAttribute("data-theme", name);
+      html.style.colorScheme = dark ? "dark" : "light";
+      if (meta) {
+        var paper = getComputedStyle(html).getPropertyValue("--paper").trim();
+        if (paper) meta.setAttribute("content", paper);
+      }
+      buttons.forEach(function (b) {
+        var on = b.getAttribute("data-theme-set") === name;
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+        b.classList.toggle("is-current", on);
+      });
+      var pretty = { lugano: "Lugano", maionese: "Maionese", bibione: "Bibione",
+        kununurra: "Kununurra", panittha: "Panittha", newsprint: "Newsprint" };
+      if (status) status.textContent = "Theme: " + (pretty[name] || name);
+    }
+
+    function choose(name) {
+      paint(name);
+      try { localStorage.setItem("zenith-theme", name); } catch (e) {}
+    }
+
+    buttons.forEach(function (b) {
       b.addEventListener("click", function () {
-        var name = b.getAttribute("data-theme-set");
-        if (name === "lugano") html.removeAttribute("data-theme");
-        else html.setAttribute("data-theme", name);
-        localStorage.setItem("zenith-theme", name);
+        choose(b.getAttribute("data-theme-set"));
       });
     });
+
+    document.addEventListener("keydown", function (e) {
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName || ""))) return;
+      var n = parseInt(e.key, 10);
+      if (n >= 1 && n <= 6) {
+        e.preventDefault();
+        buttons[n - 1].click();
+      }
+    });
+
+    var copy = document.querySelector("[data-copy]");
+    var copyStatus = document.querySelector(".copy-status");
+    if (copy) {
+      copy.addEventListener("click", function () {
+        var target = document.querySelector(copy.getAttribute("data-copy"));
+        var text = target ? target.innerText : "";
+        function done() {
+          copy.textContent = "Copied";
+          if (copyStatus) copyStatus.textContent = "Commands copied to the clipboard.";
+          window.setTimeout(function () { copy.textContent = "Copy"; }, 1800);
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, function () {
+            copy.textContent = "Select and copy";
+          });
+        } else {
+          copy.textContent = "Select and copy";
+        }
+      });
+    }
+
+    paint(html.getAttribute("data-theme") || "lugano");
   })();
 </script>
 </body>
