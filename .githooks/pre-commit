@@ -1,0 +1,30 @@
+#!/bin/sh
+# The checks a CI would run, on the machine that is about to commit.
+#
+# Zenith has no remote CI: one author, one laptop, and a check that arrives after
+# the push is a check that arrived too late. Install it once per clone with:
+#
+#     git config core.hooksPath .githooks
+#
+# `git commit --no-verify` remains available for a deliberately unfinished commit.
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: cargo is not on PATH; commit refused" >&2
+    exit 1
+fi
+
+step() {
+    printf '\npre-commit: %s\n' "$1"
+}
+
+step "rustfmt"
+cargo fmt --check
+
+step "clippy (warnings denied)"
+cargo clippy --all-targets --locked --quiet -- -D warnings
+
+step "tests"
+cargo test --locked --quiet

@@ -275,6 +275,15 @@ moved.
   treat it as a prototype, and read the code before you trust it with something you care
   about.
 
+## Working on it
+
+The checks are local, not remote: `.githooks/pre-commit` runs rustfmt, clippy with warnings
+denied, and the test suite. Enable it once per clone:
+
+    git config core.hooksPath .githooks
+
+`git commit --no-verify` skips it for a deliberately unfinished commit.
+
 ## Licence
 
 Released under the [MIT licence](LICENSE-MIT).
