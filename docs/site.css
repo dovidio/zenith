@@ -86,7 +86,7 @@ a:focus-visible, button:focus-visible, pre:focus-visible {
 }
 .topline {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 20px;
   padding: 13px 0 0;
   font-family: var(--voice-ui);
@@ -386,7 +386,7 @@ code {
   .wordmark { font-size: 48px; }
   .wordmark small { margin-top: 10px; font-size: 11px; }
   .mast-actions { gap: 18px; font-size: 12px; }
-  .topline { flex-direction: column; gap: 4px; font-size: 9px; }
+  .topline { flex-direction: column; justify-content: flex-start; gap: 4px; font-size: 9px; }
   .status-top { text-align: left; }
   .hero { padding-top: 16px; }
   h1 { font-size: 34px; }
