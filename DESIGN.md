@@ -353,10 +353,11 @@ cannot scroll under it. The base is never a permanent toolbar: a review strip ca
 opens a summoned sheet. `J K` moves through
 the changed files and `[ ]` through the changes.
 
-The review is a mode, not a page you leave by walking. `gd` to a definition and
-`ctrl-o` / `ctrl-i` through the jumps keep it; a changed file reattaches its marks when
-you return, and a definition opens without them. Only `q`, `g r` or opening another
-folder leaves the review.
+The review is a mode, not a page you leave by walking. `gd` to a definition keeps it; a
+changed file reattaches its marks when you return, and a definition opens without them.
+`q` closes the top page: from a definition it comes back to the review, and on the review
+page it leaves the review. `ctrl-o` / `ctrl-i` still walk the jump history, but the review
+offers its own way back. `g r` or opening another folder leaves from anywhere.
 
 The file is always whole. There are no hunks to expand and no side-by-side columns. A
 changed line is set in the real bold face the machine owns; if it has none, another

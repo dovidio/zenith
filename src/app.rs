@@ -364,6 +364,8 @@ pub struct Zenith {
     review_hover: Option<usize>,
     /// A previous line lifted from the keyboard, without a pointer.
     review_peek: Option<usize>,
+    /// Where the reader was in the review before a definition pulled them away.
+    review_return: Option<Place>,
     /// A screenshot hook: start the review once the folder walk lands.
     review_after_load: bool,
     /// Every language server found on this machine for the languages this folder holds.
@@ -536,6 +538,7 @@ impl Zenith {
             review_error: String::new(),
             review_hover: None,
             review_peek: None,
+            review_return: None,
             review_after_load: false,
             caret: vim::Caret::default(),
             chords: vim::Chords::default(),
@@ -824,13 +827,24 @@ impl Zenith {
         // The review is a mode, not a page you leave by walking. Opening one of its
         // changed files attaches that file's marks again; opening a definition or any
         // other file keeps the review around so the way back is still the same review.
-        if let Some(index) = self
-            .review
-            .as_ref()
-            .and_then(|review| review.files.iter().position(|file| file.path == path))
-        {
-            self.open_review_index(index);
-            return;
+        if let Some(review) = &self.review {
+            let target_in_review = review.files.iter().any(|file| file.path == path);
+            if target_in_review {
+                self.review_return = None;
+            } else if self.open.as_ref().is_some_and(|open| {
+                review.files.iter().any(|file| file.path == open.path)
+            }) {
+                // Leaving the changed file for a definition: remember the review page
+                // so `q` can put the reader back there, not out of the review.
+                self.review_return = self.open.as_ref().map(|open| Place {
+                    path: open.path.clone(),
+                    caret: self.caret,
+                });
+            }
+            if let Some(index) = review.files.iter().position(|file| file.path == path) {
+                self.open_review_index(index);
+                return;
+            }
         }
         self.open_file_plain(path);
     }
@@ -1025,6 +1039,7 @@ impl Zenith {
         self.review_load = None;
         self.review_hover = None;
         self.review_peek = None;
+        self.review_return = None;
         self.show_review_base = false;
     }
 
@@ -1050,6 +1065,7 @@ impl Zenith {
         self.review_index = 0;
         self.review_hover = None;
         self.review_peek = None;
+        self.review_return = None;
         self.bloom_open = true;
         self.bloom_last_touch = 0.0;
         self.review_base = base.clone();
@@ -1312,9 +1328,14 @@ impl Zenith {
                                 .color(pal.ink_soft),
                         );
                     }
+                    let hint = if self.review_return.is_some() {
+                        "q  back to the review   ·   J K  files   [ ]  changes   p  peek"
+                    } else {
+                        "q  close   ·   J K  files   [ ]  changes   p  peek"
+                    };
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            RichText::new("J K  files   [ ]  changes   p  peek")
+                            RichText::new(hint)
                                 .font(self.typo.ui_id(9.5 * self.scale))
                                 .color(pal.ink_soft),
                         );
@@ -1551,6 +1572,7 @@ impl Zenith {
                 self.review_index = index;
                 self.review_hover = None;
                 self.review_peek = None;
+                self.review_return = None;
                 self.title_dirty = true;
                 self.status = e;
                 return;
@@ -1582,6 +1604,7 @@ impl Zenith {
         self.review_index = index;
         self.review_hover = None;
         self.review_peek = None;
+        self.review_return = None;
         self.caret = vim::Caret::default();
         self.pending = Pending::Start;
         self.scroll = 0.0;
@@ -2318,10 +2341,7 @@ impl Zenith {
             Act::Smaller => self.bump_scale(-0.06, ctx),
             Act::Larger => self.bump_scale(0.06, ctx),
             Act::Reload => self.reload(),
-            Act::CloseFile => {
-                self.leave_review();
-                self.close_file();
-            }
+            Act::CloseFile => self.close_page(),
             Act::Peek => {
                 let Some(open) = &self.open else { return };
                 let Some(diff) = &open.diff else {
@@ -2351,6 +2371,27 @@ impl Zenith {
     /// in vim, and it needs no command line here: `q` closes the file, and the file
     /// underneath it is the one you came from. With nothing underneath, the page is the
     /// reading room.
+    fn close_page(&mut self) {
+        let in_review = self.review.as_ref().is_some_and(|review| {
+            self.open
+                .as_ref()
+                .is_some_and(|open| review.files.iter().any(|file| file.path == open.path))
+        });
+        if self.review.is_some() && !in_review {
+            if let Some(place) = self.review_return.take() {
+                self.go_to(&place);
+                self.status = "back to the review".into();
+            } else {
+                // A definition opened before we remembered the review page: closing it
+                // should still leave the review around for the next `q`.
+                self.close_file();
+            }
+            return;
+        }
+        self.leave_review();
+        self.close_file();
+    }
+
     fn close_file(&mut self) {
         self.remember_position();
         self.nav = None;
@@ -6246,7 +6287,9 @@ impl Zenith {
         } else {
             format!("→ {there}")
         };
-        if outside && !left.is_empty() {
+        if self.review.is_some() && self.review_return.is_some() {
+            said.push_str(" · q back to the review");
+        } else if outside && !left.is_empty() {
             // The way back is not visible from here: the tree does not hold this file,
             // and nothing on the page says which key undoes the jump.
             said.push_str(&format!(" · ctrl-o back to {left}"));
