@@ -1,5 +1,10 @@
 //! The window: a page, and four doors summoned at its head. The reading cursor is
 //! the only permanent mark on the page.
+//!
+//! This file owns the window's state, its startup path, the keyboard/action layer and
+//! the frame assembly. The page itself lives in `page`, the sheets in `sheets`, the
+//! review in `review`, the tree in `tree`, language servers in `lsp_ui`, the screenshot
+//! harness in `smoke`, and the shared drawing primitives in `widgets`.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -27,16 +32,17 @@ use crate::vim;
 mod launch;
 mod lsp_ui;
 mod page;
-mod smoke;
-mod widgets;
-use self::launch::*;
-use self::widgets::*;
-mod tree;
-use self::page::{focus_block, reveal_pending, Pending};
-use self::tree::{TreeRow, TreeState};
 mod review;
-use self::review::ReviewState;
 mod sheets;
+mod smoke;
+mod tree;
+mod widgets;
+
+use self::launch::*;
+use self::page::{focus_block, reveal_pending, Pending};
+use self::review::ReviewState;
+use self::tree::{TreeRow, TreeState};
+use self::widgets::*;
 
 // ---------------------------------------------------------------------------
 // Entry points
