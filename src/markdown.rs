@@ -100,7 +100,6 @@ impl MdLine {
         self.spans.iter().map(|s| s.text.as_str()).collect()
     }
 
-
     /// Is this line inside a fenced block, or part of a quote? The painter fills those
     /// bands before the text goes down, so it needs to know the run of them.
     pub fn in_band(&self) -> bool {
@@ -269,7 +268,6 @@ fn front_matter(lines: &[Line]) -> Option<(usize, usize)> {
     Some((first, close))
 }
 
-
 /// The cells of a table row, or `None` if the line is not one.
 ///
 /// A row needs a pipe somewhere. One leading and one trailing pipe are dropped, then the
@@ -311,7 +309,11 @@ fn table_delimiter(source: &str) -> Option<Vec<Align>> {
         }
         let left = t.starts_with(':');
         let right = t.ends_with(':');
-        let dashes = t.trim_start_matches(':').trim_end_matches(':').chars().count();
+        let dashes = t
+            .trim_start_matches(':')
+            .trim_end_matches(':')
+            .chars()
+            .count();
         if dashes == 0 {
             return None;
         }
@@ -450,7 +452,8 @@ fn is_rule(source: &str) -> bool {
         return false;
     }
     for mark in ['-', '*', '_'] {
-        if t.chars().all(|c| c == mark || c == ' ') && t.chars().filter(|c| *c == mark).count() >= 3 {
+        if t.chars().all(|c| c == mark || c == ' ') && t.chars().filter(|c| *c == mark).count() >= 3
+        {
             return true;
         }
     }
@@ -459,9 +462,9 @@ fn is_rule(source: &str) -> bool {
 
 fn fence_open(source: &str) -> Option<char> {
     let t = source.trim_start();
-    ['`', '~'].into_iter().find(|c| {
-        t.chars().take_while(|x| x == c).count() >= 3
-    })
+    ['`', '~']
+        .into_iter()
+        .find(|c| t.chars().take_while(|x| x == c).count() >= 3)
 }
 
 fn is_fence(source: &str, c: char) -> bool {
@@ -499,7 +502,10 @@ fn item(indent: usize, source: &str) -> Option<(usize, String, &str)> {
     let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
     if digits > 0 {
         let after = &t[digits..];
-        if let Some(rest) = after.strip_prefix(". ").or_else(|| after.strip_prefix(") ")) {
+        if let Some(rest) = after
+            .strip_prefix(". ")
+            .or_else(|| after.strip_prefix(") "))
+        {
             return Some((depth, format!("{}. ", &t[..digits]), rest));
         }
     }
@@ -604,10 +610,7 @@ fn inline(text: &str) -> Vec<Span> {
                 let inner: String = chars[i + run..end].iter().collect();
                 // The inside may hold further markup, but emphasis inside emphasis is
                 // rare enough that treating it as text is the honest simplification.
-                spans.push(Span {
-                    text: inner,
-                    role,
-                });
+                spans.push(Span { text: inner, role });
                 i = end + width;
                 break;
             }
@@ -711,7 +714,6 @@ mod tests {
         assert_eq!(out[2].text(), "A paragraph after a rule.");
     }
 
-
     #[test]
     fn a_table_lines_its_columns_up() {
         let out = doc("| Name | Value |\n|------|-------|\n| a | 12 |\n| longer | 7 |\n");
@@ -733,8 +735,14 @@ mod tests {
     fn a_table_aligns_by_its_delimiters() {
         let out = doc("| left | right | middle |\n|:--|--:|:-:|\n| a | 1 | b |\n");
         let row = out[2].text();
-        assert!(row.starts_with("a "), "left column starts at the edge: {row:?}");
-        assert!(row.contains("   1"), "the right column is pushed right: {row:?}");
+        assert!(
+            row.starts_with("a "),
+            "left column starts at the edge: {row:?}"
+        );
+        assert!(
+            row.contains("   1"),
+            "the right column is pushed right: {row:?}"
+        );
     }
 
     #[test]
@@ -773,7 +781,10 @@ mod tests {
     fn strikethrough_is_a_role_not_literal_tildes() {
         let out = doc("this is ~~gone~~ and this ~is not~\n");
         assert_eq!(out[0].text(), "this is gone and this ~is not~");
-        assert!(out[0].spans.iter().any(|s| s.role == Role::Strike && s.text == "gone"));
+        assert!(out[0]
+            .spans
+            .iter()
+            .any(|s| s.role == Role::Strike && s.text == "gone"));
     }
 
     #[test]
@@ -793,9 +804,15 @@ mod tests {
         let out = doc("a **bold** word and *slanted* and `code`\n");
         let spans = &out[0].spans;
         assert_eq!(out[0].text(), "a bold word and slanted and code");
-        assert!(spans.iter().any(|s| s.role == Role::Strong && s.text == "bold"));
-        assert!(spans.iter().any(|s| s.role == Role::Emphasis && s.text == "slanted"));
-        assert!(spans.iter().any(|s| s.role == Role::Code && s.text == "code"));
+        assert!(spans
+            .iter()
+            .any(|s| s.role == Role::Strong && s.text == "bold"));
+        assert!(spans
+            .iter()
+            .any(|s| s.role == Role::Emphasis && s.text == "slanted"));
+        assert!(spans
+            .iter()
+            .any(|s| s.role == Role::Code && s.text == "code"));
     }
 
     #[test]
@@ -810,14 +827,20 @@ mod tests {
     fn emphasis_inside_code_is_text() {
         let out = doc("use `*args` in python\n");
         assert_eq!(out[0].text(), "use *args in python");
-        assert!(out[0].spans.iter().any(|s| s.role == Role::Code && s.text == "*args"));
+        assert!(out[0]
+            .spans
+            .iter()
+            .any(|s| s.role == Role::Code && s.text == "*args"));
     }
 
     #[test]
     fn links_keep_words_and_drop_destinations() {
         let out = doc("see [the docs](https://example.com/x) now\n");
         assert_eq!(out[0].text(), "see the docs now");
-        assert!(out[0].spans.iter().any(|s| s.role == Role::Link && s.text == "the docs"));
+        assert!(out[0]
+            .spans
+            .iter()
+            .any(|s| s.role == Role::Link && s.text == "the docs"));
         // An image becomes its alt text, bracketed — in brackets every face has.
         let img = doc("![a picture](shot.png)\n");
         assert_eq!(img[0].text(), "[a picture]");

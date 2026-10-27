@@ -240,7 +240,6 @@ impl Store {
     pub fn is_favorite(&self, file: &Path) -> bool {
         self.session.favorites.iter().any(|p| p == file)
     }
-
 }
 
 pub fn config_dir() -> PathBuf {

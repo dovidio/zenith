@@ -58,7 +58,10 @@ mod tests {
         write(&mut buffer, r#"{"id":1}"#).unwrap();
         assert_eq!(buffer, b"Content-Length: 8\r\n\r\n{\"id\":1}");
         let mut input = Cursor::new(buffer);
-        assert_eq!(read(&mut input).unwrap().as_deref(), Some(&b"{\"id\":1}"[..]));
+        assert_eq!(
+            read(&mut input).unwrap().as_deref(),
+            Some(&b"{\"id\":1}"[..])
+        );
         assert_eq!(read(&mut input).unwrap(), None, "a clean end of stream");
     }
 
@@ -68,8 +71,14 @@ mod tests {
         write(&mut buffer, r#"{"a":1}"#).unwrap();
         write(&mut buffer, r#"{"b":2}"#).unwrap();
         let mut input = Cursor::new(buffer);
-        assert_eq!(read(&mut input).unwrap().as_deref(), Some(&b"{\"a\":1}"[..]));
-        assert_eq!(read(&mut input).unwrap().as_deref(), Some(&b"{\"b\":2}"[..]));
+        assert_eq!(
+            read(&mut input).unwrap().as_deref(),
+            Some(&b"{\"a\":1}"[..])
+        );
+        assert_eq!(
+            read(&mut input).unwrap().as_deref(),
+            Some(&b"{\"b\":2}"[..])
+        );
     }
 
     #[test]

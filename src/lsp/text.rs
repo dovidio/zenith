@@ -149,7 +149,10 @@ mod tests {
         // `🙂` is one character and two UTF-16 units, so the character after it sits
         // one unit further along than its character index suggests.
         let after = before + 1;
-        assert_eq!(position(&l, after), l.indent_bytes as u32 + before as u32 + 2);
+        assert_eq!(
+            position(&l, after),
+            l.indent_bytes as u32 + before as u32 + 2
+        );
         assert_eq!(column(&l, position(&l, after)), after);
     }
 

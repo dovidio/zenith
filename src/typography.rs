@@ -54,6 +54,10 @@ const fn fam(label: &'static str, stems: &'static [&'static str], note: &'static
 }
 
 /// Preference order matters: it is the order a reader meets these faces.
+///
+/// One face per line is deliberate: this is a ranking, not prose, and wrapping each
+/// entry into six lines hides that order.
+#[rustfmt::skip]
 static FAMILIES: &[(Role, Family)] = &[
     // ---- code ----
     (Role::Code, fam("SF Mono", &["sfnsmono", "sfmono"], "Apple's coding face: quiet, unambiguous")),
@@ -327,7 +331,9 @@ fn walk(dir: &Path, depth: usize, visited: &mut usize) -> Vec<PathBuf> {
     };
     for entry in entries.flatten() {
         *visited += 1;
-        let Ok(kind) = entry.file_type() else { continue };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
         // `file_type` does not follow symlinks, so a symlinked directory is skipped
         // rather than risking a loop.
         if kind.is_dir() {
@@ -558,7 +564,11 @@ pub fn faces(path: &Path) -> Vec<Face> {
 /// holds several faces in one file and the suffix says nothing, so there we read each
 /// face's OS/2 style and weight and pick the italic that matches the regular.
 fn italic_sibling(voice: &Voice) -> Option<(PathBuf, u32)> {
-    let stem = voice.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let stem = voice
+        .path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
     let dir = voice.path.parent()?;
 
     let mut candidates: Vec<PathBuf> = Vec::new();
@@ -607,20 +617,37 @@ fn italic_sibling(voice: &Voice) -> Option<(PathBuf, u32)> {
 /// it first, then another usable face inside the same collection. If the machine has no
 /// bold face, the review falls back to the regular face rather than a faux weight.
 fn bold_sibling(voice: &Voice) -> Option<(PathBuf, u32)> {
-    let stem = voice.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let stem = voice
+        .path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
     let dir = voice.path.parent()?;
 
     let mut candidates: Vec<PathBuf> = Vec::new();
     for suffix in [
-        " Bold", "-Bold", "Bold", "-Semibold", " Semibold", "-SemiBold",
-        "-Medium", " Medium",
+        " Bold",
+        "-Bold",
+        "Bold",
+        "-Semibold",
+        " Semibold",
+        "-SemiBold",
+        "-Medium",
+        " Medium",
     ] {
         for ext in ["ttf", "otf", "ttc"] {
             candidates.push(dir.join(format!("{stem}{suffix}.{ext}")));
         }
     }
     if let Some(without) = stem.strip_suffix("-Regular") {
-        for suffix in ["-Bold", "-Semibold", "-SemiBold", "-Medium", " Bold", " Semibold"] {
+        for suffix in [
+            "-Bold",
+            "-Semibold",
+            "-SemiBold",
+            "-Medium",
+            " Bold",
+            " Semibold",
+        ] {
             for ext in ["ttf", "otf"] {
                 candidates.push(dir.join(format!("{without}{suffix}.{ext}")));
             }
@@ -814,7 +841,8 @@ pub fn build(mono_idx: usize, prose_idx: usize, ui_idx: usize) -> Typography {
     } else {
         mono_fallback.clone()
     };
-    defs.families.insert(FontFamily::Monospace, code_chain.clone());
+    defs.families
+        .insert(FontFamily::Monospace, code_chain.clone());
     defs.families.insert(code.clone(), code_chain.clone());
     let code_italic_chain = match &mono_italic {
         Some(ikey) => chain(vec![ikey.clone(), code_key.clone()], &mono_fallback),
@@ -837,7 +865,8 @@ pub fn build(mono_idx: usize, prose_idx: usize, ui_idx: usize) -> Typography {
                 add_font(&mut defs, &ikey, &path, index, &v.label).then_some(ikey)
             });
             let regular_chain = chain(vec![prose_key.clone()], &prop_fallback);
-            defs.families.insert(prose_fam.clone(), regular_chain.clone());
+            defs.families
+                .insert(prose_fam.clone(), regular_chain.clone());
             defs.families.insert(
                 prose_italic_fam.clone(),
                 match &italic {
@@ -859,7 +888,8 @@ pub fn build(mono_idx: usize, prose_idx: usize, ui_idx: usize) -> Typography {
             (*idx, v.label.clone())
         }
         None => {
-            defs.families.insert(prose_fam.clone(), prop_fallback.clone());
+            defs.families
+                .insert(prose_fam.clone(), prop_fallback.clone());
             defs.families
                 .insert(prose_italic_fam.clone(), prop_fallback.clone());
             defs.families
@@ -932,7 +962,9 @@ impl Typography {
         let code = self.mono_voices.get(self.mono_idx).map(|v| v.x_height);
         let prose = self.prose_voices.get(self.prose_idx).map(|v| v.x_height);
         match (code, prose) {
-            (Some(code), Some(prose)) if code > 0.0 && prose > 0.0 => (code / prose).clamp(0.95, 1.35),
+            (Some(code), Some(prose)) if code > 0.0 && prose > 0.0 => {
+                (code / prose).clamp(0.95, 1.35)
+            }
             _ => 1.0,
         }
     }
@@ -949,7 +981,6 @@ impl Typography {
     pub fn ui_id(&self, size: f32) -> FontId {
         FontId::new(size, self.ui.clone())
     }
-
 }
 
 fn show_chars(chars: &[char]) -> String {
@@ -1091,19 +1122,19 @@ mod tests {
 /// Apple's have all of these, a minimal Linux install often has none of the dingbats. So
 /// the interface asks what this machine can draw, once, and uses letters where it cannot.
 pub const MARKS: &[(&str, &str)] = &[
-    ("✦", "*"),   // bookmarked
-    ("▾", "v"),   // an open folder
-    ("▸", ">"),   // a closed folder
-    ("❖", "*"),   // a module
-    ("◆", "+"),   // a type
-    ("◇", "-"),   // a trait
-    ("○", "o"),   // a constant
-    ("≡", "="),   // an enum
-    ("ƒ", "f"),   // a function
-    ("§", "#"),   // a heading
-    ("↳", "~"),   // a wrapped line
-    ("◦", "-"),   // a doorway file
-    ("›", "/"),   // a breadcrumb
+    ("✦", "*"), // bookmarked
+    ("▾", "v"), // an open folder
+    ("▸", ">"), // a closed folder
+    ("❖", "*"), // a module
+    ("◆", "+"), // a type
+    ("◇", "-"), // a trait
+    ("○", "o"), // a constant
+    ("≡", "="), // an enum
+    ("ƒ", "f"), // a function
+    ("§", "#"), // a heading
+    ("↳", "~"), // a wrapped line
+    ("◦", "-"), // a doorway file
+    ("›", "/"), // a breadcrumb
 ];
 
 /// What this machine can draw, out of [`MARKS`].

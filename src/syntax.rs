@@ -437,8 +437,8 @@ fn classify_flow(toks: &[Token]) -> Flow {
         || trimmed.starts_with("catch")
         || trimmed.starts_with("finally");
     // `} else {` closes and opens on the same line.
-    let both = closes_head
-        && (trimmed.contains('{') || trimmed.contains(" do") || trimmed.ends_with(':'));
+    let both =
+        closes_head && (trimmed.contains('{') || trimmed.contains(" do") || trimmed.ends_with(':'));
 
     if both {
         Flow::Both
@@ -618,7 +618,6 @@ pub fn tone_for_scope(scope: &str, text: &str) -> Option<Tone> {
     // Structural containers: say nothing so an inner scope can speak instead.
     None
 }
-
 
 /// The grammar to borrow for an extension the syntax set does not know.
 fn grammar_alias(ext: &str) -> Option<&'static str> {
@@ -823,11 +822,7 @@ fn config_tokens(line: &str) -> Vec<Token> {
 }
 
 /// The value half of a config line, and also whole lines that are values.
-fn config_value(
-    mut rest: &str,
-    push: &impl Fn(&str, Tone, &mut Vec<Token>),
-    out: &mut Vec<Token>,
-) {
+fn config_value(mut rest: &str, push: &impl Fn(&str, Tone, &mut Vec<Token>), out: &mut Vec<Token>) {
     while !rest.is_empty() {
         let c = rest.chars().next().unwrap();
         if c == '#' {
@@ -858,7 +853,9 @@ fn config_value(
         if c.is_ascii_digit() || ((c == '-' || c == '+') && rest.len() > 1) {
             let len: usize = rest
                 .chars()
-                .take_while(|ch| ch.is_ascii_digit() || matches!(ch, '.' | '-' | '+' | '_' | 'e' | 'E' | 'x'))
+                .take_while(|ch| {
+                    ch.is_ascii_digit() || matches!(ch, '.' | '-' | '+' | '_' | 'e' | 'E' | 'x')
+                })
                 .map(|ch| ch.len_utf8())
                 .sum();
             if len > 0 && rest[..len].chars().any(|ch| ch.is_ascii_digit()) {
@@ -901,8 +898,16 @@ fn config_value(
 
 /// A file only enters the reading room if it is text and of sane size.
 pub enum Readable {
-    Text { text: String, bytes: usize, lossy: bool, truncated: bool },
-    Binary { bytes: usize, reason: &'static str },
+    Text {
+        text: String,
+        bytes: usize,
+        lossy: bool,
+        truncated: bool,
+    },
+    Binary {
+        bytes: usize,
+        reason: &'static str,
+    },
 }
 
 /// Byte offset just past the first `n` lines of `text`, always on a line boundary.
@@ -1022,11 +1027,17 @@ mod tests {
 
     #[test]
     fn declaration_keywords_are_darker_than_primitives() {
-        assert_eq!(tone_for_scope("storage.type.struct.rust", "struct"), Some(Tone::Keyword));
+        assert_eq!(
+            tone_for_scope("storage.type.struct.rust", "struct"),
+            Some(Tone::Keyword)
+        );
         assert_eq!(tone_for_scope("storage.type.rust", "str"), Some(Tone::Type));
         // A grammar that scopes a capitalised name as `storage.type` still gets a
         // keyword; the capitalisation heuristic only rescues unclassified runs.
-        assert_eq!(tone_for_scope("storage.type.rust", "HashMap"), Some(Tone::Keyword));
+        assert_eq!(
+            tone_for_scope("storage.type.rust", "HashMap"),
+            Some(Tone::Keyword)
+        );
     }
 
     #[test]
@@ -1049,11 +1060,19 @@ mod tests {
 
     #[test]
     fn capitalised_words_are_types() {
-        assert_eq!(tone_for_stack(&stack(&["source.rust"]), "HashMap"), Tone::Type);
-        assert_eq!(tone_for_stack(&stack(&["source.rust"]), "name"), Tone::Plain);
-        assert_eq!(tone_for_stack(&stack(&["source.rust"]), "MAX_LIMIT"), Tone::Plain);
+        assert_eq!(
+            tone_for_stack(&stack(&["source.rust"]), "HashMap"),
+            Tone::Type
+        );
+        assert_eq!(
+            tone_for_stack(&stack(&["source.rust"]), "name"),
+            Tone::Plain
+        );
+        assert_eq!(
+            tone_for_stack(&stack(&["source.rust"]), "MAX_LIMIT"),
+            Tone::Plain
+        );
     }
-
 }
 
 #[cfg(test)]

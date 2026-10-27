@@ -28,7 +28,7 @@ mod wire;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use client::{Client, Incoming};
 
@@ -48,7 +48,11 @@ pub struct Target {
 impl Target {
     /// Where to say it is, for a person: `~/code/x/src/lib.rs:118`.
     pub fn place(&self) -> String {
-        format!("{}:{}", crate::catalog::display_path(&self.path), self.line + 1)
+        format!(
+            "{}:{}",
+            crate::catalog::display_path(&self.path),
+            self.line + 1
+        )
     }
 }
 
@@ -78,9 +82,15 @@ pub enum Answer {
     /// The session is over, and this is why.
     Ended(String),
     /// Targets for the request with this id.
-    Found { id: i64, targets: Vec<Target> },
+    Found {
+        id: i64,
+        targets: Vec<Target>,
+    },
     /// The server answered a question with an error.
-    Refused { id: i64, message: String },
+    Refused {
+        id: i64,
+        message: String,
+    },
     /// The outline of the document that was open when it was asked for.
     Outline(Vec<Outline>),
 }
@@ -133,7 +143,9 @@ impl Session {
                     let _ = self.client.answer(id);
                 }
                 Incoming::Gone => answers.push(self.ended()),
-                Incoming::Reply { id, answer } if id == self.handshake && self.state == State::Starting => {
+                Incoming::Reply { id, answer }
+                    if id == self.handshake && self.state == State::Starting =>
+                {
                     match answer {
                         Ok(_) => {
                             let _ = self.client.notify("initialized", json!({}));
@@ -240,7 +252,11 @@ impl Session {
             if std::time::Instant::now() >= deadline {
                 return Err("the server is still reading this project".into());
             }
-            if let Some(Answer::Ended(why)) = self.poll().into_iter().find(|a| matches!(a, Answer::Ended(_))) {
+            if let Some(Answer::Ended(why)) = self
+                .poll()
+                .into_iter()
+                .find(|a| matches!(a, Answer::Ended(_)))
+            {
                 return Err(why);
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -435,7 +451,9 @@ fn kind_of(kind: u64) -> crate::outline::SymKind {
 fn collect(value: &Value, out: &mut Vec<Target>) {
     let (uri, range) = match (
         value.get("targetUri"),
-        value.get("targetSelectionRange").or_else(|| value.get("targetRange")),
+        value
+            .get("targetSelectionRange")
+            .or_else(|| value.get("targetRange")),
     ) {
         (Some(uri), Some(range)) => (uri, range),
         _ => match (value.get("uri"), value.get("range")) {
@@ -509,7 +527,8 @@ mod tests {
         let file = real.join("x.c");
         std::fs::write(&file, "int x;").unwrap();
 
-        let range = json!({ "start": { "line": 3, "character": 7 }, "end": { "line": 3, "character": 9 } });
+        let range =
+            json!({ "start": { "line": 3, "character": 7 }, "end": { "line": 3, "character": 9 } });
         let value = json!([
             { "uri": text::to_uri(&file), "range": range },
             { "uri": text::to_uri(&link.join("x.c")), "range": range }

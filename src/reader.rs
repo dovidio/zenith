@@ -24,12 +24,12 @@ use std::sync::Arc;
 
 use egui::text::LayoutJob;
 use egui::{
-    Align, Align2, Color32, Context, CornerRadius, FontId, Galley, Painter, Pos2, Rangef, Rect,
-    Stroke, TextFormat, vec2,
+    vec2, Align, Align2, Color32, Context, CornerRadius, FontId, Galley, Painter, Pos2, Rangef,
+    Rect, Stroke, TextFormat,
 };
 
 use crate::syntax::{Document, Line};
-use crate::theme::{Palette, Tone, alpha, mix};
+use crate::theme::{alpha, mix, Palette, Tone};
 
 /// Indentation beyond this many columns is not drawn as guides (deep enough).
 const INDENT_CAP: usize = 28;
@@ -306,11 +306,14 @@ pub fn layout(
         // are not part of the page. A reader who wants the file's true geometry turns
         // "compress blank lines" off, which is the same question asked once.
         let metadata = matches!(md_line.map(|m| m.kind), Some(crate::markdown::Kind::Meta));
-        line_style.strong = strong
-            .and_then(|s| s.get(index))
-            .copied()
-            .unwrap_or(false);
-        let job = line_job(&line_style, line, md_line, wrap_w, if metadata { blank_h } else { line_row_h });
+        line_style.strong = strong.and_then(|s| s.get(index)).copied().unwrap_or(false);
+        let job = line_job(
+            &line_style,
+            line,
+            md_line,
+            wrap_w,
+            if metadata { blank_h } else { line_row_h },
+        );
         // Measure once to learn how tall the line is when wrapped. The galley itself
         // is thrown away: it will be rebuilt when the line is painted.
         let h = if metadata && style.compress_blank {
@@ -418,8 +421,7 @@ fn line_job(
 
         if style.distilled {
             let metadata = mix(style.color_for(Tone::Punct), style.paper, 0.15);
-            let is_trailing_semicolon =
-                tok.text.trim() == ";" && index + 1 == line.tokens.len();
+            let is_trailing_semicolon = tok.text.trim() == ";" && index + 1 == line.tokens.len();
             if is_trailing_semicolon {
                 // The compiler needs it; the reader does not. Kept in place, so the
                 // line still wraps exactly as the file does.
@@ -469,7 +471,11 @@ fn line_job(
             }
             if tok.tone == Tone::Doc {
                 // A doc comment is an epigraph: upright serif, slightly more ink.
-                fmt.color = mix(style.tones[Tone::Doc.index()], style.tones[Tone::Plain.index()], 0.15);
+                fmt.color = mix(
+                    style.tones[Tone::Doc.index()],
+                    style.tones[Tone::Plain.index()],
+                    0.15,
+                );
             }
             job.append(body, 0.0, fmt);
             continue;
@@ -480,7 +486,6 @@ fn line_job(
 
     job
 }
-
 
 /// One rendered Markdown line: the roles the scanner found, turned into faces and inks.
 ///
@@ -591,12 +596,16 @@ fn markdown_job(style: &Style, md: &crate::markdown::MdLine, wrap_w: f32, row_h:
     }
     if job.sections.is_empty() {
         // Rules, empty lines and front matter carry no text.
-        job.append(" ", 0.0, TextFormat {
-            font_id: prose.clone(),
-            color: style.paper,
-            line_height: Some(row_h),
-            ..Default::default()
-        });
+        job.append(
+            " ",
+            0.0,
+            TextFormat {
+                font_id: prose.clone(),
+                color: style.paper,
+                line_height: Some(row_h),
+                ..Default::default()
+            },
+        );
     }
     job
 }
@@ -632,7 +641,10 @@ pub fn split_comment_mark(text: &str) -> (&str, &str) {
     let mut i = 0usize;
     while i < bytes.len() && i < 12 {
         let c = bytes[i] as char;
-        if matches!(c, '/' | '#' | '*' | '-' | ';' | '!' | '{' | '}' | '=' | '\'' | '"') {
+        if matches!(
+            c,
+            '/' | '#' | '*' | '-' | ';' | '!' | '{' | '}' | '=' | '\'' | '"'
+        ) {
             i += 1;
         } else {
             break;
@@ -808,7 +820,10 @@ pub fn paint(painter: &Painter, p: &Paint) {
                 painter.rect_filled(rect, CornerRadius::same(3), band);
                 if quoted {
                     // A quotation gets a rule down its left edge as well.
-                    let edge = Rect::from_min_max(rect.left_top(), Pos2::new(rect.left() + 2.0, rect.bottom()));
+                    let edge = Rect::from_min_max(
+                        rect.left_top(),
+                        Pos2::new(rect.left() + 2.0, rect.bottom()),
+                    );
                     painter.rect_filled(edge, CornerRadius::ZERO, p.palette.accent_soft);
                 }
             };
@@ -1045,7 +1060,11 @@ pub fn paint_spine(
     );
     let Some(frac) = frac else { return };
     let (a, b) = mark_range(top, height, frac);
-    painter.vline(x, Rangef::new(a, b), Stroke::new(2.0, alpha(palette.accent, 215)));
+    painter.vline(
+        x,
+        Rangef::new(a, b),
+        Stroke::new(2.0, alpha(palette.accent, 215)),
+    );
 }
 
 /// Where the reading-position mark goes, for a fraction down the file.
@@ -1068,7 +1087,6 @@ pub fn column_x(page: Rect, measure: f32, gutter: f32) -> f32 {
     let left = page.left() + gutter.max((page.width() - measure) * 0.5);
     left.max(page.left() + gutter)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1117,7 +1135,10 @@ mod spine_tests {
         assert!(a >= TOP);
         // At the very bottom it must finish at the bottom, not short of it.
         let (a, b) = mark_range(TOP, H, 1.0);
-        assert!((b - (TOP + H)).abs() < 0.01, "the mark must reach the bottom");
+        assert!(
+            (b - (TOP + H)).abs() < 0.01,
+            "the mark must reach the bottom"
+        );
         assert!(b - a >= 30.0);
     }
 

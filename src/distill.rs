@@ -171,7 +171,9 @@ fn split_inline_annotation(line: &Line) -> Option<(usize, usize, usize)> {
             match (words.next(), words.next(), words.next()) {
                 (Some(kw), Some(rest), None) => {
                     DECL_WORDS.contains(&kw)
-                        && rest.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                        && rest
+                            .chars()
+                            .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
                 }
                 _ => false,
             }
@@ -186,9 +188,15 @@ fn split_inline_annotation(line: &Line) -> Option<(usize, usize, usize)> {
                     .split(|c: char| !c.is_alphanumeric() && c != '_')
                     .next()
                     .unwrap_or(""),
-            ) || after.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+            ) || after
+                .chars()
+                .next()
+                .map(|c| c.is_uppercase())
+                .unwrap_or(false)
                 || after.contains('<'));
-        let later_type = toks[i + 1..eq].iter().any(|t| looks_like_type(std::slice::from_ref(t)));
+        let later_type = toks[i + 1..eq]
+            .iter()
+            .any(|t| looks_like_type(std::slice::from_ref(t)));
         if !tail_type && !later_type {
             continue;
         }
@@ -303,21 +311,34 @@ fn ends_statement(t: &crate::syntax::Token) -> bool {
 
 /// Words that can stand in front of the name they declare.
 const DECL_WORDS: &[&str] = &[
-    "val", "var", "let", "const", "final", "static", "public", "private", "protected",
-    "pub", "mut", "readonly", "my",
+    "val",
+    "var",
+    "let",
+    "const",
+    "final",
+    "static",
+    "public",
+    "private",
+    "protected",
+    "pub",
+    "mut",
+    "readonly",
+    "my",
 ];
 
 const TYPE_WORDS: &[&str] = &[
-    "bool", "boolean", "byte", "char", "decimal", "double", "error", "float", "float32",
-    "float64", "int", "int8", "int16", "int32", "int64", "integer", "long", "rune", "short",
-    "string", "str", "uint", "uint8", "uint16", "uint32", "uint64", "u8", "u16", "u32", "u64",
-    "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "f32", "f64", "void", "var",
-    "any", "number", "object", "Self", "self",
+    "bool", "boolean", "byte", "char", "decimal", "double", "error", "float", "float32", "float64",
+    "int", "int8", "int16", "int32", "int64", "integer", "long", "rune", "short", "string", "str",
+    "uint", "uint8", "uint16", "uint32", "uint64", "u8", "u16", "u32", "u64", "u128", "usize",
+    "i8", "i16", "i32", "i64", "i128", "isize", "f32", "f64", "void", "var", "any", "number",
+    "object", "Self", "self",
 ];
 
 fn is_type_word(text: &str) -> bool {
     let t = text.trim();
-    TYPE_WORDS.contains(&t) || t.to_lowercase().starts_with("uint") || t.to_lowercase().starts_with("int")
+    TYPE_WORDS.contains(&t)
+        || t.to_lowercase().starts_with("uint")
+        || t.to_lowercase().starts_with("int")
 }
 
 fn is_capitalised(text: &str) -> bool {
@@ -413,9 +434,28 @@ fn postfix(line: &Line) -> Option<Vec<bool>> {
 
 /// Leading words that qualify a declaration without being its type.
 const MODIFIERS: &[&str] = &[
-    "public", "private", "protected", "internal", "static", "final", "abstract", "sealed",
-    "readonly", "const", "volatile", "transient", "synchronized", "native", "inline",
-    "extern", "unsafe", "mutable", "override", "open", "late", "var",
+    "public",
+    "private",
+    "protected",
+    "internal",
+    "static",
+    "final",
+    "abstract",
+    "sealed",
+    "readonly",
+    "const",
+    "volatile",
+    "transient",
+    "synchronized",
+    "native",
+    "inline",
+    "extern",
+    "unsafe",
+    "mutable",
+    "override",
+    "open",
+    "late",
+    "var",
 ];
 
 fn prefix(line: &Line) -> Option<Vec<bool>> {
@@ -489,7 +529,10 @@ fn go(line: &Line) -> Option<Vec<bool>> {
     // whitespace, which the grammar hands us as its own token: require exactly two
     // words, the second of which looks like a type, and either the first is exported
     // (capitalised, as Go's fields are) or the second is a type the language knows.
-    if toks.iter().any(|t| t.text.contains(['=', '(', ')', '*', '['])) {
+    if toks
+        .iter()
+        .any(|t| t.text.contains(['=', '(', ')', '*', '[']))
+    {
         return None;
     }
     let words: Vec<usize> = (0..toks.len())
@@ -497,7 +540,8 @@ fn go(line: &Line) -> Option<Vec<bool>> {
         .collect();
     if words.len() == 2 {
         let (a, b) = (words[0], words[1]);
-        if looks_like_type(&toks[b..b + 1]) && (is_capitalised(&toks[a].text) || is_type_word(&toks[b].text))
+        if looks_like_type(&toks[b..b + 1])
+            && (is_capitalised(&toks[a].text) || is_type_word(&toks[b].text))
         {
             let mut mask = vec![false; toks.len()];
             mask[b] = true;
@@ -764,7 +808,11 @@ mod tests {
             ("2", Number),
             (";", Punct),
         ]);
-        assert_eq!(prefix_faded(&ternary), "int", "only the type, never the value");
+        assert_eq!(
+            prefix_faded(&ternary),
+            "int",
+            "only the type, never the value"
+        );
 
         let foreach = line(&[
             ("for", Keyword),
@@ -776,7 +824,11 @@ mod tests {
             (" list", Plain),
             (")", Punct),
         ]);
-        assert_eq!(prefix_faded(&foreach), "", "a for-each is not a declaration");
+        assert_eq!(
+            prefix_faded(&foreach),
+            "",
+            "a for-each is not a declaration"
+        );
     }
 
     #[test]
@@ -789,12 +841,30 @@ mod tests {
             (" = ", Operator),
             ("1", Number),
         ]);
-        assert_eq!(mask(Lang::Go, &var).map(|m| var.tokens.iter().zip(m).filter(|(_, f)| *f).map(|(t, _)| t.text.as_str()).collect::<String>().trim().to_string()), Some("int".into()));
+        assert_eq!(
+            mask(Lang::Go, &var).map(|m| var
+                .tokens
+                .iter()
+                .zip(m)
+                .filter(|(_, f)| *f)
+                .map(|(t, _)| t.text.as_str())
+                .collect::<String>()
+                .trim()
+                .to_string()),
+            Some("int".into())
+        );
 
         let field = line(&[("Name", Plain), (" string", Type)]);
         assert_eq!(
-            mask(Lang::Go, &field)
-                .map(|m| field.tokens.iter().zip(m).filter(|(_, f)| *f).map(|(t, _)| t.text.as_str()).collect::<String>().trim().to_string()),
+            mask(Lang::Go, &field).map(|m| field
+                .tokens
+                .iter()
+                .zip(m)
+                .filter(|(_, f)| *f)
+                .map(|(t, _)| t.text.as_str())
+                .collect::<String>()
+                .trim()
+                .to_string()),
             Some("string".into())
         );
     }
@@ -814,14 +884,7 @@ mod tests {
         ]);
         assert_eq!(
             marks(Lang::Postfix, &l),
-            vec![
-                None,
-                Some(Mark::Part(6, 15)),
-                None,
-                None,
-                None,
-                None
-            ],
+            vec![None, Some(Mark::Part(6, 15)), None, None, None, None],
             "the name stays, the annotation recedes"
         );
     }

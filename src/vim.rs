@@ -147,10 +147,7 @@ pub fn clamp(doc: &Document, caret: Caret) -> Caret {
 pub fn landing(doc: &Document, line: usize) -> Caret {
     let line = line.min(doc.lines.len().saturating_sub(1));
     let text: Vec<char> = chars(doc, line);
-    let col = text
-        .iter()
-        .position(|c| !c.is_whitespace())
-        .unwrap_or(0);
+    let col = text.iter().position(|c| !c.is_whitespace()).unwrap_or(0);
     Caret { line, col }
 }
 
@@ -437,7 +434,11 @@ pub fn matches(doc: &Document, needle: &str) -> Vec<Caret> {
     let mut out = Vec::new();
     for (i, line) in doc.lines.iter().enumerate() {
         let text = line.text();
-        let hay = if fold { text.to_lowercase() } else { text.clone() };
+        let hay = if fold {
+            text.to_lowercase()
+        } else {
+            text.clone()
+        };
         let mut from = 0usize;
         while let Some(byte) = hay[from..].find(&needle_cmp) {
             let at = from + byte;
@@ -530,7 +531,11 @@ mod tests {
     fn w_crosses_lines_when_the_line_ends() {
         let d = doc(&["fn main() {", "    let x = 1;", "}"]);
         let c = resolve(&d, Caret::new(0, 10), Motion::WordNext);
-        assert_eq!(c, Caret::new(1, 0), "lands on the first non-blank of the next line");
+        assert_eq!(
+            c,
+            Caret::new(1, 0),
+            "lands on the first non-blank of the next line"
+        );
     }
 
     #[test]
@@ -623,7 +628,10 @@ mod tests {
         // `⇧Z` arrives as 'Z': not a continuation of `z`, so it must reach the
         // ordinary handler rather than being swallowed by the prefix.
         assert_eq!(c.feed('Z'), Feed::Pass);
-        assert!(!c.is_pending(), "the prefix must not survive a failed chord");
+        assert!(
+            !c.is_pending(),
+            "the prefix must not survive a failed chord"
+        );
     }
 
     #[test]

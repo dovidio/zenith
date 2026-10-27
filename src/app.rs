@@ -6,18 +6,18 @@ use std::path::{Path, PathBuf};
 
 use egui::text::TextFormat;
 use egui::{
-    Align2, Color32, CornerRadius, FontId, Frame, Key, Margin, Pos2, Rect, RichText, ScrollArea,
-    Sense, Stroke, TextStyle, Ui, ViewportCommand, vec2,
+    vec2, Align2, Color32, CornerRadius, FontId, Frame, Key, Margin, Pos2, Rect, RichText,
+    ScrollArea, Sense, Stroke, TextStyle, Ui, ViewportCommand,
 };
 
-use crate::catalog::{Store, display_path};
+use crate::catalog::{display_path, Store};
 use crate::distill;
+use crate::folder::{self, Entry, FileEntry, Folder};
 use crate::fuzzy;
 use crate::lsp;
 use crate::outline::{self, SymKind, Symbol};
 use crate::reader::{self, Laid, Paint, Style};
 use crate::review::{self, Base, Review};
-use crate::folder::{self, Entry, FileEntry, Folder};
 use crate::syntax::{Document, Highlighter, Readable};
 use crate::theme::{self, Palette, Tone};
 use crate::typography::{self, Typography};
@@ -82,7 +82,10 @@ fn timing() -> bool {
 fn launch(opts: Startup) {
     let _ = STARTED.set(std::time::Instant::now());
     let title = match &opts.target {
-        Some(p) => format!("zenith — {}", p.file_name().unwrap_or_default().to_string_lossy()),
+        Some(p) => format!(
+            "zenith — {}",
+            p.file_name().unwrap_or_default().to_string_lossy()
+        ),
         None => "zenith".to_string(),
     };
     // The strip along the top of a window belongs to the desktop, not to the app: on macOS
@@ -763,7 +766,11 @@ impl Zenith {
     fn first_doorway(&self) -> Option<PathBuf> {
         let folder = self.folder.as_ref()?;
         let find = |pred: &dyn Fn(&FileEntry) -> bool| {
-            folder.files.iter().find(|f| pred(f)).map(|f| f.path.clone())
+            folder
+                .files
+                .iter()
+                .find(|f| pred(f))
+                .map(|f| f.path.clone())
         };
         find(&|f| f.name.to_ascii_lowercase().starts_with("readme"))
             .or_else(|| find(&|f| f.rel.matches('/').count() == 0 && f.doorway))
@@ -838,9 +845,11 @@ impl Zenith {
             let target_in_review = review.files.iter().any(|file| file.path == path);
             if target_in_review {
                 self.review_return = None;
-            } else if self.open.as_ref().is_some_and(|open| {
-                review.files.iter().any(|file| file.path == open.path)
-            }) {
+            } else if self
+                .open
+                .as_ref()
+                .is_some_and(|open| review.files.iter().any(|file| file.path == open.path))
+            {
                 // Leaving the changed file for a definition: remember the review page
                 // so `q` can put the reader back there, not out of the review.
                 self.review_return = self.open.as_ref().map(|open| Place {
@@ -965,7 +974,11 @@ impl Zenith {
                         let outline = outline::extract(&path_for_thread, &doc.syntax, &doc.lines);
                         let prose = outline::family(&path_for_thread, &doc.syntax)
                             == outline::Family::Markdown;
-                        let _ = tx.send(Loaded { doc, outline, prose });
+                        let _ = tx.send(Loaded {
+                            doc,
+                            outline,
+                            prose,
+                        });
                     });
                     let loading = Loading {
                         rx,
@@ -1054,11 +1067,11 @@ impl Zenith {
         if self.review_load.is_some() {
             return;
         }
-        let root = self
-            .folder
-            .as_ref()
-            .map(|f| f.root.clone())
-            .or_else(|| self.open.as_ref().map(|o| crate::catalog::project_root(&o.path)));
+        let root = self.folder.as_ref().map(|f| f.root.clone()).or_else(|| {
+            self.open
+                .as_ref()
+                .map(|o| crate::catalog::project_root(&o.path))
+        });
         let Some(root) = root else {
             self.status = "open a folder to review its changes".into();
             return;
@@ -1088,12 +1101,11 @@ impl Zenith {
     }
 
     fn open_review_base(&mut self) {
-        let Some(root) = self
-            .folder
-            .as_ref()
-            .map(|f| f.root.clone())
-            .or_else(|| self.open.as_ref().map(|o| crate::catalog::project_root(&o.path)))
-        else {
+        let Some(root) = self.folder.as_ref().map(|f| f.root.clone()).or_else(|| {
+            self.open
+                .as_ref()
+                .map(|o| crate::catalog::project_root(&o.path))
+        }) else {
             self.status = "open a folder to review its changes".into();
             return;
         };
@@ -1181,10 +1193,7 @@ impl Zenith {
             + gap
             + galleys.iter().map(|g| g.size().x).sum::<f32>()
             + gap * (galleys.len().saturating_sub(1)) as f32;
-        let dot_center = Pos2::new(
-            center.x - (total * 0.5 - dot_w * 0.5) * open_t,
-            center.y,
-        );
+        let dot_center = Pos2::new(center.x - (total * 0.5 - dot_w * 0.5) * open_t, center.y);
         let dot_rect = Rect::from_center_size(dot_center, vec2(28.0, 28.0));
         let dot = ui.interact(dot_rect, ui.id().with("bloom-dot"), Sense::click());
         let dot_hover = dot.hovered();
@@ -1337,13 +1346,9 @@ impl Zenith {
                     }
                     if let Some(files) = &files {
                         ui.label(
-                            RichText::new(format!(
-                                "{} of {}",
-                                self.review_index + 1,
-                                files.len()
-                            ))
-                            .font(self.typo.ui_id(10.5 * self.scale))
-                            .color(pal.ink_soft),
+                            RichText::new(format!("{} of {}", self.review_index + 1, files.len()))
+                                .font(self.typo.ui_id(10.5 * self.scale))
+                                .color(pal.ink_soft),
                         );
                     } else if loading {
                         ui.label(
@@ -1434,8 +1439,16 @@ impl Zenith {
     /// review bar; the launcher clears both.
     fn sheet_top(&self, screen: Rect, high: bool, include_bloom: bool) -> f32 {
         let bars = self.review_bar_height()
-            + if include_bloom { self.review_bloom_height() } else { 0.0 }
-            + if self.review_bar_height() > 0.0 { 16.0 } else { 0.0 };
+            + if include_bloom {
+                self.review_bloom_height()
+            } else {
+                0.0
+            }
+            + if self.review_bar_height() > 0.0 {
+                16.0
+            } else {
+                0.0
+            };
         let floor = screen.top() + bars;
         if high {
             floor.max(screen.top() + 72.0)
@@ -1511,8 +1524,7 @@ impl Zenith {
             if kenter {
                 choose = if self.review_base_sel < 3 {
                     Some(
-                        [Base::Working, Base::Staged, Base::LastCommit]
-                            [self.review_base_sel]
+                        [Base::Working, Base::Staged, Base::LastCommit][self.review_base_sel]
                             .clone(),
                     )
                 } else {
@@ -1594,11 +1606,8 @@ impl Zenith {
                     let (rect, response) =
                         ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
                     if selected || cursor || response.hovered() {
-                        ui.painter().rect_filled(
-                            rect,
-                            CornerRadius::same(4),
-                            pal.selection,
-                        );
+                        ui.painter()
+                            .rect_filled(rect, CornerRadius::same(4), pal.selection);
                     }
                     if selected {
                         ui.painter().rect_filled(
@@ -1810,7 +1819,9 @@ impl Zenith {
 
     fn open_review_index(&mut self, index: usize) {
         let Some(review) = &self.review else { return };
-        let Some(file) = review.files.get(index).cloned() else { return };
+        let Some(file) = review.files.get(index).cloned() else {
+            return;
+        };
         let text = match review.file_text(&file) {
             Ok(text) => text,
             Err(e) => {
@@ -1902,9 +1913,16 @@ impl Zenith {
         }
         let current = self.caret.line;
         let next = if forward {
-            at.iter().find(|&&l| l > current).copied().or_else(|| at.first().copied())
+            at.iter()
+                .find(|&&l| l > current)
+                .copied()
+                .or_else(|| at.first().copied())
         } else {
-            at.iter().rev().find(|&&l| l < current).copied().or_else(|| at.last().copied())
+            at.iter()
+                .rev()
+                .find(|&&l| l < current)
+                .copied()
+                .or_else(|| at.last().copied())
         };
         if let Some(line) = next {
             let caret = vim::landing(&open.doc, line);
@@ -1990,7 +2008,11 @@ impl Zenith {
         let target = if forward {
             open.outline.iter().find(|s| s.line > cur).map(|s| s.line)
         } else {
-            open.outline.iter().rev().find(|s| s.line < cur).map(|s| s.line)
+            open.outline
+                .iter()
+                .rev()
+                .find(|s| s.line < cur)
+                .map(|s| s.line)
         };
         if let Some(line) = target {
             let caret = self
@@ -2179,7 +2201,10 @@ impl Zenith {
 
             // ---- two-key sequences ----
             if let Some(c) = key_char(key) {
-                match self.chords.feed(if shift { c.to_ascii_uppercase() } else { c }) {
+                match self
+                    .chords
+                    .feed(if shift { c.to_ascii_uppercase() } else { c })
+                {
                     vim::Feed::Pending => continue,
                     vim::Feed::Chord(done) => {
                         self.run_chord(done);
@@ -2278,9 +2303,7 @@ impl Zenith {
     fn tree_back(&mut self) {
         let Some(idx) = self.tree_index() else { return };
         if let TreeRow::Dir {
-            rel,
-            open: true,
-            ..
+            rel, open: true, ..
         } = &self.tree_rows[idx]
         {
             let rel = rel.clone();
@@ -2367,13 +2390,7 @@ impl Zenith {
     }
 
     /// What does this key mean? `None` for keys that mean nothing here.
-    fn action_for(
-        &self,
-        key: Key,
-        shift: bool,
-        ctrl: bool,
-        ctx: &egui::Context,
-    ) -> Option<Act> {
+    fn action_for(&self, key: Key, shift: bool, ctrl: bool, ctx: &egui::Context) -> Option<Act> {
         if ctrl {
             return match key {
                 Key::D => Some(Act::HalfPageDown),
@@ -2435,10 +2452,10 @@ impl Zenith {
             Key::K => Some(Act::PrevFile),
             Key::M => Some(Act::Bookmark),
             Key::N => Some(Act::SearchPrev),
-            Key::Num3 => Some(Act::LineNumbers), // ⇧3 is `#`
-            Key::Num4 => Some(Act::LineEnd),   // ⇧4 is `$`
+            Key::Num3 => Some(Act::LineNumbers),  // ⇧3 is `#`
+            Key::Num4 => Some(Act::LineEnd),      // ⇧4 is `$`
             Key::Num5 => Some(Act::BracketMatch), // ⇧5 is `%`
-            Key::Num6 => Some(Act::LineFirst), // ⇧6 is `^`
+            Key::Num6 => Some(Act::LineFirst),    // ⇧6 is `^`
             Key::T => Some(Act::PrevTheme),
             Key::Space => Some(Act::PageUp),
             _ => None,
@@ -2926,16 +2943,16 @@ impl Zenith {
 
     fn copy_to_clipboard(&mut self, ctx: &egui::Context, whole_line: bool) {
         let text = {
-        let Some(open) = &self.open else { return };
-        if whole_line {
-            open.doc.lines[self.caret.line.min(open.doc.lines.len() - 1)].text()
-        } else {
-            let (a, b) = focus_block(open, self.caret.line);
-            (a..=b.min(open.doc.lines.len().saturating_sub(1)))
-                .map(|i| open.doc.lines[i].text())
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
+            let Some(open) = &self.open else { return };
+            if whole_line {
+                open.doc.lines[self.caret.line.min(open.doc.lines.len() - 1)].text()
+            } else {
+                let (a, b) = focus_block(open, self.caret.line);
+                (a..=b.min(open.doc.lines.len().saturating_sub(1)))
+                    .map(|i| open.doc.lines[i].text())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
         };
         ctx.copy_text(text);
         self.status = if whole_line {
@@ -3360,11 +3377,8 @@ impl eframe::App for Zenith {
         if sheet_open {
             let screen = ctx.content_rect();
             let _ = ui.interact(screen, ui.id().with("sheet-scrim"), Sense::click());
-            ui.painter().rect_filled(
-                screen,
-                CornerRadius::ZERO,
-                theme::alpha(pal.ink, 44),
-            );
+            ui.painter()
+                .rect_filled(screen, CornerRadius::ZERO, theme::alpha(pal.ink, 44));
         }
 
         if self.palette_open {
@@ -3458,12 +3472,10 @@ impl Zenith {
                 } else {
                     bar.right()
                 };
-                let drag_rect = Rect::from_min_max(bar.left_top(), Pos2::new(drag_right, bar.bottom()));
-                let drag = ui.interact(
-                    drag_rect,
-                    ui.id().with("titlebar"),
-                    Sense::click_and_drag(),
-                );
+                let drag_rect =
+                    Rect::from_min_max(bar.left_top(), Pos2::new(drag_right, bar.bottom()));
+                let drag =
+                    ui.interact(drag_rect, ui.id().with("titlebar"), Sense::click_and_drag());
                 // Only where the desktop's own title bar has been taken away does the app
                 // have to move the window itself. On macOS the system still does it.
                 if self.store.config.frameless && !cfg!(target_os = "macos") {
@@ -3511,7 +3523,11 @@ impl Zenith {
                     let last = i + 1 == crumbs.len();
                     // A path is made of names from the codebase, so the file itself is
                     // set in the code face; the folders are chrome and step back.
-                    let f = if last { file_font.clone() } else { dir_font.clone() };
+                    let f = if last {
+                        file_font.clone()
+                    } else {
+                        dir_font.clone()
+                    };
                     let color = if last { pal.ink } else { pal.ink_soft };
                     let r = painter.text(Pos2::new(x, y), Align2::LEFT_CENTER, c, f, color);
                     x = r.right() + 6.0;
@@ -3605,8 +3621,7 @@ impl Zenith {
         if vis_t <= 0.001 {
             return;
         }
-        let open_t =
-            ctx.animate_bool_with_time(dot_id.with("open"), self.bloom_open, 0.18);
+        let open_t = ctx.animate_bool_with_time(dot_id.with("open"), self.bloom_open, 0.18);
         let area = Rect::from_center_size(
             Pos2::new(cx, top + 7.0),
             vec2(
@@ -3697,7 +3712,11 @@ impl Zenith {
         // is which.
         let rows: Vec<TreeRow> = self.tree_rows.clone();
         let tree_files: Vec<TreeRow> = rows.clone();
-        let folder_name = self.folder.as_ref().map(|s| s.name.clone()).unwrap_or_default();
+        let folder_name = self
+            .folder
+            .as_ref()
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
         let current = self.open.as_ref().map(|o| o.path.clone());
 
         let mut clicked_file: Option<PathBuf> = None;
@@ -3727,7 +3746,10 @@ impl Zenith {
                     ui.add_space(6.0);
                     paint_tracked(
                         ui.painter(),
-                        Pos2::new(ui.cursor().left() + 1.0, ui.cursor().top() + PANEL_LABEL_DROP),
+                        Pos2::new(
+                            ui.cursor().left() + 1.0,
+                            ui.cursor().top() + PANEL_LABEL_DROP,
+                        ),
                         Align2::LEFT_CENTER,
                         &format!("FOLDER · {folder_name}"),
                         label_font.clone(),
@@ -3783,10 +3805,19 @@ impl Zenith {
                             let picked = self.tree_focus && self.tree_sel.as_ref() == Some(&key);
                             let (name, depth, doorway, empty_file, path, rel, is_open) = match item
                             {
-                                TreeRow::Dir { name, depth, rel, open } => {
-                                    (name, *depth, false, false, None, Some(rel.clone()), *open)
-                                }
-                                TreeRow::File { name, path, depth, doorway, empty } => (
+                                TreeRow::Dir {
+                                    name,
+                                    depth,
+                                    rel,
+                                    open,
+                                } => (name, *depth, false, false, None, Some(rel.clone()), *open),
+                                TreeRow::File {
+                                    name,
+                                    path,
+                                    depth,
+                                    doorway,
+                                    empty,
+                                } => (
                                     name,
                                     *depth,
                                     *doorway,
@@ -3796,9 +3827,8 @@ impl Zenith {
                                     false,
                                 ),
                             };
-                            let on_current = path
-                                .as_ref()
-                                .is_some_and(|p| current.as_ref() == Some(p));
+                            let on_current =
+                                path.as_ref().is_some_and(|p| current.as_ref() == Some(p));
                             let ink = if empty_file {
                                 pal.ink_faint
                             } else if picked || on_current || doorway {
@@ -3810,7 +3840,11 @@ impl Zenith {
                                 ui,
                                 &pal,
                                 name,
-                                if doorway { self.typo.marks.pick("◦") } else { "" },
+                                if doorway {
+                                    self.typo.marks.pick("◦")
+                                } else {
+                                    ""
+                                },
                                 depth,
                                 picked,
                                 ink,
@@ -3850,8 +3884,6 @@ impl Zenith {
             Stroke::new(1.0, pal.edge),
         );
     }
-
-
 
     fn outline_panel(&mut self, ui: &mut Ui) {
         let pal = self.palette;
@@ -3915,7 +3947,10 @@ impl Zenith {
                 ui.add_space(6.0);
                 paint_tracked(
                     ui.painter(),
-                    Pos2::new(ui.cursor().left() + 1.0, ui.cursor().top() + PANEL_LABEL_DROP),
+                    Pos2::new(
+                        ui.cursor().left() + 1.0,
+                        ui.cursor().top() + PANEL_LABEL_DROP,
+                    ),
                     Align2::LEFT_CENTER,
                     "CONTENTS",
                     label_font.clone(),
@@ -3959,7 +3994,7 @@ impl Zenith {
                                 ink,
                                 &font,
                                 None,
-                            None,
+                                None,
                             );
                             if resp.clicked() {
                                 jump = Some(*_line);
@@ -4003,7 +4038,6 @@ impl Zenith {
             if self.caret.line + 1 < lines {
                 self.motion(vim::Motion::Down(1));
             }
-
         }
         let pending = std::mem::replace(&mut self.pending, Pending::None);
 
@@ -4050,7 +4084,10 @@ impl Zenith {
                     .rect_filled(row, CornerRadius::same(ROW_RADIUS), pal.selection);
             }
             ui.painter().galley(
-                Pos2::new(row.center().x - galley.size().x * 0.5, row.center().y - galley.size().y * 0.5),
+                Pos2::new(
+                    row.center().x - galley.size().x * 0.5,
+                    row.center().y - galley.size().y * 0.5,
+                ),
                 galley,
                 pal.ink,
             );
@@ -4087,11 +4124,7 @@ impl Zenith {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let parent = open
-            .path
-            .parent()
-            .map(display_path)
-            .unwrap_or_default();
+        let parent = open.path.parent().map(display_path).unwrap_or_default();
         let badge = if open.deleted || open.diff.as_ref().is_some_and(|d| d.deleted_file) {
             Some((
                 format!(
@@ -4106,14 +4139,13 @@ impl Zenith {
         } else if open.diff.as_ref().is_some_and(|d| d.added_file) {
             Some(("new file".to_string(), pal.accent))
         } else {
-            self.store
-                .is_favorite(&open.path)
-                .then_some((format!("{} bookmarked", self.typo.marks.pick("✦")), pal.accent))
+            self.store.is_favorite(&open.path).then_some((
+                format!("{} bookmarked", self.typo.marks.pick("✦")),
+                pal.accent,
+            ))
         };
 
-        let content_w = ui
-            .available_width()
-            .max(laid.col_x + laid.measure + 40.0);
+        let content_w = ui.available_width().max(laid.col_x + laid.measure + 40.0);
 
         let diff = open.diff.clone();
         let remember = self.store.position_of(&open.path);
@@ -4136,9 +4168,9 @@ impl Zenith {
                 cursor_hint = Some(laid.line_at(y));
                 Some(y)
             }
-            Pending::Centre(line) => Some(
-                (laid.top_of(line) + laid.height_of(line) * 0.5 - view_h * 0.5).max(0.0),
-            ),
+            Pending::Centre(line) => {
+                Some((laid.top_of(line) + laid.height_of(line) * 0.5 - view_h * 0.5).max(0.0))
+            }
             Pending::Top(line) => Some(laid.top_of(line).max(0.0)),
             Pending::Bottom(line) => {
                 Some((laid.top_of(line) + laid.height_of(line) - view_h).max(0.0))
@@ -4382,14 +4414,7 @@ impl Zenith {
             }
         }
         let frac = self.read_fraction();
-        reader::paint_spine(
-            ui.painter(),
-            spine_x,
-            spine_top,
-            spine_h,
-            &pal,
-            frac,
-        );
+        reader::paint_spine(ui.painter(), spine_x, spine_top, spine_h, &pal, frac);
     }
 
     /// How far down the file the page can go: the one range both directions use.
@@ -4435,25 +4460,23 @@ impl Zenith {
 
         // Matching files. The list is capped, but the reader is told how many were
         // matched; a silent cap makes a file look absent.
-        let (matches, matched_total): (Vec<(i32, usize, Vec<usize>)>, usize) =
-            match &self.folder {
-                Some(s) => {
-                    let mut v: Vec<(i32, usize, Vec<usize>)> = s
-                        .files
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, f)| {
-                            fuzzy::match_path(&f.rel, &needle)
-                                .map(|h| (h.score, i, h.positions))
-                        })
-                        .collect();
-                    v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-                    let total = v.len();
-                    v.truncate(8);
-                    (v, total)
-                }
-                None => (Vec::new(), 0),
-            };
+        let (matches, matched_total): (Vec<(i32, usize, Vec<usize>)>, usize) = match &self.folder {
+            Some(s) => {
+                let mut v: Vec<(i32, usize, Vec<usize>)> = s
+                    .files
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, f)| {
+                        fuzzy::match_path(&f.rel, &needle).map(|h| (h.score, i, h.positions))
+                    })
+                    .collect();
+                v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+                let total = v.len();
+                v.truncate(8);
+                (v, total)
+            }
+            None => (Vec::new(), 0),
+        };
         let file_rows: Vec<LaunchRow> = match &self.folder {
             Some(s) => matches
                 .iter()
@@ -4490,10 +4513,7 @@ impl Zenith {
 
             let mut folder: Vec<LaunchRow> = Vec::new();
             if self.launch_available(Launch::Index) {
-                if let Some(spec) = LAUNCH_COMMANDS
-                    .iter()
-                    .find(|s| s.action == Launch::Index)
-                {
+                if let Some(spec) = LAUNCH_COMMANDS.iter().find(|s| s.action == Launch::Index) {
                     folder.push(self.launch_row(spec, 0));
                 }
             }
@@ -4506,10 +4526,7 @@ impl Zenith {
                 }
             }
             if self.launch_available(Launch::Review) {
-                if let Some(spec) = LAUNCH_COMMANDS
-                    .iter()
-                    .find(|s| s.action == Launch::Review)
-                {
+                if let Some(spec) = LAUNCH_COMMANDS.iter().find(|s| s.action == Launch::Review) {
                     folder.push(self.launch_row(spec, 0));
                 }
             }
@@ -4656,9 +4673,8 @@ impl Zenith {
                     .iter()
                     .map(|row| (if row.is_file() { file_row_h } else { row_h }) + 2.0)
                     .sum();
-                let content_h = rows_h
-                    + group_count as f32 * (28.0 + 14.0 * self.scale)
-                    + 44.0 * self.scale;
+                let content_h =
+                    rows_h + group_count as f32 * (28.0 + 14.0 * self.scale) + 44.0 * self.scale;
                 let max_body = (screen.height() - top - 104.0).max(120.0);
                 let body_h = content_h.min(max_body);
                 // The sheet has to be allowed to be shorter than its rows at 1.8x.
@@ -4676,256 +4692,291 @@ impl Zenith {
                             .max_height(body_h)
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
-                let command_font = self.typo.ui_id(13.0 * self.scale);
-                let detail_font = self.typo.ui_id(11.5 * self.scale);
-                let file_font = self.typo.code_id(12.5 * self.scale);
-                let file_dir_font = self.typo.code_id(10.5 * self.scale);
-                let group_font = self.typo.ui_id(9.5 * self.scale);
-                let key_font = self.typo.code_id(10.5 * self.scale);
-                let mut last_group: Option<LaunchGroup> = None;
+                                let command_font = self.typo.ui_id(13.0 * self.scale);
+                                let detail_font = self.typo.ui_id(11.5 * self.scale);
+                                let file_font = self.typo.code_id(12.5 * self.scale);
+                                let file_dir_font = self.typo.code_id(10.5 * self.scale);
+                                let group_font = self.typo.ui_id(9.5 * self.scale);
+                                let key_font = self.typo.code_id(10.5 * self.scale);
+                                let mut last_group: Option<LaunchGroup> = None;
 
-                for (i, row) in rows.iter().enumerate() {
-                    if !self.palette_files_only && needle.is_empty() {
-                        let group = row.group();
-                        if last_group != Some(group) {
-                            ui.add_space(if last_group.is_none() { 2.0 } else { 9.0 });
-                            paint_tracked(
-                                ui.painter(),
-                                Pos2::new(ui.min_rect().left() + 10.0, ui.cursor().top() + 2.0),
-                                Align2::LEFT_TOP,
-                                group.label(),
-                                group_font.clone(),
-                                pal.ink_soft,
-                                0.10 * 9.5 * self.scale,
-                            );
-                            ui.add_space((14.0 * self.scale).max(14.0));
-                            last_group = Some(group);
-                        }
-                    }
-
-                    let selected = i == self.palette_sel;
-                    let height = if row.is_file() { file_row_h } else { row_h };
-                    let (rect, resp) = ui.allocate_exact_size(
-                        vec2(ui.available_width(), height),
-                        Sense::click(),
-                    );
-                    if selected {
-                        ui.painter().rect_filled(
-                            rect,
-                            CornerRadius::same(4),
-                            pal.selection,
-                        );
-                        ui.painter().rect_filled(
-                            Rect::from_min_size(
-                                Pos2::new(rect.left() + 1.0, rect.top() + 5.0),
-                                vec2(2.0, (height - 10.0).max(2.0)),
-                            ),
-                            CornerRadius::same(1),
-                            pal.accent,
-                        );
-                    } else if resp.hovered() {
-                        ui.painter().rect_filled(
-                            rect,
-                            CornerRadius::same(4),
-                            theme::alpha(pal.ink, 8),
-                        );
-                    }
-                    if selected {
-                        ui.scroll_to_rect(rect, None);
-                    }
-
-                    let ink = if selected { pal.ink } else { pal.ink_soft };
-                    match row {
-                        LaunchRow::Command { spec, detail, .. } => {
-                            let label = ui.painter().text(
-                                Pos2::new(rect.left() + 10.0 * self.scale, rect.center().y),
-                                Align2::LEFT_CENTER,
-                                spec.label,
-                                command_font.clone(),
-                                ink,
-                            );
-                            if let Some(detail) = detail {
-                                let detail_ink = if detail == "on" {
-                                    pal.accent
-                                } else {
-                                    pal.ink_soft
-                                };
-                                ui.painter().text(
-                                    Pos2::new(
-                                        label.right() + 8.0 * self.scale,
-                                        rect.center().y,
-                                    ),
-                                    Align2::LEFT_CENTER,
-                                    detail,
-                                    detail_font.clone(),
-                                    detail_ink,
-                                );
-                            }
-                            if let Some(shortcut) = spec.shortcut {
-                                let galley = ui.painter().layout_no_wrap(
-                                    shortcut.to_string(),
-                                    key_font.clone(),
-                                    ink,
-                                );
-                                let pad = 5.0 * self.scale;
-                                let chip_h = (18.0 * self.scale).clamp(18.0, 24.0);
-                                let chip_w = galley.size().x + pad * 2.0;
-                                let chip = Rect::from_min_size(
-                                    Pos2::new(
-                                        rect.right() - 8.0 * self.scale - chip_w,
-                                        rect.center().y - chip_h * 0.5,
-                                    ),
-                                    vec2(chip_w, chip_h),
-                                );
-                                ui.painter().rect_filled(chip, CornerRadius::same(3), pal.panel_deep);
-                                ui.painter().rect_stroke(
-                                    chip,
-                                    CornerRadius::same(3),
-                                    Stroke::new(1.0, pal.edge),
-                                    egui::StrokeKind::Inside,
-                                );
-                                ui.painter().galley(
-                                    Pos2::new(
-                                        chip.center().x - galley.size().x * 0.5,
-                                        chip.center().y - galley.size().y * 0.5,
-                                    ),
-                                    galley,
-                                    ink,
-                                );
-                            }
-                        }
-                        LaunchRow::File {
-                            rel,
-                            marked,
-                            positions,
-                            ..
-                        } => {
-                            // A path is one line, not a paragraph. Long names and deep
-                            // folders used to wrap inside a fixed-height row and paint
-                            // over the row below; the name and its folder now each get
-                            // one elided line, with the full path on hover.
-                            let pad = 6.0 * self.scale;
-                            let right = if *marked { 24.0 * self.scale } else { 10.0 * self.scale };
-                            let max_w = (rect.width() - pad - right).max(20.0);
-                            let (dir, name, name_start) = match rel.rfind('/') {
-                                Some(i) => (&rel[..i], &rel[i + 1..], i + 1),
-                                None => ("", rel.as_str(), 0),
-                            };
-
-                            let mut name_job = egui::text::LayoutJob::default();
-                            name_job.wrap.max_width = max_w;
-                            name_job.wrap.max_rows = 1;
-                            name_job.wrap.break_anywhere = true;
-                            for (ci, ch) in name.chars().enumerate() {
-                                let hit = positions.binary_search(&(name_start + ci)).is_ok();
-                                let mut f = TextFormat {
-                                    font_id: file_font.clone(),
-                                    color: ink,
-                                    ..Default::default()
-                                };
-                                if hit {
-                                    f.underline = Stroke::new(1.0, pal.accent_soft);
-                                }
-                                name_job.append(&ch.to_string(), 0.0, f);
-                            }
-                            let name_galley = ui.painter().layout_job(name_job);
-
-                            let dir_galley = (!dir.is_empty()).then(|| {
-                                let mut job = egui::text::LayoutJob::default();
-                                job.wrap.max_width = max_w;
-                                job.wrap.max_rows = 1;
-                                job.wrap.break_anywhere = true;
-                                for (ci, ch) in dir.chars().enumerate() {
-                                    let hit = positions.binary_search(&ci).is_ok();
-                                    let mut f = TextFormat {
-                                        font_id: file_dir_font.clone(),
-                                        color: pal.ink_soft,
-                                        ..Default::default()
-                                    };
-                                    if hit {
-                                        f.underline = Stroke::new(1.0, pal.accent_soft);
+                                for (i, row) in rows.iter().enumerate() {
+                                    if !self.palette_files_only && needle.is_empty() {
+                                        let group = row.group();
+                                        if last_group != Some(group) {
+                                            ui.add_space(if last_group.is_none() {
+                                                2.0
+                                            } else {
+                                                9.0
+                                            });
+                                            paint_tracked(
+                                                ui.painter(),
+                                                Pos2::new(
+                                                    ui.min_rect().left() + 10.0,
+                                                    ui.cursor().top() + 2.0,
+                                                ),
+                                                Align2::LEFT_TOP,
+                                                group.label(),
+                                                group_font.clone(),
+                                                pal.ink_soft,
+                                                0.10 * 9.5 * self.scale,
+                                            );
+                                            ui.add_space((14.0 * self.scale).max(14.0));
+                                            last_group = Some(group);
+                                        }
                                     }
-                                    job.append(&ch.to_string(), 0.0, f);
+
+                                    let selected = i == self.palette_sel;
+                                    let height = if row.is_file() { file_row_h } else { row_h };
+                                    let (rect, resp) = ui.allocate_exact_size(
+                                        vec2(ui.available_width(), height),
+                                        Sense::click(),
+                                    );
+                                    if selected {
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            CornerRadius::same(4),
+                                            pal.selection,
+                                        );
+                                        ui.painter().rect_filled(
+                                            Rect::from_min_size(
+                                                Pos2::new(rect.left() + 1.0, rect.top() + 5.0),
+                                                vec2(2.0, (height - 10.0).max(2.0)),
+                                            ),
+                                            CornerRadius::same(1),
+                                            pal.accent,
+                                        );
+                                    } else if resp.hovered() {
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            CornerRadius::same(4),
+                                            theme::alpha(pal.ink, 8),
+                                        );
+                                    }
+                                    if selected {
+                                        ui.scroll_to_rect(rect, None);
+                                    }
+
+                                    let ink = if selected { pal.ink } else { pal.ink_soft };
+                                    match row {
+                                        LaunchRow::Command { spec, detail, .. } => {
+                                            let label = ui.painter().text(
+                                                Pos2::new(
+                                                    rect.left() + 10.0 * self.scale,
+                                                    rect.center().y,
+                                                ),
+                                                Align2::LEFT_CENTER,
+                                                spec.label,
+                                                command_font.clone(),
+                                                ink,
+                                            );
+                                            if let Some(detail) = detail {
+                                                let detail_ink = if detail == "on" {
+                                                    pal.accent
+                                                } else {
+                                                    pal.ink_soft
+                                                };
+                                                ui.painter().text(
+                                                    Pos2::new(
+                                                        label.right() + 8.0 * self.scale,
+                                                        rect.center().y,
+                                                    ),
+                                                    Align2::LEFT_CENTER,
+                                                    detail,
+                                                    detail_font.clone(),
+                                                    detail_ink,
+                                                );
+                                            }
+                                            if let Some(shortcut) = spec.shortcut {
+                                                let galley = ui.painter().layout_no_wrap(
+                                                    shortcut.to_string(),
+                                                    key_font.clone(),
+                                                    ink,
+                                                );
+                                                let pad = 5.0 * self.scale;
+                                                let chip_h = (18.0 * self.scale).clamp(18.0, 24.0);
+                                                let chip_w = galley.size().x + pad * 2.0;
+                                                let chip = Rect::from_min_size(
+                                                    Pos2::new(
+                                                        rect.right() - 8.0 * self.scale - chip_w,
+                                                        rect.center().y - chip_h * 0.5,
+                                                    ),
+                                                    vec2(chip_w, chip_h),
+                                                );
+                                                ui.painter().rect_filled(
+                                                    chip,
+                                                    CornerRadius::same(3),
+                                                    pal.panel_deep,
+                                                );
+                                                ui.painter().rect_stroke(
+                                                    chip,
+                                                    CornerRadius::same(3),
+                                                    Stroke::new(1.0, pal.edge),
+                                                    egui::StrokeKind::Inside,
+                                                );
+                                                ui.painter().galley(
+                                                    Pos2::new(
+                                                        chip.center().x - galley.size().x * 0.5,
+                                                        chip.center().y - galley.size().y * 0.5,
+                                                    ),
+                                                    galley,
+                                                    ink,
+                                                );
+                                            }
+                                        }
+                                        LaunchRow::File {
+                                            rel,
+                                            marked,
+                                            positions,
+                                            ..
+                                        } => {
+                                            // A path is one line, not a paragraph. Long names and deep
+                                            // folders used to wrap inside a fixed-height row and paint
+                                            // over the row below; the name and its folder now each get
+                                            // one elided line, with the full path on hover.
+                                            let pad = 6.0 * self.scale;
+                                            let right = if *marked {
+                                                24.0 * self.scale
+                                            } else {
+                                                10.0 * self.scale
+                                            };
+                                            let max_w = (rect.width() - pad - right).max(20.0);
+                                            let (dir, name, name_start) = match rel.rfind('/') {
+                                                Some(i) => (&rel[..i], &rel[i + 1..], i + 1),
+                                                None => ("", rel.as_str(), 0),
+                                            };
+
+                                            let mut name_job = egui::text::LayoutJob::default();
+                                            name_job.wrap.max_width = max_w;
+                                            name_job.wrap.max_rows = 1;
+                                            name_job.wrap.break_anywhere = true;
+                                            for (ci, ch) in name.chars().enumerate() {
+                                                let hit = positions
+                                                    .binary_search(&(name_start + ci))
+                                                    .is_ok();
+                                                let mut f = TextFormat {
+                                                    font_id: file_font.clone(),
+                                                    color: ink,
+                                                    ..Default::default()
+                                                };
+                                                if hit {
+                                                    f.underline = Stroke::new(1.0, pal.accent_soft);
+                                                }
+                                                name_job.append(&ch.to_string(), 0.0, f);
+                                            }
+                                            let name_galley = ui.painter().layout_job(name_job);
+
+                                            let dir_galley = (!dir.is_empty()).then(|| {
+                                                let mut job = egui::text::LayoutJob::default();
+                                                job.wrap.max_width = max_w;
+                                                job.wrap.max_rows = 1;
+                                                job.wrap.break_anywhere = true;
+                                                for (ci, ch) in dir.chars().enumerate() {
+                                                    let hit = positions.binary_search(&ci).is_ok();
+                                                    let mut f = TextFormat {
+                                                        font_id: file_dir_font.clone(),
+                                                        color: pal.ink_soft,
+                                                        ..Default::default()
+                                                    };
+                                                    if hit {
+                                                        f.underline =
+                                                            Stroke::new(1.0, pal.accent_soft);
+                                                    }
+                                                    job.append(&ch.to_string(), 0.0, f);
+                                                }
+                                                ui.painter().layout_job(job)
+                                            });
+
+                                            let gap = 1.0 * self.scale;
+                                            let name_h = name_galley.size().y;
+                                            let block_h = name_h
+                                                + dir_galley
+                                                    .as_ref()
+                                                    .map(|g| gap + g.size().y)
+                                                    .unwrap_or(0.0);
+                                            let top = rect.center().y - block_h * 0.5;
+                                            let x = rect.left() + pad;
+                                            ui.painter().galley(
+                                                Pos2::new(x, top),
+                                                name_galley,
+                                                ink,
+                                            );
+                                            if let Some(g) = dir_galley {
+                                                ui.painter().galley(
+                                                    Pos2::new(x, top + name_h + gap),
+                                                    g,
+                                                    pal.ink_soft,
+                                                );
+                                            }
+                                            if *marked {
+                                                ui.painter().text(
+                                                    Pos2::new(
+                                                        rect.right() - 8.0 * self.scale,
+                                                        rect.center().y,
+                                                    ),
+                                                    Align2::RIGHT_CENTER,
+                                                    self.typo.marks.pick("✦"),
+                                                    file_font.clone(),
+                                                    pal.accent,
+                                                );
+                                            }
+                                            resp.clone().on_hover_text(rel.as_str());
+                                        }
+                                    }
+                                    if resp.clicked() {
+                                        chosen = Some(i);
+                                    }
                                 }
-                                ui.painter().layout_job(job)
-                            });
 
-                            let gap = 1.0 * self.scale;
-                            let name_h = name_galley.size().y;
-                            let block_h = name_h
-                                + dir_galley.as_ref().map(|g| gap + g.size().y).unwrap_or(0.0);
-                            let top = rect.center().y - block_h * 0.5;
-                            let x = rect.left() + pad;
-                            ui.painter().galley(Pos2::new(x, top), name_galley, ink);
-                            if let Some(g) = dir_galley {
-                                ui.painter().galley(
-                                    Pos2::new(x, top + name_h + gap),
-                                    g,
-                                    pal.ink_soft,
-                                );
-                            }
-                            if *marked {
-                                ui.painter().text(
-                                    Pos2::new(
-                                        rect.right() - 8.0 * self.scale,
-                                        rect.center().y,
-                                    ),
-                                    Align2::RIGHT_CENTER,
-                                    self.typo.marks.pick("✦"),
-                                    file_font.clone(),
-                                    pal.accent,
-                                );
-                            }
-                            resp.clone().on_hover_text(rel.as_str());
-                        }
-                    }
-                    if resp.clicked() {
-                        chosen = Some(i);
-                    }
-                }
-
-                let files_shown = rows.iter().filter(|r| r.is_file()).count();
-                let commands_shown = rows.len() - files_shown;
-                ui.add_space(6.0 * self.scale);
-                if rows.is_empty() {
-                    ui.painter().text(
-                        Pos2::new(ui.min_rect().left() + 10.0, ui.cursor().top() + 3.0),
-                        Align2::LEFT_TOP,
-                        "nothing matches",
-                        self.typo.ui_id(12.5 * self.scale),
-                        pal.ink_soft,
-                    );
-                    ui.add_space(18.0 * self.scale);
-                } else {
-                    let mut note = String::new();
-                    if files_shown > 0 {
-                        if files_shown < matched_total {
-                            note = format!("{files_shown} of {matched_total} files");
-                        } else {
-                            note = format!(
-                                "{files_shown} file{}",
-                                if matched_total == 1 { "" } else { "s" }
-                            );
-                        }
-                    }
-                    if commands_shown > 0 {
-                        if !note.is_empty() {
-                            note.push_str(" · ");
-                        }
-                        note.push_str(&format!(
-                            "{commands_shown} action{}",
-                            if commands_shown == 1 { "" } else { "s" }
-                        ));
-                    }
-                    ui.painter().text(
-                        Pos2::new(ui.min_rect().left() + 10.0, ui.cursor().top() + 3.0),
-                        Align2::LEFT_TOP,
-                        note,
-                        self.typo.ui_id(10.5 * self.scale),
-                        pal.ink_soft,
-                    );
-                    ui.add_space(18.0 * self.scale);
-                }
+                                let files_shown = rows.iter().filter(|r| r.is_file()).count();
+                                let commands_shown = rows.len() - files_shown;
+                                ui.add_space(6.0 * self.scale);
+                                if rows.is_empty() {
+                                    ui.painter().text(
+                                        Pos2::new(
+                                            ui.min_rect().left() + 10.0,
+                                            ui.cursor().top() + 3.0,
+                                        ),
+                                        Align2::LEFT_TOP,
+                                        "nothing matches",
+                                        self.typo.ui_id(12.5 * self.scale),
+                                        pal.ink_soft,
+                                    );
+                                    ui.add_space(18.0 * self.scale);
+                                } else {
+                                    let mut note = String::new();
+                                    if files_shown > 0 {
+                                        if files_shown < matched_total {
+                                            note =
+                                                format!("{files_shown} of {matched_total} files");
+                                        } else {
+                                            note = format!(
+                                                "{files_shown} file{}",
+                                                if matched_total == 1 { "" } else { "s" }
+                                            );
+                                        }
+                                    }
+                                    if commands_shown > 0 {
+                                        if !note.is_empty() {
+                                            note.push_str(" · ");
+                                        }
+                                        note.push_str(&format!(
+                                            "{commands_shown} action{}",
+                                            if commands_shown == 1 { "" } else { "s" }
+                                        ));
+                                    }
+                                    ui.painter().text(
+                                        Pos2::new(
+                                            ui.min_rect().left() + 10.0,
+                                            ui.cursor().top() + 3.0,
+                                        ),
+                                        Align2::LEFT_TOP,
+                                        note,
+                                        self.typo.ui_id(10.5 * self.scale),
+                                        pal.ink_soft,
+                                    );
+                                    ui.add_space(18.0 * self.scale);
+                                }
                             });
                     },
                 );
@@ -4934,13 +4985,11 @@ impl Zenith {
         if !close
             && self.frame > self.palette_opened_frame
             && ctx.input(|i| i.pointer.primary_clicked())
-            && ctx
-                .input(|i| i.pointer.interact_pos())
-                .is_some_and(|p| {
-                    launcher
-                        .as_ref()
-                        .is_none_or(|window| !window.response.rect.contains(p))
-                })
+            && ctx.input(|i| i.pointer.interact_pos()).is_some_and(|p| {
+                launcher
+                    .as_ref()
+                    .is_none_or(|window| !window.response.rect.contains(p))
+            })
         {
             close = true;
         }
@@ -5127,14 +5176,12 @@ impl Zenith {
                 }
                 Key::ArrowLeft | Key::ArrowRight => {
                     let direction = if key == Key::ArrowLeft { -1 } else { 1 };
-                    if self.settings_tab == 0
-                        && matches!(self.settings_focus, 11..=13)
-                    {
+                    if self.settings_tab == 0 && matches!(self.settings_focus, 11..=13) {
                         self.settings_adjust(ctx, self.settings_focus, direction as f32);
                     } else if self.settings_focus < count {
-                        self.settings_focus =
-                            (self.settings_focus as i32 + direction).clamp(0, count as i32 - 1)
-                                as usize;
+                        self.settings_focus = (self.settings_focus as i32 + direction)
+                            .clamp(0, count as i32 - 1)
+                            as usize;
                     }
                     true
                 }
@@ -5217,8 +5264,10 @@ impl Zenith {
     fn settings_adjust(&mut self, ctx: &egui::Context, focus: usize, direction: f32) {
         match focus {
             11 => {
-                let next = (self.store.config.measure as f32 + direction)
-                    .clamp(crate::catalog::MEASURE_MIN as f32, crate::catalog::MEASURE_MAX as f32);
+                let next = (self.store.config.measure as f32 + direction).clamp(
+                    crate::catalog::MEASURE_MIN as f32,
+                    crate::catalog::MEASURE_MAX as f32,
+                );
                 self.store.config.measure = next.round() as usize;
                 self.style_dirty = true;
             }
@@ -5261,8 +5310,7 @@ impl Zenith {
         let content = width - rail - 78.0;
         // A two-column page is only honest while the longest toggle label and its box
         // fit a column.
-        let label_w =
-            19.0 * (12.5 * self.scale) * 0.5 + (12.5 * self.scale) * 0.88 + 9.0;
+        let label_w = 19.0 * (12.5 * self.scale) * 0.5 + (12.5 * self.scale) * 0.88 + 9.0;
         let single = ((content - 12.0) * 0.5) < label_w;
         let mut open = self.show_settings;
         let mut changed = false;
@@ -5912,13 +5960,11 @@ impl Zenith {
         ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(
             !self.store.config.frameless,
         ));
-        ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(
-            if self.palette.is_dark() {
-                egui::SystemTheme::Dark
-            } else {
-                egui::SystemTheme::Light
-            },
-        ));
+        ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(if self.palette.is_dark() {
+            egui::SystemTheme::Dark
+        } else {
+            egui::SystemTheme::Light
+        }));
         // The tree's filters and the servers both follow the defaults.
         match self.folder.as_ref().map(|f| f.root.clone()) {
             Some(root) => {
@@ -5964,8 +6010,12 @@ impl Zenith {
         let Some(root) = self.folder.as_ref().map(|f| f.root.clone()) else {
             return;
         };
-        let kinds: Vec<&'static lsp::servers::Kind> =
-            self.lsp_kinds.iter().filter(|k| k.id == id).copied().collect();
+        let kinds: Vec<&'static lsp::servers::Kind> = self
+            .lsp_kinds
+            .iter()
+            .filter(|k| k.id == id)
+            .copied()
+            .collect();
         self.discover(kinds, root);
     }
 
@@ -6077,7 +6127,9 @@ impl Zenith {
         // A landing may leave nothing asking for another frame, and this hook can only
         // report what it sees; keep the frames coming while it is watching.
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
-        let Ok(spec) = std::env::var("ZENITH_GOTO") else { return };
+        let Ok(spec) = std::env::var("ZENITH_GOTO") else {
+            return;
+        };
         // `ZENITH_GOTO_FROM=LINE` puts the reader somewhere first, so that a jump has a
         // direction to have. It is re-applied for a few frames because the page does not
         // know its own height on the first one.
@@ -6152,7 +6204,13 @@ impl Zenith {
             let outline: Vec<String> = self
                 .open
                 .as_ref()
-                .map(|o| o.outline.iter().take(4).map(|s| format!("{}:{}", s.name, s.line + 1)).collect())
+                .map(|o| {
+                    o.outline
+                        .iter()
+                        .take(4)
+                        .map(|s| format!("{}:{}", s.name, s.line + 1))
+                        .collect()
+                })
                 .unwrap_or_default();
             eprintln!(
                 "nav: landed at line {} col {}, status {:?}",
@@ -6256,7 +6314,12 @@ impl Zenith {
         if self.servers.iter().any(|s| s.id() == kind.id) {
             return;
         }
-        let Some(found) = self.available.iter().find(|a| a.kind.id == kind.id).cloned() else {
+        let Some(found) = self
+            .available
+            .iter()
+            .find(|a| a.kind.id == kind.id)
+            .cloned()
+        else {
             return;
         };
         let root = self
@@ -6421,8 +6484,10 @@ impl Zenith {
                             if let Some(nav) = &mut self.nav {
                                 nav.id = None;
                                 nav.tries += 1;
-                                nav.again_at =
-                                    Some(std::time::Instant::now() + std::time::Duration::from_millis(600));
+                                nav.again_at = Some(
+                                    std::time::Instant::now()
+                                        + std::time::Duration::from_millis(600),
+                                );
                             }
                             self.status = format!(
                                 "gd: {} is still reading this project…",
@@ -6511,10 +6576,7 @@ impl Zenith {
             .as_ref()
             .map(|f| !path.starts_with(&f.root))
             .unwrap_or(true);
-        let previous = self
-            .open
-            .as_ref()
-            .map(|o| (o.path.clone(), self.scroll));
+        let previous = self.open.as_ref().map(|o| (o.path.clone(), self.scroll));
         let (previous, _) = (previous, self.scroll);
         if here.as_deref() != Some(path.as_path()) {
             self.push_jump();
@@ -6601,7 +6663,8 @@ impl Zenith {
                         let (l, c) = v.split_once(':')?;
                         Some((l.parse::<usize>().ok()?, c.parse::<usize>().ok()?))
                     }) {
-                        self.caret = vim::Caret::new(place.0.saturating_sub(1), place.1.saturating_sub(1));
+                        self.caret =
+                            vim::Caret::new(place.0.saturating_sub(1), place.1.saturating_sub(1));
                         self.ensure_visible();
                     }
                 }
@@ -6855,7 +6918,11 @@ fn theme_tile(
         rect,
         CornerRadius::same(TILE_RADIUS),
         Stroke::new(
-            if state.chosen || state.focused { 1.5 } else { 1.0 },
+            if state.chosen || state.focused {
+                1.5
+            } else {
+                1.0
+            },
             if state.focused {
                 palette.ink_soft
             } else if state.chosen {
@@ -7033,12 +7100,14 @@ fn check(
     focused: bool,
 ) -> bool {
     let row_h = (font.size * 1.65).max(20.0);
-    let (rect, resp) =
-        ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
     let hovered = resp.hovered();
     if hovered {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(ROW_RADIUS), theme::alpha(pal.ink, 10));
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(ROW_RADIUS),
+            theme::alpha(pal.ink, 10),
+        );
     }
     if focused {
         ui.painter().rect_stroke(
@@ -7091,7 +7160,6 @@ fn check(
     }
 }
 
-
 /// Keep a branch name in the review strip without letting it push the count off the
 /// page. The full name is still in the base sheet.
 fn short_branch(name: &str) -> String {
@@ -7108,7 +7176,6 @@ fn short_branch(name: &str) -> String {
 fn count_lines(text: &str) -> usize {
     text.lines().count()
 }
-
 
 // The two sidebars are one system, so they share a frame and a rhythm: the same inner
 // margin, the same drop for the label, the same gap between that label and the list, the
@@ -7174,14 +7241,47 @@ fn resize_handles(ui: &mut Ui) {
     let edge = 6.0;
     let r = ui.ctx().content_rect();
     let zones: [(Dir, Rect); 8] = [
-        (Dir::North, Rect::from_min_max(r.left_top(), Pos2::new(r.right(), r.top() + edge))),
-        (Dir::South, Rect::from_min_max(Pos2::new(r.left(), r.bottom() - edge), r.right_bottom())),
-        (Dir::West, Rect::from_min_max(r.left_top(), Pos2::new(r.left() + edge, r.bottom()))),
-        (Dir::East, Rect::from_min_max(Pos2::new(r.right() - edge, r.top()), r.right_bottom())),
-        (Dir::NorthWest, Rect::from_min_max(r.left_top(), Pos2::new(r.left() + edge, r.top() + edge))),
-        (Dir::NorthEast, Rect::from_min_max(Pos2::new(r.right() - edge, r.top()), Pos2::new(r.right(), r.top() + edge))),
-        (Dir::SouthWest, Rect::from_min_max(Pos2::new(r.left(), r.bottom() - edge), Pos2::new(r.left() + edge, r.bottom()))),
-        (Dir::SouthEast, Rect::from_min_max(Pos2::new(r.right() - edge, r.bottom() - edge), r.right_bottom())),
+        (
+            Dir::North,
+            Rect::from_min_max(r.left_top(), Pos2::new(r.right(), r.top() + edge)),
+        ),
+        (
+            Dir::South,
+            Rect::from_min_max(Pos2::new(r.left(), r.bottom() - edge), r.right_bottom()),
+        ),
+        (
+            Dir::West,
+            Rect::from_min_max(r.left_top(), Pos2::new(r.left() + edge, r.bottom())),
+        ),
+        (
+            Dir::East,
+            Rect::from_min_max(Pos2::new(r.right() - edge, r.top()), r.right_bottom()),
+        ),
+        (
+            Dir::NorthWest,
+            Rect::from_min_max(r.left_top(), Pos2::new(r.left() + edge, r.top() + edge)),
+        ),
+        (
+            Dir::NorthEast,
+            Rect::from_min_max(
+                Pos2::new(r.right() - edge, r.top()),
+                Pos2::new(r.right(), r.top() + edge),
+            ),
+        ),
+        (
+            Dir::SouthWest,
+            Rect::from_min_max(
+                Pos2::new(r.left(), r.bottom() - edge),
+                Pos2::new(r.left() + edge, r.bottom()),
+            ),
+        ),
+        (
+            Dir::SouthEast,
+            Rect::from_min_max(
+                Pos2::new(r.right() - edge, r.bottom() - edge),
+                r.right_bottom(),
+            ),
+        ),
     ];
     for (dir, rect) in zones {
         let id = egui::Id::new(("zenith-resize", dir as u8));
@@ -7337,10 +7437,7 @@ fn working_project() -> Option<PathBuf> {
         "Gemfile",
         "CMakeLists.txt",
     ];
-    markers
-        .iter()
-        .any(|m| cwd.join(m).exists())
-        .then_some(cwd)
+    markers.iter().any(|m| cwd.join(m).exists()).then_some(cwd)
 }
 
 fn read_head(path: &Path) -> String {
@@ -7348,7 +7445,11 @@ fn read_head(path: &Path) -> String {
         .ok()
         .map(|b| {
             let n = b.len().min(4096);
-            String::from_utf8_lossy(&b[..n]).lines().next().unwrap_or("").to_string()
+            String::from_utf8_lossy(&b[..n])
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_string()
         })
         .unwrap_or_default()
 }
@@ -7398,10 +7499,32 @@ fn keys(text: &str) -> String {
 fn key_char(key: Key) -> Option<char> {
     use Key::*;
     Some(match key {
-        A => 'a', B => 'b', C => 'c', D => 'd', E => 'e', F => 'f', G => 'g', H => 'h',
-        I => 'i', J => 'j', K => 'k', L => 'l', M => 'm', N => 'n', O => 'o', P => 'p',
-        Q => 'q', R => 'r', S => 's', T => 't', U => 'u', V => 'v', W => 'w', X => 'x',
-        Y => 'y', Z => 'z',
+        A => 'a',
+        B => 'b',
+        C => 'c',
+        D => 'd',
+        E => 'e',
+        F => 'f',
+        G => 'g',
+        H => 'h',
+        I => 'i',
+        J => 'j',
+        K => 'k',
+        L => 'l',
+        M => 'm',
+        N => 'n',
+        O => 'o',
+        P => 'p',
+        Q => 'q',
+        R => 'r',
+        S => 's',
+        T => 't',
+        U => 'u',
+        V => 'v',
+        W => 'w',
+        X => 'x',
+        Y => 'y',
+        Z => 'z',
         _ => return None,
     })
 }
@@ -7581,7 +7704,8 @@ fn paint_review_lift(
     let more = old.len().saturating_sub(shown);
     let height = 30.0 * scale + row * shown as f32 + if more > 0 { row } else { 0.0 };
     let below = line_bottom + 4.0;
-    let top = if below + height > page.bottom() - 8.0 && line_top - height - 4.0 > page.top() + 8.0 {
+    let top = if below + height > page.bottom() - 8.0 && line_top - height - 4.0 > page.top() + 8.0
+    {
         line_top - height - 4.0
     } else {
         below
@@ -7723,17 +7847,21 @@ fn apply_style(ctx: &egui::Context, pal: &Palette, typo: &Typography, scale: f32
 
     let code = 15.0 * scale;
     ctx.all_styles_mut(|s| {
-        s.text_styles.insert(TextStyle::Body, typo.ui_id(13.5 * scale));
-        s.text_styles.insert(TextStyle::Button, typo.ui_id(13.0 * scale));
-        s.text_styles.insert(TextStyle::Small, typo.ui_id(11.5 * scale));
-        s.text_styles.insert(TextStyle::Monospace, typo.code_id(code));
-        s.text_styles.insert(TextStyle::Heading, typo.prose_id(code * 1.5));
+        s.text_styles
+            .insert(TextStyle::Body, typo.ui_id(13.5 * scale));
+        s.text_styles
+            .insert(TextStyle::Button, typo.ui_id(13.0 * scale));
+        s.text_styles
+            .insert(TextStyle::Small, typo.ui_id(11.5 * scale));
+        s.text_styles
+            .insert(TextStyle::Monospace, typo.code_id(code));
+        s.text_styles
+            .insert(TextStyle::Heading, typo.prose_id(code * 1.5));
         s.spacing.item_spacing = vec2(6.0, 4.0);
         s.spacing.button_padding = vec2(7.0, 3.0);
         s.spacing.window_margin = Margin::same(10);
     });
 }
-
 
 // ---------------------------------------------------------------------------
 // The launcher
@@ -7973,8 +8101,7 @@ fn launch_command_score(spec: &CommandSpec, query: &str) -> Option<i32> {
     if score > 0 {
         return Some(score);
     }
-    fuzzy::match_path(spec.label, &q)
-        .map(|hit| (hit.score - 20).max(1))
+    fuzzy::match_path(spec.label, &q).map(|hit| (hit.score - 20).max(1))
 }
 
 #[derive(Clone)]
@@ -8030,15 +8157,24 @@ const HELP_GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("H M L", "top, middle, bottom of the screen"),
             ("zz zt zb", "centre, or put the line at the top / bottom"),
             ("n N", "next and previous search match"),
-            ("[ ]", "previous / next chapter; the next change in a review"),
-            ("ctrl-o ctrl-i", "back and forward through everywhere you have been"),
+            (
+                "[ ]",
+                "previous / next chapter; the next change in a review",
+            ),
+            (
+                "ctrl-o ctrl-i",
+                "back and forward through everywhere you have been",
+            ),
             ("gd", "go to the definition of what is under the cursor"),
         ],
     ),
     (
         "files and the index",
         &[
-            ("J K", "next / previous file in the folder; changed file in a review"),
+            (
+                "J K",
+                "next / previous file in the folder; changed file in a review",
+            ),
             ("tab", "open the index and move the keyboard into it"),
             ("j k l h", "in the index: move, open, back out"),
             ("enter, G, gg", "in the index: open, last row, first row"),
@@ -8075,8 +8211,6 @@ const HELP_GROUPS: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
 ];
-
-
 
 #[cfg(test)]
 mod key_tests {
@@ -8139,8 +8273,14 @@ mod key_tests {
     fn modified_commands_and_escape_still_reach_through() {
         assert!(survives_text_entry(Key::O, true, false));
         assert!(survives_text_entry(Key::K, true, false));
-        assert!(survives_text_entry(Key::P, true, false), "⌘P switches finder");
-        assert!(survives_text_entry(Key::F, true, false), "⌘F switches finder");
+        assert!(
+            survives_text_entry(Key::P, true, false),
+            "⌘P switches finder"
+        );
+        assert!(
+            survives_text_entry(Key::F, true, false),
+            "⌘F switches finder"
+        );
         assert!(survives_text_entry(Key::Comma, true, false));
         assert!(survives_text_entry(Key::P, false, true));
         assert!(survives_text_entry(Key::Escape, false, false));
@@ -8189,7 +8329,11 @@ mod tree_tests {
     #[test]
     fn movement_stops_at_both_ends() {
         // The reader should be able to lean on `j` without the selection escaping.
-        assert_eq!(walk_index(5, None, 1), 0, "nothing selected starts at the top");
+        assert_eq!(
+            walk_index(5, None, 1),
+            0,
+            "nothing selected starts at the top"
+        );
         assert_eq!(walk_index(5, Some(0), -1), 0);
         assert_eq!(walk_index(5, Some(4), 1), 4);
         assert_eq!(walk_index(5, Some(2), 1), 3);
@@ -8223,9 +8367,7 @@ mod tree_tests {
 
 #[cfg(test)]
 mod launcher_tests {
-    use super::{
-        CommandSpec, LAUNCH_COMMANDS, Launch, launch_command_score,
-    };
+    use super::{launch_command_score, CommandSpec, Launch, LAUNCH_COMMANDS};
 
     fn spec(action: Launch) -> &'static CommandSpec {
         LAUNCH_COMMANDS
@@ -8258,6 +8400,10 @@ mod launcher_tests {
         assert_eq!(spec(Launch::PrevTheme).shortcut, Some("T"));
         assert_eq!(spec(Launch::Settings).shortcut, Some("s"));
         assert_eq!(spec(Launch::Keys).shortcut, Some("?"));
-        assert_eq!(spec(Launch::SoftWrap).shortcut, None, "soft wrap has no key");
+        assert_eq!(
+            spec(Launch::SoftWrap).shortcut,
+            None,
+            "soft wrap has no key"
+        );
     }
 }

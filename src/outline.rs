@@ -91,8 +91,8 @@ pub fn family(path: &Path, syntax: &str) -> Family {
         "py" | "pyi" | "pyw" => return Family::Python,
         "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" => return Family::Js,
         "go" => return Family::Go,
-        "c" | "h" | "cc" | "cpp" | "cxx" | "hpp" | "hh" | "java" | "cs" | "kt" | "kts" | "swift"
-        | "scala" | "m" | "mm" | "php" | "dart" => return Family::CLike,
+        "c" | "h" | "cc" | "cpp" | "cxx" | "hpp" | "hh" | "java" | "cs" | "kt" | "kts"
+        | "swift" | "scala" | "m" | "mm" | "php" | "dart" => return Family::CLike,
         "rb" | "rake" => return Family::Ruby,
         "sh" | "bash" | "zsh" | "fish" => return Family::Shell,
         "md" | "markdown" | "mdx" => return Family::Markdown,
@@ -160,8 +160,8 @@ const NOT_DECLS: &[&str] = &[
 
 const TYPE_WORDS: &[&str] = &[
     "void", "int", "long", "short", "char", "float", "double", "bool", "boolean", "string",
-    "String", "byte", "uint", "usize", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64",
-    "f32", "f64", "Self", "auto",
+    "String", "byte", "uint", "usize", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32",
+    "f64", "Self", "auto",
 ];
 
 pub fn extract(path: &Path, syntax: &str, lines: &[Line]) -> Vec<Symbol> {
@@ -251,7 +251,12 @@ fn find_keyword(fam: Family, s: &str, indent: usize) -> Option<(usize, &'static 
             ("let", Constant),
             ("var", Constant),
         ],
-        Family::Go => &[("func", Function), ("type", Type), ("var", Constant), ("const", Constant)],
+        Family::Go => &[
+            ("func", Function),
+            ("type", Type),
+            ("var", Constant),
+            ("const", Constant),
+        ],
         Family::CLike => &[
             ("class", Type),
             ("interface", Trait),
@@ -358,7 +363,13 @@ fn method_like(s: &str) -> Option<(String, usize)> {
         .into_iter()
         .rev()
         .collect();
-    if name.is_empty() || name.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(true) {
+    if name.is_empty()
+        || name
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(true)
+    {
         return None;
     }
     if NOT_DECLS.contains(&name.as_str()) {
@@ -427,9 +438,7 @@ fn extract_name(fam: Family, keyword: &str, after: &str) -> Option<String> {
 
     let name: String = s
         .chars()
-        .take_while(|c| {
-            c.is_alphanumeric() || matches!(c, '_' | '$' | '.' | '!' | ':' | '~')
-        })
+        .take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '$' | '.' | '!' | ':' | '~'))
         .collect();
     // Trailing punctuation that some grammars glue onto identifiers.
     let name = name.trim_end_matches([':', '!']).to_string();
@@ -549,4 +558,3 @@ fn yaml(lines: &[Line]) -> Vec<Symbol> {
     }
     out
 }
-

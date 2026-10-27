@@ -11,6 +11,7 @@
 mod app;
 mod catalog;
 mod distill;
+mod folder;
 mod fuzzy;
 mod lsp;
 mod markdown;
@@ -18,7 +19,6 @@ mod outline;
 mod png;
 mod reader;
 mod review;
-mod folder;
 mod syntax;
 mod theme;
 mod typography;
@@ -57,7 +57,10 @@ fn main() {
             }
             "--scopes" => {
                 i += 1;
-                let p = args.get(i).map(PathBuf::from).unwrap_or_else(|| die("--scopes needs a file"));
+                let p = args
+                    .get(i)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| die("--scopes needs a file"));
                 let n = args
                     .get(i + 1)
                     .and_then(|v| v.parse::<usize>().ok())
@@ -148,7 +151,13 @@ fn main() {
         Mode::Lsp(dir) => lsp_report(dir),
         Mode::LspAsk(spec) => lsp_ask(&spec),
         Mode::Scopes(path, n) => dump_scopes(&path, n),
-        Mode::Smoke(out) => app::run_smoke(target, out, theme_override, measure_override, scale_override),
+        Mode::Smoke(out) => app::run_smoke(
+            target,
+            out,
+            theme_override,
+            measure_override,
+            scale_override,
+        ),
         Mode::Run => app::run(
             target,
             theme_override,
@@ -226,7 +235,11 @@ fn print_md(path: &std::path::Path) {
     let hl = syntax::Highlighter::new();
     let bytes = std::fs::read(path).unwrap_or_default();
     let n = bytes.len().min(4096);
-    let head = String::from_utf8_lossy(&bytes[..n]).lines().next().unwrap_or("").to_string();
+    let head = String::from_utf8_lossy(&bytes[..n])
+        .lines()
+        .next()
+        .unwrap_or("")
+        .to_string();
     let syntax = hl.syntax_for(path, &head).clone();
     let text = match syntax::read_readable(path) {
         Ok(syntax::Readable::Text { text, .. }) => text,
@@ -238,7 +251,12 @@ fn print_md(path: &std::path::Path) {
     let doc = hl.parse(&syntax, &text, text.len());
     let md = markdown::render(&doc.lines);
     for (i, line) in md.iter().enumerate() {
-        println!("{:>4}  {:<14} {}", i + 1, format!("{:?}", line.kind), line.text());
+        println!(
+            "{:>4}  {:<14} {}",
+            i + 1,
+            format!("{:?}", line.kind),
+            line.text()
+        );
     }
 }
 
@@ -272,9 +290,8 @@ fn walk(root: &std::path::Path) {
 /// said. A binary that exists is not a binary that works — the flag that verifies is
 /// `--lsp-ask`, which performs the handshake.
 fn lsp_report(dir: Option<PathBuf>) {
-    let root = dir.unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
+    let root =
+        dir.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     if !root.is_dir() {
         die(&format!("{} is not a folder", root.display()));
     }
@@ -345,7 +362,11 @@ fn lsp_ask(spec: &str) {
         .next()
         .and_then(|v| v.parse().ok())
         .unwrap_or_else(|| die("--lsp-ask wants FILE:LINE:COL"));
-    let file = PathBuf::from(parts.next().unwrap_or_else(|| die("--lsp-ask wants FILE:LINE:COL")));
+    let file = PathBuf::from(
+        parts
+            .next()
+            .unwrap_or_else(|| die("--lsp-ask wants FILE:LINE:COL")),
+    );
     let text = match std::fs::read_to_string(&file) {
         Ok(t) => t,
         Err(e) => die(&format!("cannot read {}: {e}", file.display())),
@@ -627,9 +648,5 @@ fn dump(path: &std::path::Path) {
         );
     }
     let blank = doc.lines.iter().filter(|l| l.is_blank()).count();
-    println!(
-        "\nrhythm  : {} blank of {} lines",
-        blank,
-        doc.lines.len()
-    );
+    println!("\nrhythm  : {} blank of {} lines", blank, doc.lines.len());
 }

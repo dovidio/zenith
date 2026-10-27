@@ -124,7 +124,11 @@ pub const KINDS: &[Kind] = &[
         id: "shell",
         title: "Shell",
         candidates: &[("bash-language-server", &["start"])],
-        exts: &[("sh", "shellscript"), ("bash", "shellscript"), ("zsh", "shellscript")],
+        exts: &[
+            ("sh", "shellscript"),
+            ("bash", "shellscript"),
+            ("zsh", "shellscript"),
+        ],
     },
     Kind {
         id: "haskell",
@@ -191,7 +195,12 @@ pub fn kinds_among<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Vec<&'stati
             }
         }
     }
-    found.sort_by_key(|k| KINDS.iter().position(|t| t.id == k.id).unwrap_or(usize::MAX));
+    found.sort_by_key(|k| {
+        KINDS
+            .iter()
+            .position(|t| t.id == k.id)
+            .unwrap_or(usize::MAX)
+    });
     found
 }
 
@@ -212,11 +221,7 @@ pub struct Available {
 }
 
 /// Look for a server on this machine. **Spawns processes**: call it off the UI thread.
-pub fn find(
-    kind: &'static Kind,
-    cwd: &Path,
-    over: Option<&Override>,
-) -> Option<Available> {
+pub fn find(kind: &'static Kind, cwd: &Path, over: Option<&Override>) -> Option<Available> {
     if let Some(o) = over {
         let binary = PathBuf::from(&o.command);
         if is_executable(&binary) {
@@ -308,10 +313,22 @@ fn search_dirs(cwd: &Path) -> Vec<PathBuf> {
         }
     }
     let home = crate::catalog::home_dir();
-    for dir in ["~/.cargo/bin", "~/.local/bin", "~/go/bin", "~/bin", "~/.bun/bin"] {
+    for dir in [
+        "~/.cargo/bin",
+        "~/.local/bin",
+        "~/go/bin",
+        "~/bin",
+        "~/.bun/bin",
+    ] {
         push(home.join(dir.trim_start_matches("~/")));
     }
-    for dir in ["/opt/homebrew/bin", "/opt/local/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
+    for dir in [
+        "/opt/homebrew/bin",
+        "/opt/local/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+    ] {
         push(PathBuf::from(dir));
     }
     // The project's own toolchain beats the machine's: a repository with TypeScript in
@@ -432,7 +449,10 @@ mod tests {
 
     #[test]
     fn an_extension_is_matched_regardless_of_case() {
-        assert_eq!(kind_for(Path::new("/x/A.RS")).map(|(k, _)| k.id), Some("rust"));
+        assert_eq!(
+            kind_for(Path::new("/x/A.RS")).map(|(k, _)| k.id),
+            Some("rust")
+        );
     }
 
     #[test]
@@ -466,8 +486,14 @@ mod tests {
         let dirs = search_dirs(Path::new("/x"));
         let home = crate::catalog::home_dir();
         assert!(dirs.contains(&home.join(".cargo/bin")), "cargo's bins");
-        assert!(dirs.contains(&PathBuf::from("/opt/homebrew/bin")), "homebrew");
-        assert!(dirs.contains(&PathBuf::from("/x/node_modules/.bin")), "the project's own");
+        assert!(
+            dirs.contains(&PathBuf::from("/opt/homebrew/bin")),
+            "homebrew"
+        );
+        assert!(
+            dirs.contains(&PathBuf::from("/x/node_modules/.bin")),
+            "the project's own"
+        );
         let mut sorted = dirs.clone();
         sorted.dedup();
         assert_eq!(dirs.len(), sorted.len(), "no directory is searched twice");

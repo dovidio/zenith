@@ -15,21 +15,24 @@
 //!    kept.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::BufReader;
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use super::{text, wire};
 
 pub enum Incoming {
     /// The server answered one of our requests.
-    Reply { id: i64, answer: Result<Value, String> },
+    Reply {
+        id: i64,
+        answer: Result<Value, String>,
+    },
     /// The server asked us something.
     Asked { id: i64 },
     /// The stream ended: the server exited, or the pipe broke.
@@ -142,7 +145,10 @@ impl Client {
             let said = Arc::clone(&said);
             std::thread::spawn(move || {
                 use std::io::BufRead;
-                for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+                for line in std::io::BufReader::new(stderr)
+                    .lines()
+                    .map_while(Result::ok)
+                {
                     // Kept as it arrives, not at exit: a server that has gone quiet
                     // usually explained itself *before* going quiet, and the explanation
                     // is the whole message.
@@ -234,7 +240,8 @@ impl Client {
         if !self.load.busy.load(Ordering::Relaxed) {
             return true;
         }
-        !self.load.ever.load(Ordering::Relaxed) && self.started.elapsed() > Duration::from_millis(2_500)
+        !self.load.ever.load(Ordering::Relaxed)
+            && self.started.elapsed() > Duration::from_millis(2_500)
     }
 
     pub fn poll(&self) -> Vec<Incoming> {

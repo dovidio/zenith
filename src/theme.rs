@@ -208,9 +208,7 @@ const fn pal(
 // The six themes
 // ---------------------------------------------------------------------------
 
-pub const THEMES: [Palette; 6] = [
-    LUGANO, MAIONESE, BIBIONE, KUNUNURRA, PANITTHA, NEWSPRINT,
-];
+pub const THEMES: [Palette; 6] = [LUGANO, MAIONESE, BIBIONE, KUNUNURRA, PANITTHA, NEWSPRINT];
 
 /// **Lugano** — the lake at midday: pale stone, lake blue, cypress, terracotta roofs.
 ///

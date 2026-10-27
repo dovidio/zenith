@@ -126,12 +126,7 @@ impl Review {
                     .old_ref
                     .as_deref()
                     .ok_or("this review has no base revision")?;
-                let mut args = vec![
-                    "diff",
-                    "--no-ext-diff",
-                    "--no-color",
-                    "--unified=0",
-                ];
+                let mut args = vec!["diff", "--no-ext-diff", "--no-color", "--unified=0"];
                 if self.staged {
                     args.extend(["--cached", old, "--", file.rel.as_str()]);
                 } else if let Some(new_ref) = &self.new_ref {
@@ -148,7 +143,6 @@ impl Review {
             }
         }
     }
-
 }
 
 #[derive(Clone, Debug, Default)]
@@ -249,31 +243,35 @@ pub fn collect(root: &Path, base: &Base, folder_files: &[FileEntry]) -> Result<R
         )?),
         Base::Staged => parse_name_status(&git_bytes(
             &repo,
-            &["diff", "--cached", "--name-status", "-z", "--find-renames", old],
+            &[
+                "diff",
+                "--cached",
+                "--name-status",
+                "-z",
+                "--find-renames",
+                old,
+            ],
         )?),
         Base::LastCommit => parse_name_status(&git_bytes(
-            &repo,
-            &["diff", "--name-status", "-z", "--find-renames", "HEAD^", "HEAD"],
-        )?),
-        Base::Ref(_) => parse_name_status(&git_bytes(
             &repo,
             &[
                 "diff",
                 "--name-status",
                 "-z",
                 "--find-renames",
-                old,
+                "HEAD^",
                 "HEAD",
             ],
+        )?),
+        Base::Ref(_) => parse_name_status(&git_bytes(
+            &repo,
+            &["diff", "--name-status", "-z", "--find-renames", old, "HEAD"],
         )?),
     };
 
     if base.is_working() {
         let known: BTreeSet<&str> = folder_files.iter().map(|f| f.rel.as_str()).collect();
-        let untracked = git_bytes(
-            &repo,
-            &["ls-files", "--others", "--exclude-standard", "-z"],
-        )?;
+        let untracked = git_bytes(&repo, &["ls-files", "--others", "--exclude-standard", "-z"])?;
         for rel in untracked.split(|b| *b == 0).filter(|s| !s.is_empty()) {
             let rel = String::from_utf8_lossy(rel).replace('\\', "/");
             if is_noise_rel(&rel) || (!known.is_empty() && !known.contains(rel.as_str())) {
@@ -396,7 +394,11 @@ fn parse_name_status(bytes: &[u8]) -> Vec<RawChange> {
                 break;
             };
             out.push(RawChange {
-                status: if kind == 'R' { Status::Renamed } else { Status::Added },
+                status: if kind == 'R' {
+                    Status::Renamed
+                } else {
+                    Status::Added
+                },
                 rel: new_rel,
                 old_rel: Some(rel),
             });
@@ -426,36 +428,38 @@ fn parse_unified(text: &str) -> Diff {
     let mut new_count = 0usize;
     let mut old_lines: Vec<String> = Vec::new();
 
-    let finish = |new_start: usize,
-                  new_count: usize,
-                  old_lines: &mut Vec<String>,
-                  diff: &mut Diff| {
-        if new_count == 0 {
-            if !old_lines.is_empty() {
-                diff.deletions.push(Deletion {
-                    at: new_start,
-                    old: std::mem::take(old_lines),
-                });
-            }
-        } else {
-            for i in 0..new_count {
-                let line = new_start.saturating_sub(1) + i;
-                diff.changed.push(line);
+    let finish =
+        |new_start: usize, new_count: usize, old_lines: &mut Vec<String>, diff: &mut Diff| {
+            if new_count == 0 {
                 if !old_lines.is_empty() {
-                    diff.old.insert(line, old_lines.clone());
+                    diff.deletions.push(Deletion {
+                        at: new_start,
+                        old: std::mem::take(old_lines),
+                    });
                 }
+            } else {
+                for i in 0..new_count {
+                    let line = new_start.saturating_sub(1) + i;
+                    diff.changed.push(line);
+                    if !old_lines.is_empty() {
+                        diff.old.insert(line, old_lines.clone());
+                    }
+                }
+                old_lines.clear();
             }
-            old_lines.clear();
-        }
-    };
+        };
 
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("@@ ") {
             finish(new_start, new_count, &mut old_lines, &mut diff);
             let spec = rest.split(" @@").next().unwrap_or("");
             let mut fields = spec.split_whitespace();
-            let old = fields.next().and_then(|s| parse_range(s.trim_start_matches('-')));
-            let new = fields.next().and_then(|s| parse_range(s.trim_start_matches('+')));
+            let old = fields
+                .next()
+                .and_then(|s| parse_range(s.trim_start_matches('-')));
+            let new = fields
+                .next()
+                .and_then(|s| parse_range(s.trim_start_matches('+')));
             if let (Some(_old), Some(new)) = (old, new) {
                 new_start = new.0;
                 new_count = new.1;
