@@ -35,6 +35,7 @@ mod tree;
 use self::page::{focus_block, reveal_pending, Pending};
 use self::tree::{TreeKey, TreeRow};
 mod review;
+use self::review::ReviewState;
 mod sheets;
 
 // ---------------------------------------------------------------------------
@@ -364,31 +365,8 @@ pub struct Zenith {
     loading: Option<Loading>,
     /// A background walk of a folder, if one is running.
     folder_load: Option<FolderLoad>,
-    /// A branch under review, once git has answered.
-    review: Option<Review>,
-    /// The changed file being read.
-    review_index: usize,
-    /// The base the reader asked for, or the working tree by default.
-    review_base: Base,
-    /// A review being collected in the background.
-    review_load: Option<ReviewLoad>,
-    /// The base sheet, and the ref typed into it.
-    show_review_base: bool,
-    review_base_sel: usize,
-    review_base_opened_frame: usize,
-    review_ref: String,
-    review_branches: Vec<String>,
-    review_error: String,
-    /// The changed line whose previous version is lifted.
-    review_hover: Option<usize>,
-    /// A previous line lifted from the keyboard, without a pointer.
-    review_peek: Option<usize>,
-    /// Where the reader was in the review before a definition pulled them away.
-    review_return: Option<Place>,
-    /// Whether the changed-file strip should bring the current file back into view.
-    review_strip_scroll: bool,
-    /// A screenshot hook: start the review once the folder walk lands.
-    review_after_load: bool,
+    /// The review: the branch, the file, the base, and where the reader was.
+    session: ReviewState,
     /// Every language server found on this machine for the languages this folder holds.
     available: Vec<lsp::servers::Available>,
     /// The languages this folder holds that zenith has a server for, found once per
@@ -572,21 +550,7 @@ impl Zenith {
             folder: None,
             expanded: BTreeSet::new(),
             open: None,
-            review: None,
-            review_index: 0,
-            review_base: Base::Working,
-            review_load: None,
-            show_review_base: false,
-            review_base_sel: 0,
-            review_base_opened_frame: 0,
-            review_ref: String::new(),
-            review_branches: Vec::new(),
-            review_error: String::new(),
-            review_hover: None,
-            review_peek: None,
-            review_return: None,
-            review_strip_scroll: false,
-            review_after_load: false,
+            session: ReviewState::default(),
             caret: vim::Caret::default(),
             chords: vim::Chords::default(),
             hold_down: std::env::var("ZENITH_HOLD_DOWN").is_ok(),
@@ -667,10 +631,10 @@ impl Zenith {
             }
         }
         if let Ok(base) = std::env::var("ZENITH_REVIEW_BASE") {
-            app.review_base = Base::Ref(base);
+            app.session.base = Base::Ref(base);
         }
         if std::env::var("ZENITH_FORCE_REVIEW").is_ok() {
-            app.review_after_load = true;
+            app.session.after_load = true;
         }
         if std::env::var("ZENITH_FORCE_PALETTE").is_ok() {
             app.open_palette();
@@ -878,10 +842,10 @@ impl Zenith {
         // The review is a mode, not a page you leave by walking. Opening one of its
         // changed files attaches that file's marks again; opening a definition or any
         // other file keeps the review around so the way back is still the same review.
-        if let Some(review) = &self.review {
+        if let Some(review) = &self.session.changes {
             let target_in_review = review.files.iter().any(|file| file.path == path);
             if target_in_review {
-                self.review_return = None;
+                self.session.return_to = None;
             } else if self
                 .open
                 .as_ref()
@@ -889,7 +853,7 @@ impl Zenith {
             {
                 // Leaving the changed file for a definition: remember the review page
                 // so `q` can put the reader back there, not out of the review.
-                self.review_return = self.open.as_ref().map(|open| Place {
+                self.session.return_to = self.open.as_ref().map(|open| Place {
                     path: open.path.clone(),
                     caret: self.caret,
                 });
@@ -1409,9 +1373,9 @@ impl Zenith {
         // help) owns none of them, but should still keep the page still behind it.
         let text_entry = self.search_open
             || self.palette_open
-            || self.show_review_base
+            || self.session.show_base
             || (self.show_settings && ctx.memory(|m| m.focused().is_some()));
-        let modal = self.show_settings || self.show_review_base;
+        let modal = self.show_settings || self.session.show_base;
 
         // Every key press this frame, with the modifiers that came with it.
         let presses: Vec<(Key, bool, bool, bool)> = ctx.input(|i| {
@@ -1471,7 +1435,7 @@ impl Zenith {
                     self.show_settings = false;
                     self.palette_open = false;
                     self.search_open = false;
-                    self.show_review_base = false;
+                    self.session.show_base = false;
                     self.show_panels = false;
                     self.show_outline = false;
                     self.tree_focus = false;
@@ -1764,28 +1728,28 @@ impl Zenith {
                 self.copy_to_clipboard(ctx, whole);
             }
             Act::NextFile => {
-                if self.review.is_some() {
+                if self.session.changes.is_some() {
                     self.step_review(true);
                 } else {
                     self.step_file(true);
                 }
             }
             Act::PrevFile => {
-                if self.review.is_some() {
+                if self.session.changes.is_some() {
                     self.step_review(false);
                 } else {
                     self.step_file(false);
                 }
             }
             Act::NextChapter => {
-                if self.review.is_some() {
+                if self.session.changes.is_some() {
                     self.review_change(true);
                 } else {
                     self.step_symbol(true);
                 }
             }
             Act::PrevChapter => {
-                if self.review.is_some() {
+                if self.session.changes.is_some() {
                     self.review_change(false);
                 } else {
                     self.step_symbol(false);
@@ -1825,7 +1789,7 @@ impl Zenith {
                     self.status = "no previous code at this line".into();
                     return;
                 }
-                self.review_peek = if self.review_peek == Some(line) {
+                self.session.peek = if self.session.peek == Some(line) {
                     None
                 } else {
                     Some(line)
@@ -1842,18 +1806,18 @@ impl Zenith {
     /// underneath it is the one you came from. With nothing underneath, the page is the
     /// reading room.
     fn close_page(&mut self) {
-        let in_review = self.review.as_ref().is_some_and(|review| {
+        let in_review = self.session.changes.as_ref().is_some_and(|review| {
             self.open
                 .as_ref()
                 .is_some_and(|open| review.files.iter().any(|file| file.path == open.path))
         });
         match page_close(
-            self.review.is_some(),
+            self.session.changes.is_some(),
             in_review,
-            self.review_return.is_some(),
+            self.session.return_to.is_some(),
         ) {
             PageClose::BackToReview => {
-                if let Some(place) = self.review_return.take() {
+                if let Some(place) = self.session.return_to.take() {
                     self.go_to(&place);
                     self.status = "back to the review".into();
                 } else {
@@ -1943,8 +1907,8 @@ impl Zenith {
             Launch::Markdown => on_off(self.store.config.markdown),
             Launch::NextTheme | Launch::PrevTheme => Some(self.palette.name.to_string()),
             Launch::Larger | Launch::Smaller => Some(format!("{:.2}×", self.scale)),
-            Launch::Review => Some(self.review_base.label()),
-            Launch::ReviewBase => self.review.as_ref().map(|r| r.base.label()),
+            Launch::Review => Some(self.session.base.label()),
+            Launch::ReviewBase => self.session.changes.as_ref().map(|r| r.base.label()),
             _ => None,
         }
     }
@@ -2061,7 +2025,7 @@ impl Zenith {
         if next != self.caret {
             self.push_jump();
             self.caret = next;
-            self.review_peek = None;
+            self.session.peek = None;
         }
         match motion {
             vim::Motion::FileTop => self.pending = Pending::Start,
@@ -2075,7 +2039,7 @@ impl Zenith {
             self.push_jump();
         }
         self.caret = caret;
-        self.review_peek = None;
+        self.session.peek = None;
         self.ensure_visible();
     }
 
@@ -2308,7 +2272,7 @@ impl eframe::App for Zenith {
                     self.folder = Some(folder);
                     // A review started before the folder walk finished owns the page.
                     // Opening the walk's first doorway here would clear it by accident.
-                    let keep_review = self.review.is_some() || self.review_load.is_some();
+                    let keep_review = self.session.changes.is_some() || self.session.load.is_some();
                     let wanted = if keep_review {
                         None
                     } else {
@@ -2347,9 +2311,9 @@ impl eframe::App for Zenith {
                         None => {}
                     }
                     self.start_discovery();
-                    if self.review_after_load {
-                        self.review_after_load = false;
-                        self.start_review(self.review_base.clone());
+                    if self.session.after_load {
+                        self.session.after_load = false;
+                        self.start_review(self.session.base.clone());
                     }
                 }
                 Ok(Err(e)) => {
@@ -2367,26 +2331,26 @@ impl eframe::App for Zenith {
         }
 
         // Has the review's git diff finished?
-        if let Some(load) = &self.review_load {
+        if let Some(load) = &self.session.load {
             match load.rx.try_recv() {
                 Ok(Ok(review)) => {
-                    self.review_load = None;
+                    self.session.load = None;
                     if review.files.is_empty() {
-                        self.review = None;
+                        self.session.changes = None;
                         self.status = format!("no changes against {}", review.base.label());
                     } else {
-                        self.review = Some(review);
-                        self.review_index = 0;
+                        self.session.changes = Some(review);
+                        self.session.index = 0;
                         let start = std::env::var("ZENITH_REVIEW_INDEX")
                             .ok()
                             .and_then(|v| v.parse::<usize>().ok())
                             .unwrap_or(0);
-                        let len = self.review.as_ref().map_or(1, |r| r.files.len());
+                        let len = self.session.changes.as_ref().map_or(1, |r| r.files.len());
                         self.open_review_index(start.min(len.saturating_sub(1)));
                         if std::env::var("ZENITH_REVIEW_BASE_SHEET").is_ok() {
                             self.open_review_base();
                         }
-                        if let Some(review) = &self.review {
+                        if let Some(review) = &self.session.changes {
                             let mut note = format!(
                                 "review · {} · {} file{}",
                                 review.base.label(),
@@ -2401,15 +2365,15 @@ impl eframe::App for Zenith {
                     }
                 }
                 Ok(Err(e)) => {
-                    self.review_load = None;
-                    self.review = None;
+                    self.session.load = None;
+                    self.session.changes = None;
                     self.status = format!("cannot review changes: {e}");
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(120));
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.review_load = None;
+                    self.session.load = None;
                 }
             }
         }
@@ -2550,8 +2514,8 @@ impl eframe::App for Zenith {
         if own_window_buttons() {
             self.top_bar(ui);
         }
-        if self.review.is_some() || self.review_load.is_some() {
-            if !self.show_review_base {
+        if self.session.changes.is_some() || self.session.load.is_some() {
+            if !self.session.show_base {
                 self.review_bloom_bar(ui);
             }
             self.review_bar(ui);
@@ -2577,7 +2541,7 @@ impl eframe::App for Zenith {
 
         // Settings already owns an egui Modal with the same backdrop; the other sheets
         // are plain Windows and need the scrim supplied here.
-        let sheet_open = self.palette_open || self.search_open || self.show_review_base;
+        let sheet_open = self.palette_open || self.search_open || self.session.show_base;
         if sheet_open {
             let screen = ctx.content_rect();
             let _ = ui.interact(screen, ui.id().with("sheet-scrim"), Sense::click());
@@ -2594,7 +2558,7 @@ impl eframe::App for Zenith {
         if self.show_settings {
             self.settings_overlay(&ctx);
         }
-        if self.show_review_base {
+        if self.session.show_base {
             self.review_base_overlay(&ctx);
         }
 
@@ -2785,7 +2749,7 @@ impl Zenith {
     /// in the page's top air and nowhere else; the first scroll folds it and fades it,
     /// so it can never sit over a line of code.
     fn bloom(&mut self, ctx: &egui::Context) {
-        if self.review.is_some() || self.review_load.is_some() {
+        if self.session.changes.is_some() || self.session.load.is_some() {
             return;
         }
         let surfaces = self.show_panels
@@ -2793,7 +2757,7 @@ impl Zenith {
             || self.show_settings
             || self.palette_open
             || self.search_open
-            || self.show_review_base;
+            || self.session.show_base;
         if surfaces {
             self.bloom_open = false;
             return;

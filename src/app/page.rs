@@ -106,7 +106,8 @@ impl Zenith {
             Some((
                 format!(
                     "deleted from {}",
-                    self.review
+                    self.session
+                        .changes
                         .as_ref()
                         .map(|r| r.base.label())
                         .unwrap_or_else(|| "the base".into())
@@ -304,8 +305,8 @@ impl Zenith {
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .map(|n| n.saturating_sub(1));
-        self.review_hover = review_hover.or(self.review_peek).or(pinned_hover);
-        if let (Some(line), Some(diff)) = (self.review_hover, diff.as_ref()) {
+        self.session.hover = review_hover.or(self.session.peek).or(pinned_hover);
+        if let (Some(line), Some(diff)) = (self.session.hover, diff.as_ref()) {
             let detail = if let Some(deletion) = diff.deletion_at(line) {
                 Some(("REMOVED", deletion.old.as_slice()))
             } else {

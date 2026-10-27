@@ -7,29 +7,53 @@
 use super::widgets::*;
 use super::*;
 
+/// The review's own state: the branch it is reading, the file being read, the base it
+/// is compared with, and the place to return to after a definition detour.
+///
+/// It lives beside the review methods rather than in the window struct, so the module
+/// owns the thing it operates on.
+#[derive(Default)]
+pub(super) struct ReviewState {
+    pub(super) changes: Option<Review>,
+    pub(super) index: usize,
+    pub(super) base: Base,
+    pub(super) load: Option<ReviewLoad>,
+    pub(super) show_base: bool,
+    pub(super) base_sel: usize,
+    pub(super) base_opened_frame: usize,
+    pub(super) reference: String,
+    pub(super) branches: Vec<String>,
+    pub(super) error: String,
+    pub(super) hover: Option<usize>,
+    pub(super) peek: Option<usize>,
+    pub(super) return_to: Option<Place>,
+    pub(super) strip_scroll: bool,
+    pub(super) after_load: bool,
+}
+
 impl Zenith {
     /// Open or close the branch review. `g r` is a toggle rather than a one-way door:
     /// the reader can put the change set down without hunting for a command.
     pub(super) fn toggle_review(&mut self) {
-        if self.review.is_some() || self.review_load.is_some() {
+        if self.session.changes.is_some() || self.session.load.is_some() {
             self.leave_review();
             self.status = "review closed".into();
         } else {
-            self.start_review(self.review_base.clone());
+            self.start_review(self.session.base.clone());
         }
     }
 
     pub(super) fn leave_review(&mut self) {
-        self.review = None;
-        self.review_load = None;
-        self.review_hover = None;
-        self.review_peek = None;
-        self.review_return = None;
-        self.show_review_base = false;
+        self.session.changes = None;
+        self.session.load = None;
+        self.session.hover = None;
+        self.session.peek = None;
+        self.session.return_to = None;
+        self.session.show_base = false;
     }
 
     pub(super) fn start_review(&mut self, base: Base) {
-        if self.review_load.is_some() {
+        if self.session.load.is_some() {
             return;
         }
         let root = self.folder.as_ref().map(|f| f.root.clone()).or_else(|| {
@@ -46,23 +70,23 @@ impl Zenith {
             .as_ref()
             .map(|f| f.files.clone())
             .unwrap_or_default();
-        self.review = None;
-        self.review_index = 0;
-        self.review_hover = None;
-        self.review_peek = None;
-        self.review_return = None;
+        self.session.changes = None;
+        self.session.index = 0;
+        self.session.hover = None;
+        self.session.peek = None;
+        self.session.return_to = None;
         self.bloom_open = true;
         self.bloom_last_touch = 0.0;
-        self.review_base = base.clone();
-        self.show_review_base = false;
-        self.review_error.clear();
+        self.session.base = base.clone();
+        self.session.show_base = false;
+        self.session.error.clear();
         self.status = format!("reading changes against {}…", base.label());
         let (tx, rx) = std::sync::mpsc::channel();
         let base_for_thread = base.clone();
         std::thread::spawn(move || {
             let _ = tx.send(crate::review::collect(&root, &base_for_thread, &files));
         });
-        self.review_load = Some(ReviewLoad { rx });
+        self.session.load = Some(ReviewLoad { rx });
     }
 
     pub(super) fn open_review_base(&mut self) {
@@ -74,26 +98,27 @@ impl Zenith {
             self.status = "open a folder to review its changes".into();
             return;
         };
-        self.review_branches = crate::review::branches(&root);
-        self.review_base_sel = match &self.review_base {
+        self.session.branches = crate::review::branches(&root);
+        self.session.base_sel = match &self.session.base {
             Base::Working => 0,
             Base::Staged => 1,
             Base::LastCommit => 2,
             Base::Ref(reference) => self
-                .review_branches
+                .session
+                .branches
                 .iter()
                 .position(|branch| branch == reference)
                 .map(|index| 3 + index)
                 .unwrap_or_else(|| {
                     // A commit or a branch the recent list does not hold: leave it in
                     // the field so the current base is still visible in the sheet.
-                    self.review_ref = reference.clone();
+                    self.session.reference = reference.clone();
                     0
                 }),
         };
-        self.review_base_opened_frame = self.frame;
-        self.review_error.clear();
-        self.show_review_base = true;
+        self.session.base_opened_frame = self.frame;
+        self.session.error.clear();
+        self.session.show_base = true;
     }
 
     /// In review the same dot and words live in their own quiet band above the page,
@@ -133,14 +158,18 @@ impl Zenith {
 
     pub(super) fn review_bar(&mut self, ui: &mut Ui) {
         let pal = self.palette;
-        let branch = self.review.as_ref().map(|r| short_branch(&r.branch));
-        let base_name = short_branch(&self.review_base.label());
+        let branch = self
+            .session
+            .changes
+            .as_ref()
+            .map(|r| short_branch(&r.branch));
+        let base_name = short_branch(&self.session.base.label());
         let base_label = match &branch {
             Some(branch) => format!("{branch} ← {base_name}"),
             None => base_name,
         };
-        let loading = self.review_load.is_some();
-        let files = self.review.as_ref().map(|r| r.files.clone());
+        let loading = self.session.load.is_some();
+        let files = self.session.changes.as_ref().map(|r| r.files.clone());
         egui::Panel::top("zenith-review")
             .resizable(false)
             .exact_size((64.0 * self.scale).clamp(64.0, 104.0))
@@ -177,7 +206,7 @@ impl Zenith {
                     }
                     if let Some(files) = &files {
                         ui.label(
-                            RichText::new(format!("{} of {}", self.review_index + 1, files.len()))
+                            RichText::new(format!("{} of {}", self.session.index + 1, files.len()))
                                 .font(self.typo.ui_id(10.5 * self.scale))
                                 .color(pal.ink_soft),
                         );
@@ -188,7 +217,7 @@ impl Zenith {
                                 .color(pal.ink_soft),
                         );
                     }
-                    let hint = if self.review_return.is_some() {
+                    let hint = if self.session.return_to.is_some() {
                         "q  back to the review   ·   J K  files   [ ]  changes   p  peek"
                     } else {
                         "q  close   ·   J K  files   [ ]  changes   p  peek"
@@ -212,7 +241,7 @@ impl Zenith {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 10.0 * self.scale;
                                 for (i, file) in files.iter().enumerate() {
-                                    let current = i == self.review_index;
+                                    let current = i == self.session.index;
                                     let label = format!("{}  {}", file.status.mark(), file.rel);
                                     let color = if current { pal.ink } else { pal.ink_soft };
                                     let response = ui.add(
@@ -229,7 +258,7 @@ impl Zenith {
                                             response.rect.bottom(),
                                             Stroke::new(1.5, pal.accent),
                                         );
-                                        if self.review_strip_scroll {
+                                        if self.session.strip_scroll {
                                             response.scroll_to_me(Some(egui::Align::Center));
                                         }
                                     }
@@ -244,13 +273,13 @@ impl Zenith {
                                 }
                             });
                         });
-                    self.review_strip_scroll = false;
+                    self.session.strip_scroll = false;
                 }
             });
     }
 
     pub(super) fn review_bar_height(&self) -> f32 {
-        if self.review.is_some() || self.review_load.is_some() {
+        if self.session.changes.is_some() || self.session.load.is_some() {
             (64.0 * self.scale).clamp(64.0, 104.0)
         } else {
             0.0
@@ -258,7 +287,7 @@ impl Zenith {
     }
 
     pub(super) fn review_bloom_height(&self) -> f32 {
-        if self.review.is_some() || self.review_load.is_some() {
+        if self.session.changes.is_some() || self.session.load.is_some() {
             (34.0 * self.scale).clamp(34.0, 48.0)
         } else {
             0.0
@@ -275,12 +304,12 @@ impl Zenith {
         let top = self.sheet_top(screen, high, false);
         let pos = Pos2::new(screen.center().x - width * 0.5, top);
 
-        let branches = self.review_branches.clone();
+        let branches = self.session.branches.clone();
         let row_count = 3 + branches.len();
-        self.review_base_sel = self.review_base_sel.min(row_count.saturating_sub(1));
+        self.session.base_sel = self.session.base_sel.min(row_count.saturating_sub(1));
 
         let field_id = egui::Id::new("review-base-ref");
-        if self.frame == self.review_base_opened_frame {
+        if self.frame == self.session.base_opened_frame {
             ctx.memory_mut(|m| m.surrender_focus(field_id));
         }
         let field_focused = ctx.memory(|m| m.has_focus(field_id));
@@ -303,7 +332,7 @@ impl Zenith {
         let mut focus_field = false;
 
         if field_focused {
-            if kenter && !self.review_ref.trim().is_empty() {
+            if kenter && !self.session.reference.trim().is_empty() {
                 custom = true;
             }
             if ktab {
@@ -315,11 +344,12 @@ impl Zenith {
         } else {
             let count = row_count.max(1);
             if kd || kj {
-                self.review_base_sel = (self.review_base_sel + 1) % count;
+                self.session.base_sel = (self.session.base_sel + 1) % count;
             }
             if ku || kk {
-                self.review_base_sel = self
-                    .review_base_sel
+                self.session.base_sel = self
+                    .session
+                    .base_sel
                     .checked_sub(1)
                     .unwrap_or(count.saturating_sub(1));
             }
@@ -330,14 +360,14 @@ impl Zenith {
                 close = true;
             }
             if kenter {
-                choose = if self.review_base_sel < 3 {
+                choose = if self.session.base_sel < 3 {
                     Some(
-                        [Base::Working, Base::Staged, Base::LastCommit][self.review_base_sel]
+                        [Base::Working, Base::Staged, Base::LastCommit][self.session.base_sel]
                             .clone(),
                     )
                 } else {
                     branches
-                        .get(self.review_base_sel - 3)
+                        .get(self.session.base_sel - 3)
                         .cloned()
                         .map(Base::Ref)
                 };
@@ -383,7 +413,7 @@ impl Zenith {
                 );
                 ui.add_space(24.0 * self.scale);
                 let mut at = ui.cursor().left_top();
-                if let Some(review) = &self.review {
+                if let Some(review) = &self.session.changes {
                     paint_tracked(
                         ui.painter(),
                         at,
@@ -409,8 +439,8 @@ impl Zenith {
                     .into_iter()
                     .enumerate()
                 {
-                    let selected = self.review_base == base;
-                    let cursor = self.review_base_sel == i;
+                    let selected = self.session.base == base;
+                    let cursor = self.session.base_sel == i;
                     let (rect, response) =
                         ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
                     if selected || cursor || response.hovered() {
@@ -478,8 +508,8 @@ impl Zenith {
                         .show(ui, |ui| {
                             for (j, branch) in branches.iter().enumerate() {
                                 let i = 3 + j;
-                                let selected = self.review_base == Base::Ref(branch.clone());
-                                let cursor = self.review_base_sel == i;
+                                let selected = self.session.base == Base::Ref(branch.clone());
+                                let cursor = self.session.base_sel == i;
                                 let (rect, response) = ui.allocate_exact_size(
                                     vec2(ui.available_width(), branch_h),
                                     Sense::click(),
@@ -541,10 +571,10 @@ impl Zenith {
                     LABEL_TRACKING * 9.5 * self.scale,
                 );
                 ui.add_space(15.0 * self.scale);
-                let can = !self.review_ref.trim().is_empty();
+                let can = !self.session.reference.trim().is_empty();
                 ui.horizontal(|ui| {
                     let field = ui.add(
-                        egui::TextEdit::singleline(&mut self.review_ref)
+                        egui::TextEdit::singleline(&mut self.session.reference)
                             .id(field_id)
                             .hint_text("main, origin/main, 3a1f2c")
                             .font(field_font.clone())
@@ -573,12 +603,12 @@ impl Zenith {
                     Stroke::new(1.0, if field_focused { pal.accent } else { pal.edge }),
                 );
 
-                if !self.review_error.is_empty() {
+                if !self.session.error.is_empty() {
                     ui.add_space(8.0 * self.scale);
                     ui.painter().text(
                         ui.cursor().left_top(),
                         Align2::LEFT_TOP,
-                        &self.review_error,
+                        &self.session.error,
                         self.typo.ui_id(10.5 * self.scale),
                         pal.accent,
                     );
@@ -603,30 +633,32 @@ impl Zenith {
             });
 
         if custom {
-            choose = Some(Base::Ref(self.review_ref.trim().to_string()));
+            choose = Some(Base::Ref(self.session.reference.trim().to_string()));
         }
         if close {
-            self.show_review_base = false;
+            self.session.show_base = false;
             return;
         }
         if let Some(base) = choose {
-            self.show_review_base = false;
+            self.session.show_base = false;
             self.start_review(base);
             return;
         }
         let sheet_rect = sheet.as_ref().map(|s| s.response.rect);
-        if self.frame > self.review_base_opened_frame
+        if self.frame > self.session.base_opened_frame
             && ctx.input(|i| i.pointer.primary_clicked())
             && ctx
                 .input(|i| i.pointer.interact_pos())
                 .is_some_and(|p| sheet_rect.is_none_or(|rect| !rect.contains(p)))
         {
-            self.show_review_base = false;
+            self.session.show_base = false;
         }
     }
 
     pub(super) fn open_review_index(&mut self, index: usize) {
-        let Some(review) = &self.review else { return };
+        let Some(review) = &self.session.changes else {
+            return;
+        };
         let Some(file) = review.files.get(index).cloned() else {
             return;
         };
@@ -646,10 +678,10 @@ impl Zenith {
                     diff: None,
                     deleted: file.status == crate::review::Status::Deleted,
                 });
-                self.review_index = index;
-                self.review_hover = None;
-                self.review_peek = None;
-                self.review_return = None;
+                self.session.index = index;
+                self.session.hover = None;
+                self.session.peek = None;
+                self.session.return_to = None;
                 self.title_dirty = true;
                 self.status = e;
                 return;
@@ -678,11 +710,11 @@ impl Zenith {
             diff,
             deleted: file.status == crate::review::Status::Deleted,
         });
-        self.review_index = index;
-        self.review_hover = None;
-        self.review_peek = None;
-        self.review_return = None;
-        self.review_strip_scroll = true;
+        self.session.index = index;
+        self.session.hover = None;
+        self.session.peek = None;
+        self.session.return_to = None;
+        self.session.strip_scroll = true;
         self.caret = vim::Caret::default();
         self.pending = Pending::Start;
         self.scroll = 0.0;
@@ -690,7 +722,7 @@ impl Zenith {
     }
 
     pub(super) fn step_review(&mut self, forward: bool) {
-        let Some(review) = &self.review else {
+        let Some(review) = &self.session.changes else {
             self.step_file(forward);
             return;
         };
@@ -699,9 +731,9 @@ impl Zenith {
         }
         let n = review.files.len();
         let next = if forward {
-            (self.review_index + 1) % n
+            (self.session.index + 1) % n
         } else {
-            (self.review_index + n - 1) % n
+            (self.session.index + n - 1) % n
         };
         self.open_review_index(next);
     }

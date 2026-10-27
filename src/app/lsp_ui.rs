@@ -598,7 +598,7 @@ impl Zenith {
         } else {
             format!("→ {there}")
         };
-        if self.review.is_some() && self.review_return.is_some() {
+        if self.session.changes.is_some() && self.session.return_to.is_some() {
             said.push_str(" · q back to the review");
         } else if outside && !left.is_empty() {
             // The way back is not visible from here: the tree does not hold this file,
