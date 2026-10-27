@@ -8,23 +8,9 @@
 //!
 //! Zenith never writes to anything it reads.
 
-mod app;
-mod catalog;
-mod distill;
-mod folder;
-mod fuzzy;
-mod lsp;
-mod markdown;
-mod outline;
-mod png;
-mod reader;
-mod review;
-mod syntax;
-mod theme;
-mod typography;
-mod vim;
-
 use std::path::PathBuf;
+
+use zenith::{app, catalog, distill, folder, lsp, markdown, outline, syntax, theme, typography};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

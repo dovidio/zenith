@@ -477,7 +477,7 @@ pub fn search(doc: &Document, needle: &str, from: Caret, forward: bool) -> Optio
 mod tests {
     use super::*;
     use crate::syntax::{Flow, Line, Token};
-    use crate::theme::Tone;
+    use crate::tone::Tone;
 
     fn doc(lines: &[&str]) -> Document {
         Document {

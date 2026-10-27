@@ -24,7 +24,7 @@
 use std::path::Path;
 
 use crate::syntax::Line;
-use crate::theme::Tone;
+use crate::tone::Tone;
 
 /// How a language writes its types, which is what decides how to find them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

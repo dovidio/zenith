@@ -19,7 +19,8 @@ use crate::outline::{self, SymKind, Symbol};
 use crate::reader::{self, Laid, Paint, Style};
 use crate::review::{self, Base, Review};
 use crate::syntax::{Document, Highlighter, Readable};
-use crate::theme::{self, Palette, Tone};
+use crate::theme::{self, Palette};
+use crate::tone::Tone;
 use crate::typography::{self, Typography};
 use crate::vim;
 

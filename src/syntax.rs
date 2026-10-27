@@ -9,7 +9,7 @@ use std::path::Path;
 
 use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
 
-use crate::theme::Tone;
+use crate::tone::Tone;
 
 /// Hard limits. A reader should open anything instantly, so absurd files are
 /// truncated rather than left to stall the frame loop.
@@ -112,6 +112,12 @@ impl Document {
 
 pub struct Highlighter {
     ps: SyntaxSet,
+}
+
+impl Default for Highlighter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Highlighter {

@@ -29,7 +29,8 @@ use egui::{
 };
 
 use crate::syntax::{Document, Line};
-use crate::theme::{alpha, mix, Palette, Tone};
+use crate::theme::{alpha, mix, Palette};
+use crate::tone::Tone;
 
 /// Indentation beyond this many columns is not drawn as guides (deep enough).
 const INDENT_CAP: usize = 28;
