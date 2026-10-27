@@ -1016,10 +1016,17 @@ impl Zenith {
         }
     }
 
-    /// Move the page the smallest amount that brings the cursor into view. The
-    /// request is resolved in `page()`, where the layout and viewport are known.
+    /// Move the page the smallest amount that brings the cursor into view — except at
+    /// the document's ends, where the reader means the end of the *page*, title block
+    /// and all. Landing on the first or last line by any motion (k, ctrl-u, j, ctrl-d)
+    /// should not leave the page stranded a few rows away from its edge.
     fn ensure_visible(&mut self) {
-        self.pending = Pending::Reveal(self.caret.line);
+        let last = self
+            .open
+            .as_ref()
+            .map(|o| o.doc.lines.len().saturating_sub(1))
+            .unwrap_or(0);
+        self.pending = reveal_pending(self.caret.line, last);
     }
 
     // -- layout ------------------------------------------------------------
@@ -1360,6 +1367,10 @@ impl Zenith {
                 Key::U => Some(Act::HalfPageUp),
                 Key::F => Some(Act::PageDown),
                 Key::B => Some(Act::PageUp),
+                // Vim's other line motions; handy on keyboards where the arrow
+                // cluster is a stretch away.
+                Key::J => Some(Act::Down),
+                Key::K => Some(Act::Up),
                 _ => None,
             };
         }
@@ -2686,13 +2697,7 @@ impl Zenith {
                     // No file count, no folder count, no total size: none of it is what
                     // a reader came for. Only a fault gets a line of its own.
                     let mut warn = String::new();
-                    if s.truncated {
-                        warn.push_str("stopped at 40,000 files");
-                    }
                     if s.unreadable > 0 {
-                        if !warn.is_empty() {
-                            warn.push_str(" · ");
-                        }
                         warn.push_str(&format!("{} unreadable", s.unreadable));
                     }
                     if !warn.is_empty() {
@@ -3498,6 +3503,7 @@ impl Zenith {
                 }
 
                 let row_h = (28.0 * self.scale).clamp(28.0, 46.0);
+                let file_row_h = (44.0 * self.scale).clamp(44.0, 64.0);
                 let group_count = if self.palette_files_only || !needle.is_empty() {
                     0
                 } else {
@@ -3511,7 +3517,11 @@ impl Zenith {
                     }
                     count
                 };
-                let content_h = rows.len() as f32 * (row_h + 2.0)
+                let rows_h: f32 = rows
+                    .iter()
+                    .map(|row| (if row.is_file() { file_row_h } else { row_h }) + 2.0)
+                    .sum();
+                let content_h = rows_h
                     + group_count as f32 * (28.0 + 14.0 * self.scale)
                     + 44.0 * self.scale;
                 let max_body = (screen.height() - top - 104.0).max(120.0);
@@ -3534,6 +3544,7 @@ impl Zenith {
                 let command_font = self.typo.ui_id(13.0 * self.scale);
                 let detail_font = self.typo.ui_id(11.5 * self.scale);
                 let file_font = self.typo.code_id(12.5 * self.scale);
+                let file_dir_font = self.typo.code_id(10.5 * self.scale);
                 let group_font = self.typo.ui_id(9.5 * self.scale);
                 let key_font = self.typo.code_id(10.5 * self.scale);
                 let mut last_group: Option<LaunchGroup> = None;
@@ -3558,8 +3569,9 @@ impl Zenith {
                     }
 
                     let selected = i == self.palette_sel;
+                    let height = if row.is_file() { file_row_h } else { row_h };
                     let (rect, resp) = ui.allocate_exact_size(
-                        vec2(ui.available_width(), row_h),
+                        vec2(ui.available_width(), height),
                         Sense::click(),
                     );
                     if selected {
@@ -3571,7 +3583,7 @@ impl Zenith {
                         ui.painter().rect_filled(
                             Rect::from_min_size(
                                 Pos2::new(rect.left() + 1.0, rect.top() + 5.0),
-                                vec2(2.0, (row_h - 10.0).max(2.0)),
+                                vec2(2.0, (height - 10.0).max(2.0)),
                             ),
                             CornerRadius::same(1),
                             pal.accent,
@@ -3653,11 +3665,24 @@ impl Zenith {
                             positions,
                             ..
                         } => {
-                            let mut job = egui::text::LayoutJob::default();
-                            job.wrap.max_width = rect.width() - 20.0 * self.scale
-                                - if *marked { 18.0 * self.scale } else { 0.0 };
-                            for (ci, ch) in rel.chars().enumerate() {
-                                let hit = positions.binary_search(&ci).is_ok();
+                            // A path is one line, not a paragraph. Long names and deep
+                            // folders used to wrap inside a fixed-height row and paint
+                            // over the row below; the name and its folder now each get
+                            // one elided line, with the full path on hover.
+                            let pad = 6.0 * self.scale;
+                            let right = if *marked { 24.0 * self.scale } else { 10.0 * self.scale };
+                            let max_w = (rect.width() - pad - right).max(20.0);
+                            let (dir, name, name_start) = match rel.rfind('/') {
+                                Some(i) => (&rel[..i], &rel[i + 1..], i + 1),
+                                None => ("", rel.as_str(), 0),
+                            };
+
+                            let mut name_job = egui::text::LayoutJob::default();
+                            name_job.wrap.max_width = max_w;
+                            name_job.wrap.max_rows = 1;
+                            name_job.wrap.break_anywhere = true;
+                            for (ci, ch) in name.chars().enumerate() {
+                                let hit = positions.binary_search(&(name_start + ci)).is_ok();
                                 let mut f = TextFormat {
                                     font_id: file_font.clone(),
                                     color: ink,
@@ -3666,17 +3691,44 @@ impl Zenith {
                                 if hit {
                                     f.underline = Stroke::new(1.0, pal.accent_soft);
                                 }
-                                job.append(&ch.to_string(), 0.0, f);
+                                name_job.append(&ch.to_string(), 0.0, f);
                             }
-                            let g = ui.painter().layout_job(job);
-                            ui.painter().galley(
-                                Pos2::new(
-                                    rect.left() + 6.0 * self.scale,
-                                    rect.center().y - g.size().y * 0.5,
-                                ),
-                                g,
-                                pal.ink,
-                            );
+                            let name_galley = ui.painter().layout_job(name_job);
+
+                            let dir_galley = (!dir.is_empty()).then(|| {
+                                let mut job = egui::text::LayoutJob::default();
+                                job.wrap.max_width = max_w;
+                                job.wrap.max_rows = 1;
+                                job.wrap.break_anywhere = true;
+                                for (ci, ch) in dir.chars().enumerate() {
+                                    let hit = positions.binary_search(&ci).is_ok();
+                                    let mut f = TextFormat {
+                                        font_id: file_dir_font.clone(),
+                                        color: pal.ink_soft,
+                                        ..Default::default()
+                                    };
+                                    if hit {
+                                        f.underline = Stroke::new(1.0, pal.accent_soft);
+                                    }
+                                    job.append(&ch.to_string(), 0.0, f);
+                                }
+                                ui.painter().layout_job(job)
+                            });
+
+                            let gap = 1.0 * self.scale;
+                            let name_h = name_galley.size().y;
+                            let block_h = name_h
+                                + dir_galley.as_ref().map(|g| gap + g.size().y).unwrap_or(0.0);
+                            let top = rect.center().y - block_h * 0.5;
+                            let x = rect.left() + pad;
+                            ui.painter().galley(Pos2::new(x, top), name_galley, ink);
+                            if let Some(g) = dir_galley {
+                                ui.painter().galley(
+                                    Pos2::new(x, top + name_h + gap),
+                                    g,
+                                    pal.ink_soft,
+                                );
+                            }
                             if *marked {
                                 ui.painter().text(
                                     Pos2::new(
@@ -3689,6 +3741,7 @@ impl Zenith {
                                     pal.accent,
                                 );
                             }
+                            resp.clone().on_hover_text(rel.as_str());
                         }
                     }
                     if resp.clicked() {
@@ -6339,6 +6392,18 @@ fn paragraph_block(doc: &Document, line: usize) -> (usize, usize) {
     (start, end)
 }
 
+/// What a caret at `line` needs from the page. The ends of the document ask for the
+/// ends of the page; everything between asks only to be revealed.
+fn reveal_pending(line: usize, last: usize) -> Pending {
+    if line == 0 {
+        Pending::Start
+    } else if last > 0 && line >= last {
+        Pending::End
+    } else {
+        Pending::Reveal(line)
+    }
+}
+
 /// A pending movement of the page.
 #[derive(Clone, Copy)]
 enum Pending {
@@ -6684,7 +6749,7 @@ const HELP_GROUPS: &[(&str, &[(&str, &str)])] = &[
     (
         "reading",
         &[
-            ("j k, ↑ ↓", "down and up a line"),
+            ("j k, ctrl-j ctrl-k, ↑ ↓", "down and up a line"),
             ("w b e", "next word, previous word, end of word"),
             ("0 ^ $", "start of line, first non-blank, end of line"),
             ("{ }", "previous and next paragraph"),
@@ -6837,6 +6902,18 @@ mod tree_tests {
             doorway: false,
             empty: false,
         }
+    }
+
+    #[test]
+    fn the_page_ends_are_reachable_by_ordinary_motions() {
+        use super::{reveal_pending, Pending};
+        // A caret that lands on the first line asks for the top of the page, not just
+        // the first line in view. The same at the other end.
+        assert!(matches!(reveal_pending(0, 10), Pending::Start));
+        assert!(matches!(reveal_pending(10, 10), Pending::End));
+        assert!(matches!(reveal_pending(5, 10), Pending::Reveal(5)));
+        // A one-line document is both ends; the top wins.
+        assert!(matches!(reveal_pending(0, 0), Pending::Start));
     }
 
     #[test]

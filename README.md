@@ -21,8 +21,8 @@ for but untested. Zero bundled assets: no fonts, no icons, no images. Requires r
 cargo run --release -- ~/code/some-project
 ```
 
-Navigation is vim's, as far as a reader needs it: `j k`, `w b e`, `0 ^ $`, `{ }`, `%`,
-`gg G`, `H M L`, `zz zt zb`, `ctrl-d ctrl-u`, `[ ]` for chapters, `gd` to follow a name to
+Navigation is vim's, as far as a reader needs it: `j k` (or `ctrl-j` / `ctrl-k`), `w b e`,
+`0 ^ $`, `{ }`, `%`, `gg G`, `H M L`, `zz zt zb`, `ctrl-d ctrl-u`, `[ ]` for chapters, `gd` to follow a name to
 where it is defined, and `ctrl-o` / `ctrl-i` to go back and forward through everywhere you
 have been. The page opens alone; a small mark at the top opens four doors — the index, the
 contents, the launcher and settings. `tab` opens the index with the keyboard in it: `j k`

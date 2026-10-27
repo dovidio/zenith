@@ -136,8 +136,6 @@ pub struct Folder {
     pub filtered: usize,
     /// Entries the walker could not read at all — the only number here that is a fault.
     pub unreadable: usize,
-    /// Set when the walk stopped at [`MAX_FILES`].
-    pub truncated: bool,
 }
 
 impl Folder {
@@ -161,8 +159,6 @@ pub fn open(root: &Path, name: &str, code_only: bool, show_hidden: bool) -> std:
     let mut files: Vec<FileEntry> = Vec::new();
     let mut filtered = 0usize;
     let mut unreadable = 0usize;
-    let mut truncated = false;
-    const MAX_FILES: usize = 40_000;
 
     let mut builder = WalkBuilder::new(root);
     builder
@@ -223,10 +219,6 @@ pub fn open(root: &Path, name: &str, code_only: bool, show_hidden: bool) -> std:
             filtered += 1;
             continue;
         }
-        if files.len() >= MAX_FILES {
-            truncated = true;
-            break;
-        }
         let rel = path
             .strip_prefix(root)
             .unwrap_or(path)
@@ -256,7 +248,6 @@ pub fn open(root: &Path, name: &str, code_only: bool, show_hidden: bool) -> std:
         files,
         filtered,
         unreadable,
-        truncated,
     })
 }
 

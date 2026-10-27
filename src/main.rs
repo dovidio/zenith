@@ -194,6 +194,7 @@ USAGE:
 
 READING KEYS:
     j / k, space, ⇧space      move the reading cursor / page
+    ctrl-j / ctrl-k           one line down / up
     J / K                     next / previous file in the folder
     tab                       open the index and move the keyboard into it
     o                         contents
@@ -254,11 +255,7 @@ fn walk(root: &std::path::Path) {
             println!("  files              {}", s.files.len());
             println!("  filtered           {}", s.filtered);
             println!("  unreadable         {}", s.unreadable);
-            println!("  stopped at the cap {}", s.truncated);
             println!("  took               {:.2?}", t.elapsed());
-            if s.truncated {
-                println!("\n  the folder stops at 40,000 files; this tree is larger");
-            }
         }
         Err(e) => eprintln!("zenith: cannot read {}: {e}", root.display()),
     }

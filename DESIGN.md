@@ -298,11 +298,13 @@ with no box: a hairline under the line is the only boundary. The placeholder is
 `a file, a view, or an action`.
 
 The results are a short, ranked list, not a manual: file names in the code face, views and
-actions in chrome, 28 pt rows, selected with a wash and a 2 pt accent tab. There is no hand
-cursor. It never shows more than eight rows; a launcher that becomes a menu is a menu, and
-the answer to a longer list is a more specific query. At 1.30× and above the sheet moves
-up to the top air, and its body can scroll, so eight rows at 1.80× are still eight rows,
-not a sheet clipped by the window.
+actions in chrome, selected with a wash and a 2 pt accent tab. An action is a 28 pt row. A
+file is a 44 pt row with two elided lines: the file name, then its folder in softer code
+beneath it. Long names and deep folders never wrap into the row below; the full path is on
+hover. There is no hand cursor. It never shows more than eight rows; a launcher that
+becomes a menu is a menu, and the answer to a longer list is a more specific query. At
+1.30× and above the sheet moves up to the top air, and its body can scroll, so eight rows
+at 1.80× are still eight rows, not a sheet clipped by the window.
 
 The empty state is contextual, in three groups. `HERE` comes first — `Contents`, then
 `Search this file`. `FOLDER` follows — `Index`, the matching files, and `Open folder…`
