@@ -365,6 +365,11 @@ toolbar: a review strip carries `REVIEW`, the branch, the base, the current file
 the changed-file strip; `base` opens a summoned sheet. `J K` moves through
 the changed files and `[ ]` through the changes.
 
+The review is a mode, not a page you leave by walking. `gd` to a definition and
+`ctrl-o` / `ctrl-i` through the jumps keep it; a changed file reattaches its marks when
+you return, and a definition opens without them. Only `q`, `g r` or opening another
+folder leaves the review.
+
 The file is always whole. There are no hunks to expand and no side-by-side columns. A
 changed line is set in the real bold face the machine owns; if it has none, another
 installed coding bold is used rather than a faked weight. An accent tab sits in the

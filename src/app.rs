@@ -717,6 +717,7 @@ impl Zenith {
         let cfg = self.store.config.clone();
 
         self.store.session.last_root = Some(root.to_path_buf());
+        self.leave_review();
         self.folder = None;
         self.expanded.clear();
         self.expanded.insert(String::new());
@@ -826,11 +827,28 @@ impl Zenith {
     // -- documents ---------------------------------------------------------
 
     fn open_file(&mut self, path: &Path) {
+        // The review is a mode, not a page you leave by walking. Opening one of its
+        // changed files attaches that file's marks again; opening a definition or any
+        // other file keeps the review around so the way back is still the same review.
+        if let Some(index) = self
+            .review
+            .as_ref()
+            .and_then(|review| review.files.iter().position(|file| file.path == path))
+        {
+            self.open_review_index(index);
+            return;
+        }
+        self.open_file_plain(path);
+    }
+
+    /// Kept for the navigation paths: a jump and a direct open now agree about the
+    /// review, but the name says why the path exists.
+    fn open_file_nav(&mut self, path: &Path) {
+        self.open_file(path);
+    }
+
+    fn open_file_plain(&mut self, path: &Path) {
         self.nav = None;
-        // A normal file is a departure from the review; its strip belongs to the
-        // change set, not to wherever the reader wanders next.
-        self.review = None;
-        self.review_hover = None;
         self.remember_position();
         if self.open.as_ref().map(|o| o.path.as_path()) != Some(path) {
             self.outline_asked = None;
@@ -2219,16 +2237,7 @@ impl Zenith {
             Act::SearchPrev => self.search_step(false),
             Act::Smaller => self.bump_scale(-0.06, ctx),
             Act::Larger => self.bump_scale(0.06, ctx),
-            Act::Reload => {
-                if self.review.is_some() {
-                    // A review is a snapshot of the base, not of the working file.
-                    // Reloading it means the same revision, not whatever is on disk now.
-                    let index = self.review_index;
-                    self.open_review_index(index);
-                } else {
-                    self.reload();
-                }
-            }
+            Act::Reload => self.reload(),
             Act::CloseFile => {
                 self.leave_review();
                 self.close_file();
@@ -2492,7 +2501,7 @@ impl Zenith {
     /// Go to a remembered place, opening its file if that is a different one.
     fn go_to(&mut self, place: &Place) {
         if self.open.as_ref().map(|o| o.path.as_path()) != Some(place.path.as_path()) {
-            self.open_file(&place.path);
+            self.open_file_nav(&place.path);
         }
         let caret = match &self.open {
             Some(open) => vim::clamp(&open.doc, place.caret),
@@ -6249,7 +6258,7 @@ impl Zenith {
         let (previous, _) = (previous, self.scroll);
         if here.as_deref() != Some(path.as_path()) {
             self.push_jump();
-            self.open_file(&path);
+            self.open_file_nav(&path);
         }
         let Some(open) = &self.open else { return };
         let line = line.min(open.doc.lines.len().saturating_sub(1));

@@ -29,7 +29,8 @@ tree by default, or a branch or commit with `g b` (a branch is compared from its
 ancestor with `HEAD`, as a pull request is). Changed lines carry a little more weight;
 the code they replaced lifts in place when you hover the line (or press `p` at the
 cursor). `J K` walks the changed
-files across the strip, and `[ ]` walks the changes in the page. In review the bloom
+files across the strip, and `[ ]` walks the changes in the page. `gd` into a definition
+and `ctrl-o` back keep the review; the changed file's marks return with it. In review the bloom
 contracts to one quiet line of four words at the top; the same doors, without the
 constellation. A review reads git and
 nothing else; ignored noise, including `node_modules`, never enters the strip.
