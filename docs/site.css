@@ -80,10 +80,8 @@ a:focus-visible, button:focus-visible, pre:focus-visible {
   font-size: 13px;
   white-space: nowrap;
 }
-.mast-actions .run-link {
-  color: var(--ink);
-  border-color: var(--edge);
-}
+.mast-actions .run-link { color: var(--accent); }
+.mast-actions .source { color: var(--ink); border-color: var(--edge); }
 .topline {
   display: flex;
   justify-content: flex-end;

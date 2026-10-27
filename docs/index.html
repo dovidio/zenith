@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Zenith — a reading room for source code</title>
-  <meta name="description" content="A native, read-only code reader: a page and four doors, tones instead of rainbow, and six place-named atmospheres. Experimental, written by an AI.">
+  <meta name="description" content="A native code reader for code you have to understand but didn't write. Read-only, with six complete looks and no editor in the way.">
   <meta name="theme-color" content="#f5f1e8" id="theme-color">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23f5f1e8'/%3E%3Ctext x='16' y='24' font-family='Georgia,serif' font-size='24' text-anchor='middle' fill='%232f6b96'%3EZ%3C/text%3E%3C/svg%3E">
   <meta property="og:title" content="Zenith — a reading room for source code">
-  <meta property="og:description" content="A native, read-only code reader. A page and four doors, six atmospheres, and no write path into your project. Experimental, written by an AI.">
+  <meta property="og:description" content="A native code reader for code you have to understand but didn't write. Read-only, six complete looks, no editor in the way.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://dovidio.github.io/zenith/">
   <meta property="og:image" content="https://dovidio.github.io/zenith/reading-detail.jpg">
@@ -33,50 +33,50 @@
   <header class="mast" role="banner">
     <div class="wordmark">Zenith<small>A reading room for source code.</small></div>
     <nav class="mast-actions" aria-label="Zenith">
-      <a href="https://github.com/dovidio/zenith">Read the source ↗</a>
       <a class="run-link" href="#run">Run it ↓</a>
+      <a class="source" href="https://github.com/dovidio/zenith">Read the source ↗</a>
     </nav>
   </header>
   <div class="topline">
-    <span class="status-top">Experimental · written by an AI · not a product</span>
+    <span class="status-top">Experimental · written by an AI · not production-ready</span>
   </div>
 
   <section class="hero" aria-labelledby="hero-title">
     <div class="listing-wrap">
       <div class="file">src/reader.rs <span>~/hack/Projects/zenith</span></div>
-      <h1 id="hero-title">The page is the product.</h1>
-      <p class="path">A native code reader — not an editor with the editing removed.</p>
+      <h1 id="hero-title">A code reader, not an editor.</h1>
+      <p class="path">For code you have to understand but didn't write.</p>
       <div class="listing" aria-label="A specimen of the reading page">
-<span class="line comment">/// Everything the interface does returns you to the page.</span>
+<span class="line comment">/// Open a file and put it on the page.</span>
 <span class="line"><span class="kw">pub fn</span> <span class="call">open</span><span class="punct">(</span>&amp;<span class="kw">mut</span> self<span class="punct">,</span> path<span class="punct">:</span> &amp;<span class="type">Path</span><span class="punct">)</span> -&gt; <span class="type">Result</span>&lt;<span class="punct">()</span>&gt; <span class="punct">{</span></span>
 <span class="line">    <span class="kw">let</span> source <span class="punct">=</span> std<span class="punct">::</span>fs<span class="punct">::</span><span class="call">read_to_string</span><span class="punct">(</span>path<span class="punct">)?;</span></span>
 <span class="line caret">    self.page.<span class="call">set</span><span class="punct">(</span>source<span class="punct">);</span></span>
 <span class="line">    self.cursor <span class="punct">=</span> <span class="type">Caret</span><span class="punct">::</span><span class="call">top</span><span class="punct">();</span></span>
 <span class="line">    <span class="type">Ok</span><span class="punct">(())</span></span>
 <span class="line"><span class="punct">}</span></span>
-<span class="line comment">// There is no save. No lockfile. No cache in the repository.</span>
-<span class="line comment">// A theme is a place, not a colour swatch.</span>
-<span class="line comment">// The bloom is the only chrome that offers itself.</span>
+<span class="line comment">// There is no save. No lockfile. No cache.</span>
+<span class="line comment">// The page is the only place the file goes.</span>
+<span class="line comment">// Only the four doors are ever on screen.</span>
 <span class="line"><span class="kw">for</span> door <span class="kw">in</span> <span class="punct">[</span><span class="str">"index"</span><span class="punct">,</span> <span class="str">"contents"</span><span class="punct">,</span> <span class="str">"launcher"</span><span class="punct">,</span> <span class="str">"settings"</span><span class="punct">]</span> <span class="punct">{</span></span>
 <span class="line">    bloom.<span class="call">offer</span><span class="punct">(</span>door<span class="punct">);</span></span>
 <span class="line"><span class="punct">}</span></span>
       </div>
-      <p class="specimen-note">The page's typography, set by hand in HTML. The actual window is below.</p>
+      <p class="specimen-note">This is the page's type, set in HTML. The actual app is below.</p>
     </div>
 
     <aside class="notes" aria-label="Notes on the room">
-      <div class="note"><b>Read-only is structural.</b><p>There is no write path into the project. The page cannot save, rename or format what you are reading.</p></div>
-      <div class="note"><b>Comments are prose.</b><p>The only English in a source file is set in the reading face; the voice changes even when the line does not.</p></div>
-      <div class="note"><b>Indentation is drawn.</b><p>Leading whitespace becomes a hairline gutter; a block has a shape before it has a count.</p></div>
-      <div class="note"><b>Long lines admit it.</b><p>A wrapped expression carries <span class="wrap-mark">↳</span> in the margin, so it never reads as a new line.</p></div>
-      <div class="note"><b>The cursor is a reading position.</b><p>A ribbon and a 14-alpha wash, not a blinking caret.</p></div>
+      <div class="note"><b>Read-only, by construction.</b><p>Zenith opens files and never writes them. No save, no rename, no formatter.</p></div>
+      <div class="note"><b>Comments read like prose.</b><p>They're set in a serif, so explanation sounds different from code.</p></div>
+      <div class="note"><b>Blocks have a shape.</b><p>Indentation is a hairline, not a count of spaces.</p></div>
+      <div class="note"><b>Nothing scrolls sideways.</b><p>Long lines wrap, with a <span class="wrap-mark">↳</span> in the margin where they continue.</p></div>
+      <div class="note"><b>The cursor doesn't blink.</b><p>A quiet ribbon marks where you are, not a caret waiting for input.</p></div>
     </aside>
   </section>
 
   <section class="themes" aria-labelledby="themes-title">
     <div class="themes-copy">
       <h2 id="themes-title">Six atmospheres</h2>
-      <p>Each is a paper, an ink and a tonal ladder — a place, not a light/dark switch. <span class="key">1</span>–<span class="key">6</span> changes the page you are reading.</p>
+      <p>Six complete looks. Each has its own paper, ink and tones; the whole page changes, not just the code. <span class="key">1</span>–<span class="key">6</span> picks one.</p>
     </div>
     <div class="theme-rack" role="group" aria-label="Theme">
       <button type="button" data-theme-set="lugano" aria-pressed="false"><i aria-hidden="true"></i>1 Lugano</button>
@@ -92,8 +92,8 @@
   <section id="run" class="run" aria-labelledby="run-title">
     <div class="run-copy">
       <h2 id="run-title">Run it</h2>
-      <p>A native binary for macOS and Linux. Windows is written for but untested. Zero bundled assets: no fonts, no icons, no images come with the reader.</p>
-      <p class="requirements">Built against egui/eframe 0.35. Requires rustc ≥ 1.92. Language servers are discovered, never installed.</p>
+      <p>A native app for macOS and Linux. It bundles nothing: fonts, icons and language servers come from your machine.</p>
+      <p class="requirements">Rust 1.92 or newer. Language servers are found, never installed.</p>
     </div>
     <div class="command">
       <pre tabindex="0" aria-label="Shell commands to run Zenith"><code id="run-command">git clone https://github.com/dovidio/zenith
@@ -107,28 +107,28 @@ cargo run --release -- ~/code/some-project</code></pre>
   <section class="room" aria-labelledby="room-title">
     <div class="room-copy">
       <h2 id="room-title">The room</h2>
-      <p>A native code <em>reader</em> for projects where people read code rather than write it — reviewing, onboarding, archaeology, study. Not an editor with the editing removed: the whole interface assumes you will never type a character into it.</p>
-      <p>The page opens alone. A small bloom above it opens the index, the contents, the launcher and settings — one surface at a time, gone when it is done. Read-only is not a mode here; it is the shape of the room.</p>
-      <p>Markdown files render as documents; <code>#</code> inside a fence stays code. Comments are set in the reading face, indentation is drawn as hairlines, and long lines wrap with <span class="wrap-mark">↳</span> in the margin.</p>
+      <p>Zenith is for the code you have to understand but didn't write: a review, an inherited service, a dependency you need to trust.</p>
+      <p>It isn't an editor with the editing removed. The page opens alone; the bloom above it holds the index, contents, launcher and settings, one at a time, gone when you're done.</p>
+      <p>Read-only isn't a setting here. It's the shape of the room. Markdown renders as a document; a fenced <code>#</code> stays code.</p>
     </div>
     <figure class="window">
       <a href="self-portrait.jpg"><img src="reading-detail.jpg" width="1700" height="900" loading="lazy" alt="The actual Zenith window, detail: README.md with its title block, the experimental disclosure, and the first lines of the reading page under the bloom."></a>
-      <figcaption>The actual window, detail · <a href="self-portrait.jpg">full size</a></figcaption>
+      <figcaption>The actual app, detail · <a href="self-portrait.jpg">full size</a></figcaption>
     </figure>
   </section>
 
   <section class="trust" aria-labelledby="trust-title">
     <h2 id="trust-title">It does not change your code</h2>
-    <p>Files are opened with <code>std::fs::read</code>; there is no save, no lockfile, and no cache directory inside the repository. Its own state — theme, typography, measure, reading positions, bookmarks — lives in <code>~/.config/zenith/</code>, and if that is not writable it degrades to an in-memory session.</p>
-    <p>The only thing it may start on your behalf is a language server, and only for a folder you have opened. It answers one question — where is this defined — and the outline; it never edits.</p>
+    <p>Zenith reads files and never writes them. No save button, no lockfile, no cache in the repository. Your settings and reading positions live outside the project, in your config folder.</p>
+    <p>The only process it may start is a language server, for a folder you opened, to find where a symbol is defined. It never edits.</p>
   </section>
 
   <section class="close" aria-labelledby="close-title">
     <div>
       <h2 id="close-title">Read a codebase without the editor talking back.</h2>
-      <p>The page is the product. Everything else is summoned, then returned.</p>
+      <p>Open a repository. Read it. Leave it exactly as you found it.</p>
     </div>
-    <a class="primary" href="https://github.com/dovidio/zenith">Read the source on GitHub <span>↗</span></a>
+    <a class="primary" href="#run">Run it <span>↓</span></a>
   </section>
 </main>
 
