@@ -603,6 +603,50 @@ fn italic_sibling(voice: &Voice) -> Option<(PathBuf, u32)> {
     None
 }
 
+/// A matching bold face for a voice, found the same way as its italic: a file beside
+/// it first, then another usable face inside the same collection. If the machine has no
+/// bold face, the review falls back to the regular face rather than a faux weight.
+fn bold_sibling(voice: &Voice) -> Option<(PathBuf, u32)> {
+    let stem = voice.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let dir = voice.path.parent()?;
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for suffix in [
+        " Bold", "-Bold", "Bold", "-Semibold", " Semibold", "-SemiBold",
+        "-Medium", " Medium",
+    ] {
+        for ext in ["ttf", "otf", "ttc"] {
+            candidates.push(dir.join(format!("{stem}{suffix}.{ext}")));
+        }
+    }
+    if let Some(without) = stem.strip_suffix("-Regular") {
+        for suffix in ["-Bold", "-Semibold", "-SemiBold", "-Medium", " Bold", " Semibold"] {
+            for ext in ["ttf", "otf"] {
+                candidates.push(dir.join(format!("{without}{suffix}.{ext}")));
+            }
+        }
+    }
+    for cand in candidates {
+        if cand == voice.path {
+            continue;
+        }
+        if cand.is_file() && loads_path(&cand, 0) {
+            return Some((cand, 0));
+        }
+    }
+
+    let faces = faces(&voice.path);
+    let regular_weight = faces
+        .iter()
+        .find(|f| f.index == voice.index)
+        .map(|f| f.weight)?;
+    faces
+        .into_iter()
+        .filter(|f| !f.italic && f.usable && f.weight >= regular_weight + 80.0)
+        .min_by(|a, b| a.weight.total_cmp(&b.weight))
+        .map(|f| (voice.path.clone(), f.index))
+}
+
 /// Pick the voice at `wanted`, or the nearest usable one after it.
 fn resolve(voices: &[Voice], wanted: usize) -> Option<(usize, Voice)> {
     if voices.is_empty() {
@@ -640,15 +684,19 @@ pub struct Typography {
 
     pub code: FontFamily,
     pub code_italic: FontFamily,
+    pub code_strong: FontFamily,
     pub prose: FontFamily,
     pub prose_italic: FontFamily,
+    pub prose_strong: FontFamily,
     pub ui: FontFamily,
 }
 
 pub const CODE: &str = "zenith-code";
 pub const CODE_ITALIC: &str = "zenith-code-italic";
+pub const CODE_STRONG: &str = "zenith-code-strong";
 pub const PROSE: &str = "zenith-prose";
 pub const PROSE_ITALIC: &str = "zenith-prose-italic";
+pub const PROSE_STRONG: &str = "zenith-prose-strong";
 
 /// Register a font file under `key`, returning false if it cannot be parsed.
 fn add_font(defs: &mut FontDefinitions, key: &str, path: &Path, index: u32, label: &str) -> bool {
@@ -709,8 +757,10 @@ pub fn build(mono_idx: usize, prose_idx: usize, ui_idx: usize) -> Typography {
 
     let code = FontFamily::Name(CODE.into());
     let code_italic = FontFamily::Name(CODE_ITALIC.into());
+    let code_strong = FontFamily::Name(CODE_STRONG.into());
     let prose_fam = FontFamily::Name(PROSE.into());
     let prose_italic_fam = FontFamily::Name(PROSE_ITALIC.into());
+    let prose_strong_fam = FontFamily::Name(PROSE_STRONG.into());
 
     let mut symbols: Vec<String> = Vec::new();
     for (i, path) in symbol_fonts().iter().enumerate() {
@@ -729,17 +779,36 @@ pub fn build(mono_idx: usize, prose_idx: usize, ui_idx: usize) -> Typography {
 
     // ---- code ----
     let code_key = "zenith-mono".to_string();
-    let (mono_idx, _mono_label, mono_italic) = match &mono {
+    let (mono_idx, _mono_label, mono_italic, mono_bold) = match &mono {
         Some((idx, v)) => {
             add_font(&mut defs, &code_key, &v.path, v.index, &v.label);
             let italic = italic_sibling(v).and_then(|(path, index)| {
                 let ikey = "zenith-mono-italic".to_string();
                 add_font(&mut defs, &ikey, &path, index, &v.label).then_some(ikey)
             });
-            (*idx, v.label.clone(), italic)
+            let bold = bold_sibling(v).and_then(|(path, index)| {
+                let bkey = "zenith-mono-strong".to_string();
+                add_font(&mut defs, &bkey, &path, index, &v.label).then_some(bkey)
+            });
+            (*idx, v.label.clone(), italic, bold)
         }
-        None => (0, "egui's bundled mono".to_string(), None),
+        None => (0, "egui's bundled mono".to_string(), None, None),
     };
+    // Not every coding face ships a bold. If the selected voice has none, take a real
+    // bold from another installed coding face rather than faking a weight; the changed
+    // lines are the only place it is used.
+    let mut mono_bold = mono_bold;
+    if mono_bold.is_none() {
+        for voice in &mono_voices {
+            if let Some((path, index)) = bold_sibling(voice) {
+                let key = "zenith-mono-strong".to_string();
+                if add_font(&mut defs, &key, &path, index, &voice.label) {
+                    mono_bold = Some(key);
+                    break;
+                }
+            }
+        }
+    }
     let code_chain = if mono.is_some() {
         chain(vec![code_key.clone()], &mono_fallback)
     } else {
@@ -752,6 +821,11 @@ pub fn build(mono_idx: usize, prose_idx: usize, ui_idx: usize) -> Typography {
         None => code_chain.clone(),
     };
     defs.families.insert(code_italic.clone(), code_italic_chain);
+    let code_strong_chain = match &mono_bold {
+        Some(bkey) => chain(vec![bkey.clone(), code_key.clone()], &mono_fallback),
+        None => code_chain.clone(),
+    };
+    defs.families.insert(code_strong.clone(), code_strong_chain);
 
     // ---- prose ----
     let prose_key = "zenith-prose-regular".to_string();
@@ -763,12 +837,23 @@ pub fn build(mono_idx: usize, prose_idx: usize, ui_idx: usize) -> Typography {
                 add_font(&mut defs, &ikey, &path, index, &v.label).then_some(ikey)
             });
             let regular_chain = chain(vec![prose_key.clone()], &prop_fallback);
-            defs.families.insert(prose_fam.clone(), regular_chain);
+            defs.families.insert(prose_fam.clone(), regular_chain.clone());
             defs.families.insert(
                 prose_italic_fam.clone(),
                 match &italic {
                     Some(ikey) => chain(vec![ikey.clone(), prose_key.clone()], &prop_fallback),
-                    None => chain(vec![prose_key.clone()], &prop_fallback),
+                    None => regular_chain.clone(),
+                },
+            );
+            let bold = bold_sibling(v).and_then(|(path, index)| {
+                let bkey = "zenith-prose-strong-face".to_string();
+                add_font(&mut defs, &bkey, &path, index, &v.label).then_some(bkey)
+            });
+            defs.families.insert(
+                prose_strong_fam.clone(),
+                match &bold {
+                    Some(bkey) => chain(vec![bkey.clone(), prose_key.clone()], &prop_fallback),
+                    None => regular_chain,
                 },
             );
             (*idx, v.label.clone())
@@ -777,6 +862,8 @@ pub fn build(mono_idx: usize, prose_idx: usize, ui_idx: usize) -> Typography {
             defs.families.insert(prose_fam.clone(), prop_fallback.clone());
             defs.families
                 .insert(prose_italic_fam.clone(), prop_fallback.clone());
+            defs.families
+                .insert(prose_strong_fam.clone(), prop_fallback.clone());
             (0, "egui's bundled serif".to_string())
         }
     };
@@ -818,8 +905,10 @@ pub fn build(mono_idx: usize, prose_idx: usize, ui_idx: usize) -> Typography {
         bundled_fallback,
         code,
         code_italic,
+        code_strong,
         prose: prose_fam,
         prose_italic: prose_italic_fam,
+        prose_strong: prose_strong_fam,
         ui: ui_named,
     }
 }
@@ -830,6 +919,9 @@ impl Typography {
     }
     pub fn code_italic_id(&self, size: f32) -> FontId {
         FontId::new(size, self.code_italic.clone())
+    }
+    pub fn code_strong_id(&self, size: f32) -> FontId {
+        FontId::new(size, self.code_strong.clone())
     }
     /// How much larger the prose has to be set to look the same size as the code.
     ///
@@ -850,6 +942,9 @@ impl Typography {
     }
     pub fn prose_italic_id(&self, size: f32) -> FontId {
         FontId::new(size, self.prose_italic.clone())
+    }
+    pub fn prose_strong_id(&self, size: f32) -> FontId {
+        FontId::new(size, self.prose_strong.clone())
     }
     pub fn ui_id(&self, size: f32) -> FontId {
         FontId::new(size, self.ui.clone())

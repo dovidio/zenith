@@ -16,6 +16,7 @@ use crate::fuzzy;
 use crate::lsp;
 use crate::outline::{self, SymKind, Symbol};
 use crate::reader::{self, Laid, Paint, Style};
+use crate::review::{self, Base, Review};
 use crate::folder::{self, Entry, FileEntry, Folder};
 use crate::syntax::{Document, Highlighter, Readable};
 use crate::theme::{self, Palette, Tone};
@@ -248,6 +249,11 @@ struct FolderLoad {
     focus: Option<PathBuf>,
 }
 
+/// A review being read from git in the background.
+struct ReviewLoad {
+    rx: std::sync::mpsc::Receiver<Result<Review, String>>,
+}
+
 /// A navigation question that has been asked but not yet answered.
 /// A place worth coming back to: a file, and where in it.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -309,6 +315,11 @@ struct Open {
     outline: Vec<Symbol>,
     laid: Option<Laid>,
     error: Option<String>,
+    /// Present when this file is being reviewed: the lines that changed and the code
+    /// they replaced. `None` for ordinary reading.
+    diff: Option<crate::review::Diff>,
+    /// The file exists only in the base revision (a deleted file).
+    deleted: bool,
 }
 
 pub struct Zenith {
@@ -336,6 +347,25 @@ pub struct Zenith {
     loading: Option<Loading>,
     /// A background walk of a folder, if one is running.
     folder_load: Option<FolderLoad>,
+    /// A branch under review, once git has answered.
+    review: Option<Review>,
+    /// The changed file being read.
+    review_index: usize,
+    /// The base the reader asked for, or the working tree by default.
+    review_base: Base,
+    /// A review being collected in the background.
+    review_load: Option<ReviewLoad>,
+    /// The base sheet, and the ref typed into it.
+    show_review_base: bool,
+    review_ref: String,
+    review_branches: Vec<String>,
+    review_error: String,
+    /// The changed line whose previous version is lifted.
+    review_hover: Option<usize>,
+    /// A previous line lifted from the keyboard, without a pointer.
+    review_peek: Option<usize>,
+    /// A screenshot hook: start the review once the folder walk lands.
+    review_after_load: bool,
     /// Every language server found on this machine for the languages this folder holds.
     available: Vec<lsp::servers::Available>,
     /// The languages this folder holds that zenith has a server for, found once per
@@ -499,6 +529,17 @@ impl Zenith {
             folder: None,
             expanded: BTreeSet::new(),
             open: None,
+            review: None,
+            review_index: 0,
+            review_base: Base::Working,
+            review_load: None,
+            show_review_base: false,
+            review_ref: String::new(),
+            review_branches: Vec::new(),
+            review_error: String::new(),
+            review_hover: None,
+            review_peek: None,
+            review_after_load: false,
             caret: vim::Caret::default(),
             chords: vim::Chords::default(),
             hold_down: std::env::var("ZENITH_HOLD_DOWN").is_ok(),
@@ -580,6 +621,12 @@ impl Zenith {
                 app.caret = caret;
                 app.jump_to(caret);
             }
+        }
+        if let Ok(base) = std::env::var("ZENITH_REVIEW_BASE") {
+            app.review_base = Base::Ref(base);
+        }
+        if std::env::var("ZENITH_FORCE_REVIEW").is_ok() {
+            app.review_after_load = true;
         }
         if std::env::var("ZENITH_FORCE_PALETTE").is_ok() {
             app.open_palette();
@@ -747,8 +794,11 @@ impl Zenith {
         Style {
             code: self.typo.code_id(code_size),
             code_italic: self.typo.code_italic_id(code_size),
+            code_strong: self.typo.code_strong_id(code_size),
             prose: self.typo.prose_id(prose_size),
             prose_italic: self.typo.prose_italic_id(prose_size),
+            prose_strong: self.typo.prose_strong_id(prose_size),
+            strong: false,
             ui: self.typo.ui_id(code_size * 0.82),
             leading: self.store.config.leading,
             measure: self.store.config.measure as f32 * self.char_w,
@@ -759,7 +809,10 @@ impl Zenith {
             serif_comments: self.store.config.serif_comments && self.palette.comment_italic,
             prose_document,
             distilled: self.store.config.distilled,
-            markdown: self.store.config.markdown,
+            // A diff is a diff of source lines. Rendering Markdown would move the
+            // lines away from the marks and the meaning of the page.
+            markdown: self.store.config.markdown
+                && self.open.as_ref().is_none_or(|o| o.diff.is_none()),
             lang,
             wrap_mark: self.typo.marks.pick("↳"),
             tones,
@@ -774,6 +827,10 @@ impl Zenith {
 
     fn open_file(&mut self, path: &Path) {
         self.nav = None;
+        // A normal file is a departure from the review; its strip belongs to the
+        // change set, not to wherever the reader wanders next.
+        self.review = None;
+        self.review_hover = None;
         self.remember_position();
         if self.open.as_ref().map(|o| o.path.as_path()) != Some(path) {
             self.outline_asked = None;
@@ -800,6 +857,8 @@ impl Zenith {
                     outline: Vec::new(),
                     laid: None,
                     error: Some(format!("{e}")),
+                    diff: None,
+                    deleted: false,
                 });
                 return;
             }
@@ -815,6 +874,8 @@ impl Zenith {
                     outline: Vec::new(),
                     laid: None,
                     error: Some(format!("{reason} — zenith only reads text")),
+                    diff: None,
+                    deleted: false,
                 });
             }
             Readable::Text {
@@ -914,6 +975,8 @@ impl Zenith {
                     outline: syms,
                     laid: None,
                     error: None,
+                    diff: None,
+                    deleted: false,
                 });
                 if !note.is_empty() {
                     self.say(note);
@@ -923,6 +986,455 @@ impl Zenith {
                 self.store.touch_recent(path);
                 self.expand_to(path);
             }
+        }
+    }
+
+    // -- review ------------------------------------------------------------
+
+    /// Open or close the branch review. `g r` is a toggle rather than a one-way door:
+    /// the reader can put the change set down without hunting for a command.
+    fn toggle_review(&mut self) {
+        if self.review.is_some() || self.review_load.is_some() {
+            self.leave_review();
+            self.status = "review closed".into();
+        } else {
+            self.start_review(self.review_base.clone());
+        }
+    }
+
+    fn leave_review(&mut self) {
+        self.review = None;
+        self.review_load = None;
+        self.review_hover = None;
+        self.review_peek = None;
+        self.show_review_base = false;
+    }
+
+    fn start_review(&mut self, base: Base) {
+        if self.review_load.is_some() {
+            return;
+        }
+        let root = self
+            .folder
+            .as_ref()
+            .map(|f| f.root.clone())
+            .or_else(|| self.open.as_ref().map(|o| crate::catalog::project_root(&o.path)));
+        let Some(root) = root else {
+            self.status = "open a folder to review its changes".into();
+            return;
+        };
+        let files: Vec<FileEntry> = self
+            .folder
+            .as_ref()
+            .map(|f| f.files.clone())
+            .unwrap_or_default();
+        self.review = None;
+        self.review_index = 0;
+        self.review_hover = None;
+        self.review_peek = None;
+        self.review_base = base.clone();
+        self.show_review_base = false;
+        self.review_error.clear();
+        self.status = format!("reading changes against {}…", base.label());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let base_for_thread = base.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(review::collect(&root, &base_for_thread, &files));
+        });
+        self.review_load = Some(ReviewLoad { rx });
+    }
+
+    fn open_review_base(&mut self) {
+        let Some(root) = self
+            .folder
+            .as_ref()
+            .map(|f| f.root.clone())
+            .or_else(|| self.open.as_ref().map(|o| crate::catalog::project_root(&o.path)))
+        else {
+            self.status = "open a folder to review its changes".into();
+            return;
+        };
+        self.review_branches = review::branches(&root);
+        self.review_error.clear();
+        self.show_review_base = true;
+    }
+
+    fn review_bar(&mut self, ui: &mut Ui) {
+        let pal = self.palette;
+        let branch = self.review.as_ref().map(|r| short_branch(&r.branch));
+        let base_name = short_branch(&self.review_base.label());
+        let base_label = match &branch {
+            Some(branch) => format!("{branch} ← {base_name}"),
+            None => base_name,
+        };
+        let loading = self.review_load.is_some();
+        let files = self.review.as_ref().map(|r| r.files.clone());
+        egui::Panel::top("zenith-review")
+            .resizable(false)
+            .exact_size((64.0 * self.scale).clamp(64.0, 104.0))
+            .show_separator_line(false)
+            .frame(
+                Frame::NONE
+                    .fill(pal.panel)
+                    .inner_margin(Margin::symmetric(16, 7)),
+            )
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.horizontal(|ui| {
+                    paint_tracked(
+                        ui.painter(),
+                        Pos2::new(ui.cursor().left(), ui.cursor().top() + 9.0),
+                        Align2::LEFT_TOP,
+                        "REVIEW",
+                        self.typo.ui_id(9.5 * self.scale),
+                        pal.ink_soft,
+                        LABEL_TRACKING * 9.5 * self.scale,
+                    );
+                    ui.add_space(74.0 * self.scale / 1.4);
+                    let base = ui.add(
+                        egui::Button::new(
+                            RichText::new(format!("base · {base_label}"))
+                                .font(self.typo.ui_id(11.0 * self.scale))
+                                .color(pal.ink),
+                        )
+                        .frame(true)
+                        .fill(pal.panel_deep),
+                    );
+                    if base.clicked() {
+                        self.open_review_base();
+                    }
+                    if let Some(files) = &files {
+                        ui.label(
+                            RichText::new(format!(
+                                "{} of {}",
+                                self.review_index + 1,
+                                files.len()
+                            ))
+                            .font(self.typo.ui_id(10.5 * self.scale))
+                            .color(pal.ink_soft),
+                        );
+                    } else if loading {
+                        ui.label(
+                            RichText::new("reading changes…")
+                                .font(self.typo.ui_id(10.5 * self.scale))
+                                .color(pal.ink_soft),
+                        );
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new("J K  files   [ ]  changes   p  peek")
+                                .font(self.typo.ui_id(9.5 * self.scale))
+                                .color(pal.ink_soft),
+                        );
+                    });
+                });
+                if let Some(files) = &files {
+                    ScrollArea::horizontal()
+                        .id_salt("review-files")
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 10.0 * self.scale;
+                                for (i, file) in files.iter().enumerate() {
+                                    let current = i == self.review_index;
+                                    let label = format!("{}  {}", file.status.mark(), file.rel);
+                                    let color = if current { pal.ink } else { pal.ink_soft };
+                                    let response = ui.add(
+                                        egui::Button::new(
+                                            RichText::new(label)
+                                                .font(self.typo.code_id(10.5 * self.scale))
+                                                .color(color),
+                                        )
+                                        .frame(false),
+                                    );
+                                    if current {
+                                        ui.painter().hline(
+                                            response.rect.x_range(),
+                                            response.rect.bottom(),
+                                            Stroke::new(1.5, pal.accent),
+                                        );
+                                    }
+                                    response.clone().on_hover_text(format!(
+                                        "{} · {}",
+                                        file.status.label(),
+                                        file.rel
+                                    ));
+                                    if response.clicked() {
+                                        self.open_review_index(i);
+                                    }
+                                }
+                            });
+                        });
+                }
+            });
+    }
+
+    fn review_base_overlay(&mut self, ctx: &egui::Context) {
+        let pal = self.palette;
+        let screen = ctx.content_rect();
+        let width = (430.0 * self.scale)
+            .clamp(430.0, 620.0)
+            .min((screen.width() - 40.0).max(320.0));
+        let mut choose: Option<Base> = None;
+        let mut close = false;
+        let mut custom = false;
+        egui::Window::new("review-base")
+            .title_bar(false)
+            .resizable(false)
+            .movable(false)
+            .collapsible(false)
+            .fixed_pos(Pos2::new(
+                screen.center().x - width * 0.5,
+                screen.top() + 96.0,
+            ))
+            .fixed_size(vec2(width, 0.0))
+            .frame(
+                Frame::NONE
+                    .fill(pal.panel)
+                    .stroke(Stroke::new(1.0, pal.edge))
+                    .corner_radius(CornerRadius::same(SHEET_RADIUS))
+                    .inner_margin(Margin::symmetric(18, 16))
+                    .shadow(sheet_shadow(&pal)),
+            )
+            .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing.y = 7.0;
+                ui.label(
+                    RichText::new("Compare changes with")
+                        .font(self.typo.prose_id(20.0 * self.scale))
+                        .color(pal.ink),
+                );
+                if let Some(review) = &self.review {
+                    ui.label(
+                        RichText::new(format!("on {}", review.branch))
+                            .font(self.typo.code_id(10.5 * self.scale))
+                            .color(pal.ink_soft),
+                    );
+                }
+                ui.label(
+                    RichText::new("A branch is compared from its common ancestor with HEAD.")
+                        .font(self.typo.ui_id(10.5 * self.scale))
+                        .color(pal.ink_soft),
+                );
+                ui.add_space(4.0);
+                for base in [Base::Working, Base::Staged, Base::LastCommit] {
+                    let selected = self.review_base == base;
+                    let response = ui.add(
+                        egui::Button::new(
+                            RichText::new(format!(
+                                "{}{}",
+                                if selected { "●  " } else { "○  " },
+                                match base {
+                                    Base::Working => "Working tree · uncommitted changes",
+                                    Base::Staged => "Staged · the index against HEAD",
+                                    Base::LastCommit => "Last commit · HEAD against its parent",
+                                    Base::Ref(_) => "",
+                                }
+                            ))
+                            .font(self.typo.ui_id(12.0 * self.scale))
+                            .color(if selected { pal.ink } else { pal.ink_soft }),
+                        )
+                        .frame(false),
+                    );
+                    if response.clicked() {
+                        choose = Some(base);
+                    }
+                }
+                ui.add_space(5.0);
+                ui.painter().hline(
+                    ui.min_rect().left()..=ui.min_rect().right(),
+                    ui.cursor().top(),
+                    Stroke::new(1.0, pal.edge),
+                );
+                ui.add_space(7.0);
+                ui.label(
+                    RichText::new("A branch or commit")
+                        .font(self.typo.ui_id(10.5 * self.scale))
+                        .color(pal.ink_soft),
+                );
+                let input = ui.add(
+                    egui::TextEdit::singleline(&mut self.review_ref)
+                        .hint_text("main, origin/main, 3a1f2c")
+                        .font(self.typo.code_id(12.0 * self.scale))
+                        .desired_width(f32::INFINITY)
+                        .frame(Frame::NONE),
+                );
+                let enter = ui.input(|i| i.key_pressed(Key::Enter));
+                if enter && input.has_focus() && !self.review_ref.trim().is_empty() {
+                    custom = true;
+                }
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("Compare")
+                                .font(self.typo.ui_id(11.5 * self.scale))
+                                .color(pal.ink),
+                        )
+                        .frame(true),
+                    )
+                    .clicked()
+                    && !self.review_ref.trim().is_empty()
+                {
+                    custom = true;
+                }
+                if !self.review_branches.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Recent branches")
+                            .font(self.typo.ui_id(9.5 * self.scale))
+                            .color(pal.ink_soft),
+                    );
+                    ScrollArea::vertical()
+                        .id_salt("review-branches")
+                        .max_height(148.0)
+                        .show(ui, |ui| {
+                            for branch in &self.review_branches {
+                                if ui
+                                    .add(
+                                        egui::Button::new(
+                                            RichText::new(branch)
+                                                .font(self.typo.code_id(11.0 * self.scale))
+                                                .color(pal.ink_soft),
+                                        )
+                                        .frame(false),
+                                    )
+                                    .clicked()
+                                {
+                                    choose = Some(Base::Ref(branch.clone()));
+                                }
+                            }
+                        });
+                }
+                if !self.review_error.is_empty() {
+                    ui.label(
+                        RichText::new(&self.review_error)
+                            .font(self.typo.ui_id(10.5 * self.scale))
+                            .color(pal.accent),
+                    );
+                }
+                ui.add_space(4.0);
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new("Close")
+                                .font(self.typo.ui_id(11.0 * self.scale))
+                                .color(pal.ink_soft),
+                        )
+                        .frame(false),
+                    )
+                    .clicked()
+                {
+                    close = true;
+                }
+            });
+        if custom {
+            choose = Some(Base::Ref(self.review_ref.trim().to_string()));
+        }
+        if let Some(base) = choose {
+            self.show_review_base = false;
+            self.start_review(base);
+        } else if close {
+            self.show_review_base = false;
+        }
+    }
+
+    fn open_review_index(&mut self, index: usize) {
+        let Some(review) = &self.review else { return };
+        let Some(file) = review.files.get(index).cloned() else { return };
+        let text = match review.file_text(&file) {
+            Ok(text) => text,
+            Err(e) => {
+                let head = String::new();
+                let syntax = self.hl.syntax_for(&file.path, &head).clone();
+                self.open = Some(Open {
+                    path: file.path.clone(),
+                    rel: file.rel.clone(),
+                    doc: empty_doc(&syntax),
+                    prose: false,
+                    outline: Vec::new(),
+                    laid: None,
+                    error: Some(e.clone()),
+                    diff: None,
+                    deleted: file.status == review::Status::Deleted,
+                });
+                self.review_index = index;
+                self.review_hover = None;
+                self.review_peek = None;
+                self.title_dirty = true;
+                self.status = e;
+                return;
+            }
+        };
+        let mut diff = review.diff_for(&file).ok();
+        if let Some(diff) = &mut diff {
+            let lines = text.lines().count();
+            for deletion in &mut diff.deletions {
+                deletion.at = deletion.at.min(lines.saturating_sub(1));
+            }
+        }
+        let head = text.lines().next().unwrap_or("").to_string();
+        let syntax = self.hl.syntax_for(&file.path, &head).clone();
+        let doc = self.hl.parse(&syntax, &text, text.len());
+        let syms = outline::extract(&file.path, &doc.syntax, &doc.lines);
+        let prose = outline::family(&file.path, &doc.syntax) == outline::Family::Markdown;
+        self.open = Some(Open {
+            path: file.path,
+            rel: file.rel,
+            doc,
+            prose,
+            outline: syms,
+            laid: None,
+            error: None,
+            diff,
+            deleted: file.status == review::Status::Deleted,
+        });
+        self.review_index = index;
+        self.review_hover = None;
+        self.review_peek = None;
+        self.caret = vim::Caret::default();
+        self.pending = Pending::Start;
+        self.scroll = 0.0;
+        self.title_dirty = true;
+    }
+
+    fn step_review(&mut self, forward: bool) {
+        let Some(review) = &self.review else {
+            self.step_file(forward);
+            return;
+        };
+        if review.files.is_empty() {
+            return;
+        }
+        let n = review.files.len();
+        let next = if forward {
+            (self.review_index + 1) % n
+        } else {
+            (self.review_index + n - 1) % n
+        };
+        self.open_review_index(next);
+    }
+
+    fn review_change(&mut self, forward: bool) {
+        let Some(open) = &self.open else { return };
+        let Some(diff) = &open.diff else {
+            self.status = "this file has no marked changes".into();
+            return;
+        };
+        let mut at: Vec<usize> = diff.changed.clone();
+        at.extend(diff.deletions.iter().map(|d| d.at));
+        at.sort_unstable();
+        at.dedup();
+        if at.is_empty() {
+            return;
+        }
+        let current = self.caret.line;
+        let next = if forward {
+            at.iter().find(|&&l| l > current).copied().or_else(|| at.first().copied())
+        } else {
+            at.iter().rev().find(|&&l| l < current).copied().or_else(|| at.last().copied())
+        };
+        if let Some(line) = next {
+            let caret = vim::landing(&open.doc, line);
+            self.jump_to(caret);
         }
     }
 
@@ -1057,7 +1569,23 @@ impl Zenith {
                 laid.col_x = col_x;
             }
             _ => {
-                open.laid = Some(reader::layout(ctx, &open.doc, &style, col_x, header_h));
+                let strong = open.diff.as_ref().map(|diff| {
+                    let mut mask = vec![false; open.doc.lines.len()];
+                    for &line in &diff.changed {
+                        if let Some(slot) = mask.get_mut(line) {
+                            *slot = true;
+                        }
+                    }
+                    mask
+                });
+                open.laid = Some(reader::layout(
+                    ctx,
+                    &open.doc,
+                    &style,
+                    col_x,
+                    header_h,
+                    strong.as_deref(),
+                ));
                 if std::env::var("ZENITH_TIMING").is_ok() {
                     eprintln!("timing: layout {:.0?}", t_layout.elapsed());
                 }
@@ -1078,8 +1606,9 @@ impl Zenith {
         // help) owns none of them, but should still keep the page still behind it.
         let text_entry = self.search_open
             || self.palette_open
+            || self.show_review_base
             || (self.show_settings && ctx.memory(|m| m.focused().is_some()));
-        let modal = self.show_settings;
+        let modal = self.show_settings || self.show_review_base;
 
         // Every key press this frame, with the modifiers that came with it.
         let presses: Vec<(Key, bool, bool, bool)> = ctx.input(|i| {
@@ -1139,6 +1668,7 @@ impl Zenith {
                     self.show_settings = false;
                     self.palette_open = false;
                     self.search_open = false;
+                    self.show_review_base = false;
                     self.show_panels = false;
                     self.show_outline = false;
                     self.tree_focus = false;
@@ -1334,6 +1864,15 @@ impl Zenith {
     }
 
     fn run_chord(&mut self, done: vim::Chord) {
+        // Review is global: it belongs to the folder, not to the tree's selection.
+        if done == vim::Chord::Review {
+            self.toggle_review();
+            return;
+        }
+        if done == vim::Chord::ReviewBase {
+            self.open_review_base();
+            return;
+        }
         // Two-key sequences mean the same thing in the tree as on the page: `gg` is the
         // top of what you are looking at.
         if self.tree_focus {
@@ -1350,6 +1889,7 @@ impl Zenith {
             vim::Chord::Top => self.align_caret(true),
             vim::Chord::Bottom => self.align_caret(false),
             vim::Chord::Definition => self.goto_definition(),
+            vim::Chord::Review | vim::Chord::ReviewBase => {}
         }
     }
 
@@ -1399,6 +1939,7 @@ impl Zenith {
             Key::R => Some(Act::Reload),
             Key::Q => Some(Act::CloseFile),
             Key::Y => Some(Act::CopyBlock),
+            Key::P => Some(Act::Peek),
             Key::D => Some(Act::Distilled),
             Key::X => Some(Act::Markdown),
             Key::T => Some(Act::NextTheme),
@@ -1538,10 +2079,34 @@ impl Zenith {
                 let whole = matches!(act, Act::CopyLine);
                 self.copy_to_clipboard(ctx, whole);
             }
-            Act::NextFile => self.step_file(true),
-            Act::PrevFile => self.step_file(false),
-            Act::NextChapter => self.step_symbol(true),
-            Act::PrevChapter => self.step_symbol(false),
+            Act::NextFile => {
+                if self.review.is_some() {
+                    self.step_review(true);
+                } else {
+                    self.step_file(true);
+                }
+            }
+            Act::PrevFile => {
+                if self.review.is_some() {
+                    self.step_review(false);
+                } else {
+                    self.step_file(false);
+                }
+            }
+            Act::NextChapter => {
+                if self.review.is_some() {
+                    self.review_change(true);
+                } else {
+                    self.step_symbol(true);
+                }
+            }
+            Act::PrevChapter => {
+                if self.review.is_some() {
+                    self.review_change(false);
+                } else {
+                    self.step_symbol(false);
+                }
+            }
             Act::Outline => {
                 self.show_outline = !self.show_outline;
                 if self.show_outline {
@@ -1561,8 +2126,39 @@ impl Zenith {
             Act::SearchPrev => self.search_step(false),
             Act::Smaller => self.bump_scale(-0.06, ctx),
             Act::Larger => self.bump_scale(0.06, ctx),
-            Act::Reload => self.reload(),
-            Act::CloseFile => self.close_file(),
+            Act::Reload => {
+                if self.review.is_some() {
+                    // A review is a snapshot of the base, not of the working file.
+                    // Reloading it means the same revision, not whatever is on disk now.
+                    let index = self.review_index;
+                    self.open_review_index(index);
+                } else {
+                    self.reload();
+                }
+            }
+            Act::CloseFile => {
+                self.leave_review();
+                self.close_file();
+            }
+            Act::Peek => {
+                let Some(open) = &self.open else { return };
+                let Some(diff) = &open.diff else {
+                    self.status = "peek is for a review".into();
+                    return;
+                };
+                let line = self.caret.line;
+                let has = (diff.changed_at(line) && diff.old_for(line).is_some())
+                    || diff.deletion_at(line).is_some();
+                if !has {
+                    self.status = "no previous code at this line".into();
+                    return;
+                }
+                self.review_peek = if self.review_peek == Some(line) {
+                    None
+                } else {
+                    Some(line)
+                };
+            }
         }
     }
 
@@ -1627,6 +2223,8 @@ impl Zenith {
             Launch::Markdown => self.open.as_ref().is_some_and(|o| o.prose),
             Launch::Index => self.folder.is_some(),
             Launch::OpenFolder => true,
+            Launch::Review => self.folder.is_some() || self.open.is_some(),
+            Launch::ReviewBase => self.folder.is_some() || self.open.is_some(),
             _ => true,
         }
     }
@@ -1642,6 +2240,8 @@ impl Zenith {
             Launch::Markdown => on_off(self.store.config.markdown),
             Launch::NextTheme | Launch::PrevTheme => Some(self.palette.name.to_string()),
             Launch::Larger | Launch::Smaller => Some(format!("{:.2}×", self.scale)),
+            Launch::Review => Some(self.review_base.label()),
+            Launch::ReviewBase => self.review.as_ref().map(|r| r.base.label()),
             _ => None,
         }
     }
@@ -1683,6 +2283,8 @@ impl Zenith {
                 self.tree_moved = true;
             }
             Launch::OpenFolder => self.pick_folder(),
+            Launch::Review => self.toggle_review(),
+            Launch::ReviewBase => self.open_review_base(),
             Launch::FocusLens => self.run_action(Act::Focus, ctx),
             Launch::SoftWrap => self.toggle_soft_wrap(),
             Launch::LineNumbers => self.run_action(Act::LineNumbers, ctx),
@@ -1756,6 +2358,7 @@ impl Zenith {
         if next != self.caret {
             self.push_jump();
             self.caret = next;
+            self.review_peek = None;
         }
         match motion {
             vim::Motion::FileTop => self.pending = Pending::Start,
@@ -1769,6 +2372,7 @@ impl Zenith {
             self.push_jump();
         }
         self.caret = caret;
+        self.review_peek = None;
         self.ensure_visible();
     }
 
@@ -1967,6 +2571,8 @@ enum Act {
     FileBottom,
     NextChapter,
     PrevChapter,
+    // review
+    Peek,
     // search and copying
     Search,
     SearchNext,
@@ -1997,15 +2603,22 @@ impl eframe::App for Zenith {
                     let root = load.root.clone();
                     self.folder_load = None;
                     self.folder = Some(folder);
-                    let wanted = focus
-                        .filter(|p| p.starts_with(&root))
-                        .or_else(|| {
-                            self.open
-                                .as_ref()
-                                .map(|o| o.path.clone())
-                                .filter(|p| p.starts_with(&root))
-                        })
-                        .or_else(|| self.first_doorway());
+                    // A review started before the folder walk finished owns the page.
+                    // Opening the walk's first doorway here would clear it by accident.
+                    let keep_review = self.review.is_some() || self.review_load.is_some();
+                    let wanted = if keep_review {
+                        None
+                    } else {
+                        focus
+                            .filter(|p| p.starts_with(&root))
+                            .or_else(|| {
+                                self.open
+                                    .as_ref()
+                                    .map(|o| o.path.clone())
+                                    .filter(|p| p.starts_with(&root))
+                            })
+                            .or_else(|| self.first_doorway())
+                    };
                     match wanted {
                         Some(path) if self.open.as_ref().map(|o| &o.path) != Some(&path) => {
                             self.open_file(&path)
@@ -2031,6 +2644,10 @@ impl eframe::App for Zenith {
                         None => {}
                     }
                     self.start_discovery();
+                    if self.review_after_load {
+                        self.review_after_load = false;
+                        self.start_review(self.review_base.clone());
+                    }
                 }
                 Ok(Err(e)) => {
                     let root = load.root.clone();
@@ -2042,6 +2659,54 @@ impl eframe::App for Zenith {
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.folder_load = None;
+                }
+            }
+        }
+
+        // Has the review's git diff finished?
+        if let Some(load) = &self.review_load {
+            match load.rx.try_recv() {
+                Ok(Ok(review)) => {
+                    self.review_load = None;
+                    if review.files.is_empty() {
+                        self.review = None;
+                        self.status = format!("no changes against {}", review.base.label());
+                    } else {
+                        self.review = Some(review);
+                        self.review_index = 0;
+                        let start = std::env::var("ZENITH_REVIEW_INDEX")
+                            .ok()
+                            .and_then(|v| v.parse::<usize>().ok())
+                            .unwrap_or(0);
+                        let len = self.review.as_ref().map_or(1, |r| r.files.len());
+                        self.open_review_index(start.min(len.saturating_sub(1)));
+                        if std::env::var("ZENITH_REVIEW_BASE_SHEET").is_ok() {
+                            self.open_review_base();
+                        }
+                        if let Some(review) = &self.review {
+                            let mut note = format!(
+                                "review · {} · {} file{}",
+                                review.base.label(),
+                                review.files.len(),
+                                if review.files.len() == 1 { "" } else { "s" }
+                            );
+                            if review.skipped > 0 {
+                                note.push_str(&format!(" · {} not shown", review.skipped));
+                            }
+                            self.status = note;
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    self.review_load = None;
+                    self.review = None;
+                    self.status = format!("cannot review changes: {e}");
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(120));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.review_load = None;
                 }
             }
         }
@@ -2182,6 +2847,9 @@ impl eframe::App for Zenith {
         if own_window_buttons() {
             self.top_bar(ui);
         }
+        if self.review.is_some() || self.review_load.is_some() {
+            self.review_bar(ui);
+        }
 
         if self.show_panels {
             self.folder_panel(ui);
@@ -2209,6 +2877,9 @@ impl eframe::App for Zenith {
         }
         if self.show_settings {
             self.settings_overlay(&ctx);
+        }
+        if self.show_review_base {
+            self.review_base_overlay(&ctx);
         }
 
         // A window without a frame has no edges of its own; these are ours. Last, so they
@@ -2399,7 +3070,8 @@ impl Zenith {
             || self.show_outline
             || self.show_settings
             || self.palette_open
-            || self.search_open;
+            || self.search_open
+            || self.show_review_base;
         let now = ctx.input(|i| i.time);
         let pal = self.palette;
         if self.bloom_started < 0.0 {
@@ -3050,15 +3722,30 @@ impl Zenith {
             .parent()
             .map(display_path)
             .unwrap_or_default();
-        let badge = self
-            .store
-            .is_favorite(&open.path)
-            .then_some((format!("{} bookmarked", self.typo.marks.pick("✦")), pal.accent));
+        let badge = if open.deleted || open.diff.as_ref().is_some_and(|d| d.deleted_file) {
+            Some((
+                format!(
+                    "deleted from {}",
+                    self.review
+                        .as_ref()
+                        .map(|r| r.base.label())
+                        .unwrap_or_else(|| "the base".into())
+                ),
+                pal.accent,
+            ))
+        } else if open.diff.as_ref().is_some_and(|d| d.added_file) {
+            Some(("new file".to_string(), pal.accent))
+        } else {
+            self.store
+                .is_favorite(&open.path)
+                .then_some((format!("{} bookmarked", self.typo.marks.pick("✦")), pal.accent))
+        };
 
         let content_w = ui
             .available_width()
             .max(laid.col_x + laid.measure + 40.0);
 
+        let diff = open.diff.clone();
         let remember = self.store.position_of(&open.path);
         let view_top = self.scroll;
         let view_h = self.view_h;
@@ -3110,6 +3797,7 @@ impl Zenith {
         .map(|y| y.clamp(0.0, max_scroll))
         .filter(|y| view_h > 1.0 && (y - self.scroll).abs() >= 0.75);
 
+        let mut review_hover: Option<usize> = None;
         let mut area = ScrollArea::vertical()
             .id_salt("zenith-page")
             .max_height(page_h)
@@ -3205,10 +3893,61 @@ impl Zenith {
                 show_cursor: true,
             };
             reader::paint(painter, &paint);
+            if let Some(diff) = &diff {
+                paint_review_marks(
+                    painter,
+                    laid,
+                    diff,
+                    origin_y,
+                    (viewport.min.y, viewport.max.y),
+                    &style,
+                    &pal,
+                );
+            }
+            if resp.hovered() {
+                if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
+                    let line = laid.line_at(pos.y - origin_y);
+                    if let Some(diff) = &diff {
+                        if (diff.changed_at(line) && diff.old_for(line).is_some())
+                            || diff.deletion_at(line).is_some()
+                        {
+                            review_hover = Some(line);
+                        }
+                    }
+                }
+            }
             rect
         });
 
         self.scroll = out.state.offset.y;
+        // A development affordance for photographing the lift without a pointer.
+        let pinned_hover = std::env::var("ZENITH_REVIEW_HOVER")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .map(|n| n.saturating_sub(1));
+        self.review_hover = review_hover.or(self.review_peek).or(pinned_hover);
+        if let (Some(line), Some(diff)) = (self.review_hover, diff.as_ref()) {
+            let detail = if let Some(deletion) = diff.deletion_at(line) {
+                Some(("REMOVED", deletion.old.as_slice()))
+            } else {
+                diff.old_for(line).map(|old| ("PREVIOUSLY", old))
+            };
+            if let Some((label, old)) = detail {
+                paint_review_lift(
+                    ui,
+                    page_rect,
+                    laid,
+                    &style,
+                    &pal,
+                    &self.typo,
+                    self.scale,
+                    line,
+                    label,
+                    old,
+                    self.scroll,
+                );
+            }
+        }
         if let Some(line) = cursor_hint {
             self.caret = self
                 .open
@@ -3230,6 +3969,27 @@ impl Zenith {
         let spine_x = page_rect.right() - 16.0;
         let spine_top = page_rect.top();
         let spine_h = page_rect.height();
+        if let Some(diff) = &diff {
+            for &line in &diff.changed {
+                let frac = (laid.top_of(line) / laid.total.max(1.0)).clamp(0.0, 1.0);
+                let y = spine_top + frac * spine_h;
+                ui.painter().rect_filled(
+                    Rect::from_min_size(Pos2::new(spine_x - 4.0, y - 1.0), vec2(9.0, 2.0)),
+                    CornerRadius::same(1),
+                    pal.accent,
+                );
+            }
+            for deletion in &diff.deletions {
+                let line = deletion.at.min(laid.tops.len().saturating_sub(1));
+                let frac = (laid.top_of(line) / laid.total.max(1.0)).clamp(0.0, 1.0);
+                let y = spine_top + frac * spine_h;
+                ui.painter().rect_filled(
+                    Rect::from_min_size(Pos2::new(spine_x - 2.0, y - 2.0), vec2(5.0, 4.0)),
+                    CornerRadius::same(1),
+                    pal.ink_soft,
+                );
+            }
+        }
         let grab = Rect::from_min_max(
             Pos2::new(spine_x - 7.0, spine_top),
             Pos2::new(spine_x + 7.0, spine_top + spine_h),
@@ -3374,6 +4134,14 @@ impl Zenith {
                 if let Some(spec) = LAUNCH_COMMANDS
                     .iter()
                     .find(|s| s.action == Launch::OpenFolder)
+                {
+                    folder.push(self.launch_row(spec, 0));
+                }
+            }
+            if self.launch_available(Launch::Review) {
+                if let Some(spec) = LAUNCH_COMMANDS
+                    .iter()
+                    .find(|s| s.action == Launch::Review)
                 {
                     folder.push(self.launch_row(spec, 0));
                 }
@@ -5955,6 +6723,18 @@ fn check(
 }
 
 
+/// Keep a branch name in the review strip without letting it push the count off the
+/// page. The full name is still in the base sheet.
+fn short_branch(name: &str) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    if chars.len() <= 34 {
+        return name.to_string();
+    }
+    let head: String = chars[..18].iter().collect();
+    let tail: String = chars[chars.len() - 12..].iter().collect();
+    format!("{head}…{tail}")
+}
+
 /// How many lines does this text have? Cheap enough to ask once when opening.
 fn count_lines(text: &str) -> usize {
     text.lines().count()
@@ -6392,6 +7172,139 @@ fn paragraph_block(doc: &Document, line: usize) -> (usize, usize) {
     (start, end)
 }
 
+/// The change marks that carry a review without a second colour: a tab in the margin
+/// for a changed line, a short rule where code was removed.
+fn paint_review_marks(
+    painter: &egui::Painter,
+    laid: &Laid,
+    diff: &crate::review::Diff,
+    origin_y: f32,
+    visible: (f32, f32),
+    style: &Style,
+    pal: &Palette,
+) {
+    for &line in &diff.changed {
+        let top = origin_y + laid.top_of(line);
+        let h = laid.height_of(line);
+        if top + h < visible.0 || top > visible.1 {
+            continue;
+        }
+        painter.rect_filled(
+            Rect::from_min_size(
+                Pos2::new(laid.col_x - 9.0, top + 4.0),
+                vec2(2.0, (h - 8.0).max(2.0)),
+            ),
+            CornerRadius::same(1),
+            pal.accent,
+        );
+    }
+    for deletion in &diff.deletions {
+        let line = deletion.at.min(laid.tops.len().saturating_sub(1));
+        let y = origin_y + laid.top_of(line);
+        if y < visible.0 - 2.0 || y > visible.1 + 2.0 {
+            continue;
+        }
+        painter.hline(
+            laid.col_x - 16.0..=laid.col_x + 18.0,
+            y,
+            Stroke::new(1.0, pal.ink_soft),
+        );
+        painter.text(
+            Pos2::new(laid.col_x - 18.0, y),
+            Align2::RIGHT_CENTER,
+            "–",
+            style.ui.clone(),
+            pal.ink_soft,
+        );
+    }
+}
+
+/// Lift the previous code directly under the changed line. It is painted above the page
+/// rather than laid into it: the reader's place does not move while they look.
+#[allow(clippy::too_many_arguments)]
+fn paint_review_lift(
+    ui: &Ui,
+    page: Rect,
+    laid: &Laid,
+    style: &Style,
+    pal: &Palette,
+    typo: &Typography,
+    scale: f32,
+    line: usize,
+    label: &str,
+    old: &[String],
+    scroll: f32,
+) {
+    let line_top = page.top() + laid.top_of(line) - scroll;
+    let line_bottom = line_top + laid.height_of(line);
+    let width = laid.measure.max(280.0);
+    let row = style.code.size * 1.5;
+    let shown = old.len().min(7);
+    let more = old.len().saturating_sub(shown);
+    let height = 30.0 * scale + row * shown as f32 + if more > 0 { row } else { 0.0 };
+    let below = line_bottom + 4.0;
+    let top = if below + height > page.bottom() - 8.0 && line_top - height - 4.0 > page.top() + 8.0 {
+        line_top - height - 4.0
+    } else {
+        below
+    };
+    let rect = Rect::from_min_size(Pos2::new(laid.col_x, top), vec2(width, height));
+    if !page.intersects(rect) {
+        return;
+    }
+    let painter = ui
+        .ctx()
+        .layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("zenith-review-lift"),
+        ))
+        .with_clip_rect(page);
+    painter.rect_filled(rect, 4.0, pal.panel);
+    painter.rect_stroke(
+        rect,
+        4.0,
+        Stroke::new(1.0, pal.edge),
+        egui::StrokeKind::Inside,
+    );
+    painter.hline(
+        rect.x_range(),
+        rect.top() + 1.0,
+        Stroke::new(2.0, pal.accent),
+    );
+    painter.text(
+        Pos2::new(rect.left() + 12.0, rect.top() + 14.0 * scale),
+        Align2::LEFT_TOP,
+        label,
+        typo.ui_id(9.0 * scale),
+        pal.ink_soft,
+    );
+    let code = typo.code_id(style.code.size * 0.9);
+    for (i, line) in old.iter().take(shown).enumerate() {
+        painter.text(
+            Pos2::new(
+                rect.left() + 12.0,
+                rect.top() + 28.0 * scale + row * i as f32,
+            ),
+            Align2::LEFT_TOP,
+            line,
+            code.clone(),
+            pal.ink_soft,
+        );
+    }
+    if more > 0 {
+        painter.text(
+            Pos2::new(
+                rect.left() + 12.0,
+                rect.top() + 28.0 * scale + row * shown as f32,
+            ),
+            Align2::LEFT_TOP,
+            format!("… {more} more"),
+            typo.ui_id(10.0 * scale),
+            pal.ink_soft,
+        );
+    }
+}
+
 /// What a caret at `line` needs from the page. The ends of the document ask for the
 /// ends of the page; everything between asks only to be revealed.
 fn reveal_pending(line: usize, last: usize) -> Pending {
@@ -6498,6 +7411,8 @@ enum Launch {
     Reload,
     Index,
     OpenFolder,
+    Review,
+    ReviewBase,
     FocusLens,
     SoftWrap,
     LineNumbers,
@@ -6600,6 +7515,20 @@ const LAUNCH_COMMANDS: &[CommandSpec] = &[
         group: LaunchGroup::Folder,
         shortcut: Some("⌘O"),
         keywords: "open project directory folder",
+    },
+    CommandSpec {
+        action: Launch::Review,
+        label: "Review changes",
+        group: LaunchGroup::Folder,
+        shortcut: Some("g r"),
+        keywords: "review git diff changes branch pr compare",
+    },
+    CommandSpec {
+        action: Launch::ReviewBase,
+        label: "Review against…",
+        group: LaunchGroup::Folder,
+        shortcut: Some("g b"),
+        keywords: "review base branch commit compare git",
     },
     CommandSpec {
         action: Launch::FocusLens,
@@ -6757,10 +7686,13 @@ const HELP_GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("ctrl-d ctrl-u", "half a page down and up"),
             ("space ctrl-f, ⇧space ctrl-b", "a whole page"),
             ("gg / G", "top / bottom of the file"),
+            ("g r", "review the branch's changes"),
+            ("g b", "choose what the review compares with"),
+            ("p", "peek at the code a changed line replaced"),
             ("H M L", "top, middle, bottom of the screen"),
             ("zz zt zb", "centre, or put the line at the top / bottom"),
             ("n N", "next and previous search match"),
-            ("[ ]", "previous / next chapter (the contents)"),
+            ("[ ]", "previous / next chapter; the next change in a review"),
             ("ctrl-o ctrl-i", "back and forward through everywhere you have been"),
             ("gd", "go to the definition of what is under the cursor"),
         ],
@@ -6768,7 +7700,7 @@ const HELP_GROUPS: &[(&str, &[(&str, &str)])] = &[
     (
         "files and the index",
         &[
-            ("J K", "next / previous file in the folder"),
+            ("J K", "next / previous file in the folder; changed file in a review"),
             ("tab", "open the index and move the keyboard into it"),
             ("j k l h", "in the index: move, open, back out"),
             ("enter, G, gg", "in the index: open, last row, first row"),

@@ -153,6 +153,13 @@ fn is_noise_dir(name: &str) -> bool {
     NOISE_DIRS.contains(&name)
 }
 
+/// Is any component of a repository-relative path a directory that a review should
+/// never walk? `node_modules` is the reason this is public: the review includes
+/// untracked source, but never dependency trees.
+pub fn is_noise_rel(rel: &str) -> bool {
+    rel.split('/').any(is_noise_dir)
+}
+
 /// Open `root` for reading. `code_only` hides things like images, archives, and
 /// lockfiles; `show_hidden` lets dotfiles in.
 pub fn open(root: &Path, name: &str, code_only: bool, show_hidden: bool) -> std::io::Result<Folder> {

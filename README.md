@@ -24,7 +24,15 @@ cargo run --release -- ~/code/some-project
 Navigation is vim's, as far as a reader needs it: `j k` (or `ctrl-j` / `ctrl-k`), `w b e`,
 `0 ^ $`, `{ }`, `%`, `gg G`, `H M L`, `zz zt zb`, `ctrl-d ctrl-u`, `[ ]` for chapters, `gd` to follow a name to
 where it is defined, and `ctrl-o` / `ctrl-i` to go back and forward through everywhere you
-have been. The page opens alone; a small mark at the top opens four doors — the index, the
+have been. `g r` reviews a branch's changes as one reading page at a time: the working
+tree by default, or a branch or commit with `g b` (a branch is compared from its common
+ancestor with `HEAD`, as a pull request is). Changed lines carry a little more weight;
+the code they replaced lifts in place when you hover the line (or press `p` at the
+cursor). `J K` walks the changed
+files across the strip, and `[ ]` walks the changes in the page. A review reads git and
+nothing else; ignored noise, including `node_modules`, never enters the strip.
+
+The page opens alone; a small mark at the top opens four doors — the index, the
 contents, the launcher and settings. `tab` opens the index with the keyboard in it: `j k`
 to move, `l` or `enter` to open a file or fold a folder, `h` to back out, `esc` to return
 to the page. `⌘K` opens the launcher: one field for files, views and the page's own actions.

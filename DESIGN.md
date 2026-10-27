@@ -350,6 +350,33 @@ no background. It leaves after seven seconds. The rest of the time the foot is e
 The language, the position and the line count are not permanent furniture. The title block
 names the file, the spine shows how far you are, and the page shows the rest.
 
+### Review changes
+
+Review is a second reading state, not a diff view with a different colour scheme. `g r`
+opens it; `g b` chooses what it compares with. The default is the working tree, because
+that is the ordinary uncommitted change. For a colleague's pull request, choose their
+branch as `HEAD` (it is already checked out) and the target branch as the base; the
+comparison starts from their common ancestor, as a pull request does. Staged changes and
+the last commit are one choice each. A branch or commit can be typed. The base is never a
+permanent toolbar: a 64 pt review strip carries `REVIEW`, the branch, the base, the current
+file count and the changed-file strip; `base` opens a summoned sheet. `J K` moves through
+the changed files and `[ ]` through the changes.
+
+The file is always whole. There are no hunks to expand and no side-by-side columns. A
+changed line is set in the real bold face the machine owns; if it has none, another
+installed coding bold is used rather than a faked weight. An accent tab sits in the
+margin. A pure addition has no previous line; a removal has no new line, so it is a short
+hairline in the margin with a quiet rule. Hovering a changed line — or pressing `p` at the cursor — lifts the code it replaced into
+a paper sheet directly under or above it; the page does not move. The
+previous code is a reading of what was there, not a second document. The spine carries a
+tick for every change, so the page's shape is visible while reading.
+
+Untracked source is included as a new file. Ignored paths and dependency trees — the
+repository's own ignore rules plus zenith's noise list — are not. A deleted file opens
+its old text under a `deleted from <base>` badge; an added file opens whole with a `new
+file` badge. Binary or unreadable files stay in the strip with a notice rather than
+breaking the page. With no changes, the strip stays out of the way and the status says so.
+
 ### Settings
 
 Summoned by its bubble in the bloom, by the launcher's `Settings`, or with `s` / `⌘,`.

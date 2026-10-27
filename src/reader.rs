@@ -44,8 +44,13 @@ const DOC_AIR: f32 = 1.18;
 pub struct Style {
     pub code: FontId,
     pub code_italic: FontId,
+    pub code_strong: FontId,
     pub prose: FontId,
     pub prose_italic: FontId,
+    pub prose_strong: FontId,
+    /// True while this line is a marked change. The line is set in the real bold face
+    /// the machine owns; if it has none, the regular face is used rather than faux bold.
+    pub strong: bool,
     /// The interface voice, used for colophons and metadata.
     pub ui: FontId,
     /// Multiple of font size per line. Generous: this is a reading room.
@@ -115,17 +120,63 @@ impl Style {
     pub fn font_for(&self, tone: Tone) -> FontId {
         if self.serif_comments {
             match tone {
-                Tone::Comment => self.prose_italic.clone(),
-                Tone::Doc => self.prose.clone(),
+                Tone::Comment => {
+                    if self.strong {
+                        self.prose_strong.clone()
+                    } else {
+                        self.prose_italic.clone()
+                    }
+                }
+                Tone::Doc => {
+                    if self.strong {
+                        self.prose_strong.clone()
+                    } else {
+                        self.prose.clone()
+                    }
+                }
                 // In a prose document, the body and its headings are prose too.
-                Tone::Plain | Tone::Keyword if self.prose_document => self.prose.clone(),
-                _ => self.code.clone(),
+                Tone::Plain | Tone::Keyword if self.prose_document => {
+                    if self.strong {
+                        self.prose_strong.clone()
+                    } else {
+                        self.prose.clone()
+                    }
+                }
+                _ => {
+                    if self.strong {
+                        self.code_strong.clone()
+                    } else {
+                        self.code.clone()
+                    }
+                }
             }
         } else {
             match tone {
-                Tone::Comment | Tone::Doc => self.code_italic.clone(),
-                _ => self.code.clone(),
+                Tone::Comment | Tone::Doc => {
+                    if self.strong {
+                        self.code_strong.clone()
+                    } else {
+                        self.code_italic.clone()
+                    }
+                }
+                _ => {
+                    if self.strong {
+                        self.code_strong.clone()
+                    } else {
+                        self.code.clone()
+                    }
+                }
             }
+        }
+    }
+
+    /// The code face for a marginal mark (a comment's `//`, a fence, a punctuation
+    /// fragment) that has no tone of its own.
+    pub fn code_face(&self) -> FontId {
+        if self.strong {
+            self.code_strong.clone()
+        } else {
+            self.code.clone()
         }
     }
 
@@ -212,6 +263,7 @@ pub fn layout(
     style: &Style,
     col_x: f32,
     header_h: f32,
+    strong: Option<&[bool]>,
 ) -> Laid {
     let key = style.key();
     let row_h = style.row_h();
@@ -221,6 +273,7 @@ pub fn layout(
     let mut jobs: Vec<Option<LayoutJob>> = Vec::with_capacity(doc.lines.len());
     let mut tops: Vec<f32> = Vec::with_capacity(doc.lines.len());
     let mut heights: Vec<f32> = Vec::with_capacity(doc.lines.len());
+    let mut line_style = style.clone();
 
     let mut y = header_h;
     for (index, line) in doc.lines.iter().enumerate() {
@@ -253,7 +306,11 @@ pub fn layout(
         // are not part of the page. A reader who wants the file's true geometry turns
         // "compress blank lines" off, which is the same question asked once.
         let metadata = matches!(md_line.map(|m| m.kind), Some(crate::markdown::Kind::Meta));
-        let job = line_job(style, line, md_line, wrap_w, if metadata { blank_h } else { line_row_h });
+        line_style.strong = strong
+            .and_then(|s| s.get(index))
+            .copied()
+            .unwrap_or(false);
+        let job = line_job(&line_style, line, md_line, wrap_w, if metadata { blank_h } else { line_row_h });
         // Measure once to learn how tall the line is when wrapped. The galley itself
         // is thrown away: it will be rebuilt when the line is painted.
         let h = if metadata && style.compress_blank {
@@ -344,7 +401,7 @@ fn line_job(
                     ..Default::default()
                 };
                 if is_mark {
-                    f.font_id = style.code.clone();
+                    f.font_id = style.code_face();
                     f.color = mix(style.color_for(Tone::Plain), style.paper, 0.55);
                 }
                 job.append(&chunk, 0.0, f);
@@ -403,7 +460,7 @@ fn line_job(
             let (mark, body) = split_comment_mark(&text);
             if !mark.is_empty() {
                 let mut mfmt = fmt.clone();
-                mfmt.font_id = style.code.clone();
+                mfmt.font_id = style.code_face();
                 mfmt.color = mix(style.tones[Tone::Comment.index()], style.paper, 0.25);
                 job.append(mark, 0.0, mfmt);
             }
@@ -429,9 +486,9 @@ fn line_job(
 ///
 /// The rules worth knowing: a heading is the same serif as the body, larger, in the
 /// page's strongest ink, with air above it. Emphasis is the italic face, which the
-/// typography already resolves. `strong` has no bold face to use — fonts are chosen for
-/// reading, and a faux-bold would be a lie — so it is the body face in the strongest ink
-/// with a hair more spacing, which reads as emphasis without pretending to be a weight.
+/// typography already resolves. Markdown `strong` is the body face in the strongest ink
+/// with a hair more spacing: a reading page's emphasis is ink, not a second weight. The
+/// bold face belongs to the review's changed lines, where it means a different thing.
 /// Code is the monospace voice at a slightly smaller size on a tinted ground.
 fn markdown_job(style: &Style, md: &crate::markdown::MdLine, wrap_w: f32, row_h: f32) -> LayoutJob {
     use crate::markdown::{Kind, Role};
@@ -456,9 +513,23 @@ fn markdown_job(style: &Style, md: &crate::markdown::MdLine, wrap_w: f32, row_h:
     // The faces at this line's size. `style.prose` carries the body size, so a heading
     // needs the same family at a larger one — setting the family alone renders a heading
     // the size of a sentence, which is what happened first.
-    let prose = FontId::new(base, style.prose.family.clone());
+    let prose = FontId::new(
+        base,
+        if style.strong {
+            style.prose_strong.family.clone()
+        } else {
+            style.prose.family.clone()
+        },
+    );
     let prose_italic = FontId::new(base, style.prose_italic.family.clone());
-    let code = FontId::new(base * 0.94, style.code.family.clone());
+    let code = FontId::new(
+        base * 0.94,
+        if style.strong {
+            style.code_strong.family.clone()
+        } else {
+            style.code.family.clone()
+        },
+    );
 
     let mut job = LayoutJob {
         break_on_newline: false,

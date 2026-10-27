@@ -17,6 +17,7 @@ mod markdown;
 mod outline;
 mod png;
 mod reader;
+mod review;
 mod folder;
 mod syntax;
 mod theme;
@@ -205,6 +206,9 @@ READING KEYS:
     ?                         the key map (Settings › Keys)
     esc                       close what is open
     gd                        go to the definition of what is under the cursor
+    g r                       review the branch's changes
+    g b                       choose the review base
+    p                         peek at the code a changed line replaced
     M                         bookmark this file
     t / T                     next / previous theme
     q                         close the file, back to the one you came from

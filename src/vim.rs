@@ -59,6 +59,8 @@ pub enum Chord {
     Top,
     Bottom,
     Definition,
+    Review,
+    ReviewBase,
 }
 
 pub fn chord(first: char, second: char) -> Option<Chord> {
@@ -68,6 +70,10 @@ pub fn chord(first: char, second: char) -> Option<Chord> {
         ('z', 't') => Some(Chord::Top),
         ('z', 'b') => Some(Chord::Bottom),
         ('g', 'd') => Some(Chord::Definition),
+        // `g r` review, `g b` its base. Both are additions to the reader's grammar,
+        // not editing commands.
+        ('g', 'r') => Some(Chord::Review),
+        ('g', 'b') => Some(Chord::ReviewBase),
         _ => None,
     }
 }

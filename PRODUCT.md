@@ -51,6 +51,10 @@ lighter editor; it is a different reading surface.
 ## Capabilities and Constraints
 
 - Reads source files and Markdown; no editing, saving, formatting, rename or code actions.
+- Reviews a branch's git changes read-only: the working tree by default, or a branch,
+  commit, staged index or the last commit; a branch is compared from its merge base.
+  Changed lines are set in a heavier face and the code they replaced lifts in place.
+  Untracked source is included; ignored noise, including dependency trees, is not.
 - Language-server support is discovery and navigation only: definition and document
   symbols; no diagnostics, completion, hover or edits. Servers start implicitly unless
   disabled in settings, and are never downloaded, bundled or installed.
@@ -59,8 +63,9 @@ lighter editor; it is a different reading surface.
   distilled reading); Markdown can be rendered or shown as source.
 - Zero bundled assets: no fonts, icons or images ship with the app; fonts and servers come
   from the machine.
-- Writes nothing into a repository. Its only possible side effect outside
-  `~/.config/zenith` is starting a language server, which analyses the project.
+- Writes nothing into a repository. Its only possible side effects outside
+  `~/.config/zenith` are starting a language server, which analyses the project, and
+  running read-only git commands to compute a review.
 - Reads the repository's `.gitignore`, skips build output and dependency trees, and
   surfaces READMEs, manifests and entry points as doorways.
 - Undecided: a formal accessibility standard; distribution and packaging beyond a Cargo
