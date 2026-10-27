@@ -558,3 +558,171 @@ fn yaml(lines: &[Line]) -> Vec<Symbol> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::syntax::Highlighter;
+
+    /// Run the real pipeline — grammar, tones, then the heuristic — because the point of
+    /// these tests is that comments and strings do not become declarations.
+    fn outline(path: &str, text: &str) -> Vec<Symbol> {
+        let hl = Highlighter::new();
+        let path = Path::new(path);
+        let head = text.lines().next().unwrap_or("");
+        let syntax = hl.syntax_for(path, head).clone();
+        let doc = hl.parse(&syntax, text, text.len());
+        extract(path, &doc.syntax, &doc.lines)
+    }
+
+    fn named(syms: &[Symbol]) -> Vec<(&str, SymKind, usize)> {
+        syms.iter()
+            .map(|s| (s.name.as_str(), s.kind, s.depth))
+            .collect()
+    }
+
+    #[test]
+    fn rust_declarations_keep_their_order_and_depth() {
+        let text = r#"
+pub struct Point { x: i32 }
+
+impl Point {
+    pub fn new(x: i32) -> Self { Self { x } }
+}
+
+pub trait Draw {
+    fn draw(&self);
+}
+
+pub enum Color { Red }
+
+mod inner {}
+
+const MAX: usize = 1;
+
+macro_rules! make { () => {} }
+"#;
+        let syms = outline("point.rs", text);
+        assert_eq!(
+            named(&syms),
+            [
+                ("Point", SymKind::Type, 0),
+                ("Point", SymKind::Type, 0),
+                ("new", SymKind::Function, 1),
+                ("Draw", SymKind::Trait, 0),
+                ("draw", SymKind::Function, 1),
+                ("Color", SymKind::Enum, 0),
+                ("inner", SymKind::Module, 0),
+                ("MAX", SymKind::Constant, 0),
+                ("make", SymKind::Macro, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn comments_and_strings_do_not_become_declarations() {
+        let text = r#"
+// fn fake() {}
+/* struct AlsoFake {} */
+let text = "fn string_fake() {}";
+fn real() {}
+"#;
+        let syms = outline("sample.rs", text);
+        let names: Vec<&str> = syms.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"real"), "{names:?}");
+        assert!(!names.contains(&"fake"), "{names:?}");
+        assert!(!names.contains(&"AlsoFake"), "{names:?}");
+        assert!(!names.contains(&"string_fake"), "{names:?}");
+    }
+
+    #[test]
+    fn python_indentation_becomes_outline_depth() {
+        let text = r#"
+class Greeter:
+    def hello(self):
+        return 1
+
+def top(a, b):
+    return a
+"#;
+        assert_eq!(
+            named(&outline("greeter.py", text)),
+            [
+                ("Greeter", SymKind::Type, 0),
+                ("hello", SymKind::Function, 1),
+                ("top", SymKind::Function, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn javascript_and_typescript_declarations_are_found() {
+        let text = r#"
+export interface Shape { area(): number; }
+export function load() {}
+class Store {}
+const cache = new Map();
+"#;
+        assert_eq!(
+            named(&outline("store.ts", text)),
+            [
+                ("Shape", SymKind::Trait, 0),
+                ("load", SymKind::Function, 0),
+                ("Store", SymKind::Type, 0),
+                ("cache", SymKind::Constant, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn markdown_headings_ignore_fenced_code() {
+        let text = r#"
+# Title
+## Part
+
+```rust
+# not a heading
+```
+
+### End
+"#;
+        assert_eq!(
+            named(&outline("notes.md", text)),
+            [
+                ("Title", SymKind::Heading, 0),
+                ("Part", SymKind::Heading, 1),
+                ("End", SymKind::Heading, 2),
+            ]
+        );
+    }
+
+    #[test]
+    fn yaml_keeps_top_level_keys_only() {
+        let text = r#"
+name: app
+services:
+  web:
+    image: nginx
+# comment: nope
+plain: value
+"#;
+        let syms = outline("compose.yaml", text);
+        assert_eq!(
+            syms.iter()
+                .map(|s| (s.name.as_str(), s.kind))
+                .collect::<Vec<_>>(),
+            [
+                ("name", SymKind::Module),
+                ("services", SymKind::Module),
+                ("plain", SymKind::Module),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_extension_beats_the_grammar_name() {
+        assert_eq!(family(Path::new("a.ts"), "Plain Text"), Family::Js);
+        assert_eq!(family(Path::new("a.unknown"), "Rust"), Family::Rust);
+        assert_eq!(family(Path::new("a.rs"), "Python"), Family::Rust);
+    }
+}

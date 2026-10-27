@@ -24,3 +24,6 @@ pub mod theme;
 pub mod tone;
 pub mod typography;
 pub mod vim;
+
+#[cfg(test)]
+mod testutil;

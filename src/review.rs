@@ -189,6 +189,34 @@ impl Diff {
     pub fn old_for(&self, line: usize) -> Option<&[String]> {
         self.old.get(&line).map(Vec::as_slice)
     }
+
+    /// The next marked line to visit, wrapping at the ends.
+    ///
+    /// A review is a loop: `]` after the last change returns to the first, so the reader
+    /// can lean on the key. Deletions count as marks, though they sit *between* lines
+    /// rather than on one.
+    pub fn change_step(&self, current: usize, forward: bool) -> Option<usize> {
+        let mut at: Vec<usize> = self
+            .changed
+            .iter()
+            .copied()
+            .chain(self.deletions.iter().map(|d| d.at))
+            .collect();
+        at.sort_unstable();
+        at.dedup();
+        if forward {
+            at.iter()
+                .copied()
+                .find(|&line| line > current)
+                .or_else(|| at.first().copied())
+        } else {
+            at.iter()
+                .rev()
+                .copied()
+                .find(|&line| line < current)
+                .or_else(|| at.last().copied())
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -472,13 +500,12 @@ fn parse_unified(text: &str) -> Diff {
         if !in_hunk {
             continue;
         }
-        if line.starts_with("--- ") || line.starts_with("+++ ") {
-            continue;
-        }
+        // Within a hunk every line is content, including one that happens to begin with
+        // `--`. A deleted SQL comment (`-- note`) arrives as `--- note`; treating that
+        // as a file header loses the old code. Headers only appear before the first
+        // hunk, where `in_hunk` is false.
         if let Some(rest) = line.strip_prefix('-') {
-            if !rest.starts_with("--") {
-                old_lines.push(rest.to_string());
-            }
+            old_lines.push(rest.to_string());
         } else if line.starts_with("\\ No newline") {
             // Not a content line.
         }
@@ -527,6 +554,39 @@ fn git_text(root: &Path, args: &[&str]) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::TempDir;
+
+    fn run_git(root: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// A repository with one commit, or `None` when git is not installed. Every test
+    /// that needs history shares this setup so the fixture cannot drift.
+    fn git_repo(label: &str) -> Option<TempDir> {
+        let probe = Command::new("git").arg("--version").output().ok()?;
+        if !probe.status.success() {
+            return None;
+        }
+        let dir = TempDir::new(label);
+        run_git(dir.path(), &["init", "-q"]);
+        run_git(
+            dir.path(),
+            &["config", "user.email", "zenith@example.invalid"],
+        );
+        run_git(dir.path(), &["config", "user.name", "zenith"]);
+        run_git(dir.path(), &["config", "commit.gpgsign", "false"]);
+        Some(dir)
+    }
 
     #[test]
     fn parses_a_replacement_and_a_deletion() {
@@ -541,6 +601,52 @@ mod tests {
     }
 
     #[test]
+    fn a_hunk_that_only_adds_marks_every_new_line() {
+        let diff = parse_unified("@@ -4,0 +5,3 @@\n+let a = 1;\n+let b = 2;\n+let c = 3;\n");
+        assert_eq!(diff.changed, vec![4, 5, 6]);
+        assert!(diff.old.is_empty());
+        assert!(diff.deletions.is_empty());
+    }
+
+    #[test]
+    fn a_deletion_sits_before_the_line_that_follows_it() {
+        let diff = parse_unified("@@ -2,2 +1,0 @@\n-old a\n-old b\n");
+        assert!(diff.changed.is_empty());
+        assert_eq!(diff.deletions.len(), 1);
+        assert_eq!(diff.deletions[0].at, 1);
+        assert_eq!(diff.deletions[0].old, ["old a", "old b"]);
+    }
+
+    #[test]
+    fn old_lines_that_begin_with_dashes_are_still_code() {
+        // A deleted SQL comment arrives as `--- note`, which looks like a file header
+        // unless the parser remembers it is inside a hunk.
+        let diff = parse_unified("@@ -1,2 +1,0 @@\n--- a SQL comment\n--- and another\n");
+        assert_eq!(diff.deletions.len(), 1);
+        assert_eq!(
+            diff.deletions[0].old,
+            ["-- a SQL comment", "-- and another"]
+        );
+    }
+
+    #[test]
+    fn the_no_newline_marker_is_not_old_code() {
+        let diff = parse_unified("@@ -1 +1 @@\n-old\n+new\n\\ No newline at end of file\n");
+        assert_eq!(diff.changed, vec![0]);
+        assert_eq!(diff.old_for(0).unwrap(), ["old"]);
+    }
+
+    #[test]
+    fn paths_with_spaces_survive_name_status() {
+        let raw = parse_name_status(b"M\0src/a b.rs\0A\0docs/new file.md\0");
+        assert_eq!(raw.len(), 2);
+        assert_eq!(raw[0].rel, "src/a b.rs");
+        assert_eq!(raw[0].status, Status::Modified);
+        assert_eq!(raw[1].rel, "docs/new file.md");
+        assert_eq!(raw[1].status, Status::Added);
+    }
+
+    #[test]
     fn reads_renames_from_name_status() {
         let raw = parse_name_status(b"M\0a.rs\0R100\0old.rs\0new.rs\0A\0n.rs\0");
         assert_eq!(raw.len(), 3);
@@ -551,49 +657,63 @@ mod tests {
     }
 
     #[test]
-    fn a_feature_branch_is_compared_from_its_merge_base() {
-        let git = Command::new("git").arg("--version").output();
-        if !git.map(|o| o.status.success()).unwrap_or(false) {
-            return;
-        }
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!("zenith-review-{stamp}"));
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        let run = |args: &[&str]| {
-            let out = Command::new("git")
-                .arg("-C")
-                .arg(&root)
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(
-                out.status.success(),
-                "git {args:?}: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        };
-        run(&["init", "-q"]);
-        run(&["config", "user.email", "zenith@example.invalid"]);
-        run(&["config", "user.name", "zenith"]);
-        std::fs::write(root.join("src/app.rs"), "fn main() {}\n").unwrap();
-        run(&["add", "."]);
-        run(&["commit", "-qm", "base"]);
-        run(&["branch", "-M", "main"]);
-        run(&["checkout", "-qb", "feature"]);
-        std::fs::write(root.join("src/app.rs"), "fn main() { println!(\"hi\"); }\n").unwrap();
-        run(&["add", "."]);
-        run(&["commit", "-qm", "feature"]);
+    fn change_steps_wrap_both_ways() {
+        // Changed line 1, then a deletion before line 7. A review is a loop in both
+        // directions; falling off either end is the bug this prevents.
+        let diff = parse_unified("@@ -2 +2 @@\n-a\n+b\n@@ -7,2 +7,0 @@\n-c\n-d\n");
+        assert_eq!(diff.change_step(0, true), Some(1));
+        assert_eq!(diff.change_step(1, true), Some(7));
+        assert_eq!(diff.change_step(7, true), Some(1));
+        assert_eq!(diff.change_step(0, false), Some(7));
+        assert_eq!(diff.change_step(7, false), Some(1));
+        assert_eq!(diff.change_step(1, false), Some(7));
+        assert_eq!(Diff::default().change_step(3, true), None);
+    }
 
-        let review = collect(&root, &Base::Ref("main".into()), &[]).unwrap();
+    #[test]
+    fn a_feature_branch_is_compared_from_its_merge_base() {
+        let Some(repo) = git_repo("review-merge") else {
+            return;
+        };
+        let root = repo.path();
+        repo.write("src/app.rs", "fn main() {}\n");
+        run_git(root, &["add", "."]);
+        run_git(root, &["commit", "-qm", "base"]);
+        run_git(root, &["branch", "-M", "main"]);
+        run_git(root, &["checkout", "-qb", "feature"]);
+        repo.write("src/app.rs", "fn main() { println!(\"hi\"); }\n");
+        run_git(root, &["add", "."]);
+        run_git(root, &["commit", "-qm", "feature"]);
+
+        let review = collect(root, &Base::Ref("main".into()), &[]).unwrap();
         assert_eq!(review.files.len(), 1);
         assert_eq!(review.files[0].rel, "src/app.rs");
         let diff = review.diff_for(&review.files[0]).unwrap();
         assert_eq!(diff.changed, vec![0]);
         assert!(diff.old_for(0).is_some());
-        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn untracked_dependency_trees_never_enter_the_review() {
+        let Some(repo) = git_repo("review-untracked") else {
+            return;
+        };
+        let root = repo.path();
+        repo.write("src/base.rs", "fn base() {}\n");
+        run_git(root, &["add", "."]);
+        run_git(root, &["commit", "-qm", "base"]);
+
+        repo.write("src/base.rs", "fn base() { changed(); }\n");
+        repo.write("src/new.rs", "fn new() {}\n");
+        repo.write("node_modules/pkg/index.js", "module.exports = 1;\n");
+        repo.write("target/debug/junk.rs", "fn junk() {}\n");
+
+        let review = collect(root, &Base::Working, &[]).unwrap();
+        let rels: Vec<&str> = review.files.iter().map(|f| f.rel.as_str()).collect();
+        assert_eq!(rels, ["src/base.rs", "src/new.rs"]);
+        assert_eq!(review.files[0].status, Status::Modified);
+        assert_eq!(review.files[1].status, Status::Added);
+        assert!(review.diff_for(&review.files[0]).is_ok());
     }
 
     #[test]

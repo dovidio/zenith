@@ -482,6 +482,29 @@ pub struct Zenith {
     smoke: Option<Smoke>,
 }
 
+/// What `q` means while a review is open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PageClose {
+    /// The page is part of the review: put the review down with it.
+    LeaveReview,
+    /// A definition detour remembered the review page: go back to it.
+    BackToReview,
+    /// A detour with nowhere to return to: close it, but keep the review.
+    CloseDetour,
+}
+
+/// `q` leaves the review from a changed file, goes back to it from a detour, and never
+/// silently throws it away when the reader is somewhere else.
+fn page_close(review_open: bool, on_review_file: bool, has_return: bool) -> PageClose {
+    if !review_open || on_review_file {
+        PageClose::LeaveReview
+    } else if has_return {
+        PageClose::BackToReview
+    } else {
+        PageClose::CloseDetour
+    }
+}
+
 impl Zenith {
     fn new(cc: &eframe::CreationContext<'_>, startup: Startup) -> Self {
         let mut store = Store::load();
@@ -1905,30 +1928,11 @@ impl Zenith {
             self.status = "this file has no marked changes".into();
             return;
         };
-        let mut at: Vec<usize> = diff.changed.clone();
-        at.extend(diff.deletions.iter().map(|d| d.at));
-        at.sort_unstable();
-        at.dedup();
-        if at.is_empty() {
+        let Some(line) = diff.change_step(self.caret.line, forward) else {
             return;
-        }
-        let current = self.caret.line;
-        let next = if forward {
-            at.iter()
-                .find(|&&l| l > current)
-                .copied()
-                .or_else(|| at.first().copied())
-        } else {
-            at.iter()
-                .rev()
-                .find(|&&l| l < current)
-                .copied()
-                .or_else(|| at.last().copied())
         };
-        if let Some(line) = next {
-            let caret = vim::landing(&open.doc, line);
-            self.jump_to(caret);
-        }
+        let caret = vim::landing(&open.doc, line);
+        self.jump_to(caret);
     }
 
     fn remember_position(&mut self) {
@@ -2654,19 +2658,29 @@ impl Zenith {
                 .as_ref()
                 .is_some_and(|open| review.files.iter().any(|file| file.path == open.path))
         });
-        if self.review.is_some() && !in_review {
-            if let Some(place) = self.review_return.take() {
-                self.go_to(&place);
-                self.status = "back to the review".into();
-            } else {
+        match page_close(
+            self.review.is_some(),
+            in_review,
+            self.review_return.is_some(),
+        ) {
+            PageClose::BackToReview => {
+                if let Some(place) = self.review_return.take() {
+                    self.go_to(&place);
+                    self.status = "back to the review".into();
+                } else {
+                    self.close_file();
+                }
+            }
+            PageClose::CloseDetour => {
                 // A definition opened before we remembered the review page: closing it
                 // should still leave the review around for the next `q`.
                 self.close_file();
             }
-            return;
+            PageClose::LeaveReview => {
+                self.leave_review();
+                self.close_file();
+            }
         }
-        self.leave_review();
-        self.close_file();
     }
 
     fn close_file(&mut self) {
@@ -8406,5 +8420,22 @@ mod launcher_tests {
             None,
             "soft wrap has no key"
         );
+    }
+}
+
+#[cfg(test)]
+mod page_close_tests {
+    use super::{page_close, PageClose};
+
+    #[test]
+    fn q_leaves_the_review_only_from_the_review_itself() {
+        assert_eq!(page_close(true, true, false), PageClose::LeaveReview);
+        assert_eq!(page_close(false, false, false), PageClose::LeaveReview);
+    }
+
+    #[test]
+    fn q_returns_from_a_detour_and_keeps_the_review() {
+        assert_eq!(page_close(true, false, true), PageClose::BackToReview);
+        assert_eq!(page_close(true, false, false), PageClose::CloseDetour);
     }
 }

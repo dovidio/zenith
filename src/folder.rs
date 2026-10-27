@@ -310,6 +310,12 @@ pub fn open(
             // Directories are reconstructed from file paths below; nothing to do.
             continue;
         }
+        // Links are not followed. A link to a directory would otherwise enter the index
+        // as a file and fail when opened; a link to a file still reads as that file.
+        if entry.file_type().is_some_and(|t| t.is_symlink()) && !path.is_file() {
+            filtered += 1;
+            continue;
+        }
 
         let ext = path
             .extension()
@@ -431,5 +437,139 @@ pub fn human_size(bytes: u64) -> String {
         format!("{:.1} MB", b / (KB * KB))
     } else {
         format!("{:.2} GB", b / (KB * KB * KB))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::TempDir;
+
+    fn folder_at(dir: &TempDir, code_only: bool, show_hidden: bool) -> Folder {
+        open(dir.path(), "fixture", code_only, show_hidden).expect("open the fixture")
+    }
+
+    fn rels(folder: &Folder) -> Vec<&str> {
+        folder.files.iter().map(|f| f.rel.as_str()).collect()
+    }
+
+    #[test]
+    fn dependency_and_build_trees_are_pruned_before_the_walk() {
+        let dir = TempDir::new("folder-noise");
+        dir.write("src/main.rs", "fn main() {}\n");
+        dir.write("src/target.rs", "// a file, not a build folder\n");
+        dir.write("node_modules/pkg/index.js", "module.exports = 1;\n");
+        dir.write("target/debug/app.rs", "fn junk() {}\n");
+        dir.write("dist/app.js", "console.log(1);\n");
+        dir.write(".git/config", "[core]\n");
+        dir.write("vendor/lib.go", "package lib\n");
+
+        let folder = folder_at(&dir, false, true);
+        assert_eq!(rels(&folder), ["src/main.rs", "src/target.rs"]);
+    }
+
+    #[test]
+    fn noise_is_decided_per_path_component() {
+        assert!(is_noise_rel("node_modules/react/index.js"));
+        assert!(is_noise_rel("apps/web/node_modules/x.js"));
+        assert!(is_noise_rel("target/debug/zenith"));
+        assert!(is_noise_rel(".git/objects/ab/cdef"));
+        assert!(!is_noise_rel("src/nodes.rs"));
+        assert!(!is_noise_rel("src/target.rs"));
+        assert!(!is_noise_rel("docs/node_modules.md"));
+    }
+
+    #[test]
+    fn code_only_keeps_source_and_reports_what_it_hid() {
+        let dir = TempDir::new("folder-code-only");
+        dir.write("src/main.rs", "fn main() {}\n");
+        dir.write("assets/logo.png", b"\x89PNG\r\n\x1a\n");
+        dir.write("LICENSE", "MIT\n");
+        dir.write("empty", "");
+
+        let folder = folder_at(&dir, true, false);
+        assert_eq!(rels(&folder), ["src/main.rs"]);
+        assert_eq!(folder.filtered, 3, "png, LICENSE, and the placeholder");
+    }
+
+    #[test]
+    fn hidden_files_need_the_setting() {
+        let dir = TempDir::new("folder-hidden");
+        dir.write(".hidden.rs", "fn hidden() {}\n");
+        dir.write("visible.rs", "fn visible() {}\n");
+
+        assert_eq!(rels(&folder_at(&dir, true, false)), ["visible.rs"]);
+        assert_eq!(
+            rels(&folder_at(&dir, true, true)),
+            [".hidden.rs", "visible.rs"],
+            "show-hidden includes dotfiles without including .git"
+        );
+    }
+
+    #[test]
+    fn an_empty_source_file_is_still_source() {
+        let dir = TempDir::new("folder-empty");
+        dir.write("empty.rs", "");
+        assert_eq!(rels(&folder_at(&dir, true, false)), ["empty.rs"]);
+    }
+
+    #[test]
+    fn doorways_float_above_ordinary_files_and_folders_come_first() {
+        let dir = TempDir::new("folder-order");
+        dir.write("src/a.rs", "fn a() {}\n");
+        dir.write("README.md", "# readme\n");
+        dir.write("Cargo.toml", "[package]\n");
+        dir.write("z.rs", "fn z() {}\n");
+
+        let folder = folder_at(&dir, false, false);
+        let root: Vec<&str> = folder
+            .tree
+            .iter()
+            .map(|entry| match entry {
+                Entry::Dir(d) => d.name.as_str(),
+                Entry::File(f) => f.name.as_str(),
+            })
+            .collect();
+        assert_eq!(root, ["src", "Cargo.toml", "README.md", "z.rs"]);
+        assert!(folder
+            .files
+            .iter()
+            .find(|f| f.rel == "README.md")
+            .is_some_and(|f| f.doorway));
+    }
+
+    #[test]
+    fn a_repositorys_gitignore_decides_what_is_noise() {
+        let dir = TempDir::new("folder-ignore");
+        // `ignore` only honours .gitignore inside a repository.
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        dir.write(".gitignore", "secret.rs\n");
+        dir.write("keep.rs", "fn keep() {}\n");
+        dir.write("secret.rs", "fn secret() {}\n");
+
+        let folder = folder_at(&dir, false, false);
+        assert_eq!(rels(&folder), ["keep.rs"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_loop_is_not_followed() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new("folder-symlink");
+        dir.write("src/main.rs", "fn main() {}\n");
+        symlink(dir.path(), dir.join("loop")).unwrap();
+
+        let folder = folder_at(&dir, false, false);
+        assert_eq!(rels(&folder), ["src/main.rs"]);
+    }
+
+    #[test]
+    fn sizes_are_written_for_a_reader() {
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(1023), "1023 B");
+        assert_eq!(human_size(1024), "1 KB");
+        assert_eq!(human_size(1024 * 1024), "1.0 MB");
+        assert_eq!(human_size(3 * 1024 * 1024 * 1024), "3.00 GB");
     }
 }
