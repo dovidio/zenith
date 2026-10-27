@@ -1059,6 +1059,99 @@ impl Zenith {
         self.show_review_base = true;
     }
 
+    /// In review, the bloom is one quiet line of doors, not a constellation. The
+    /// change set is the work; the top stays a masthead, and the four words still open
+    /// the same four surfaces.
+    fn review_bloom_bar(&mut self, ui: &mut Ui) {
+        let pal = self.palette;
+        let font = self.typo.ui_id(9.5 * self.scale.min(1.15));
+        let tracking = 0.13 * 9.5 * self.scale.min(1.15);
+        let height = (34.0 * self.scale).clamp(34.0, 48.0);
+        egui::Panel::top("zenith-review-bloom")
+            .resizable(false)
+            .exact_size(height)
+            .show_separator_line(false)
+            .frame(
+                Frame::NONE
+                    .fill(pal.panel)
+                    .inner_margin(Margin::symmetric(16, 0)),
+            )
+            .show(ui, |ui| {
+                let rect = ui.max_rect();
+                let y = rect.center().y;
+                let job = |text: &str| {
+                    let mut job = egui::text::LayoutJob::default();
+                    job.append(
+                        text,
+                        0.0,
+                        TextFormat {
+                            font_id: font.clone(),
+                            extra_letter_spacing: tracking,
+                            color: pal.ink_soft,
+                            ..Default::default()
+                        },
+                    );
+                    ui.painter().layout_job(job)
+                };
+                let galleys: Vec<_> = BLOOM_LABELS.iter().map(|l| job(l)).collect();
+                let dot_w = 10.0 * self.scale;
+                let gap = 19.0 * self.scale;
+                let total: f32 = dot_w
+                    + galleys.iter().map(|g| g.size().x).sum::<f32>()
+                    + gap * (galleys.len().saturating_sub(1)) as f32;
+                let mut x = rect.center().x - total * 0.5;
+                ui.painter().circle_filled(
+                    Pos2::new(x + 3.0 * self.scale, y),
+                    3.5 * self.scale.min(1.2),
+                    pal.accent,
+                );
+                x += dot_w;
+                for (i, galley) in galleys.into_iter().enumerate() {
+                    let size = galley.size();
+                    let hit = Rect::from_min_size(
+                        Pos2::new(x - 3.0, y - size.y * 0.5 - 4.0),
+                        vec2(size.x + 6.0, size.y + 8.0),
+                    );
+                    let response = ui.interact(
+                        hit,
+                        ui.id().with(("review-bloom", i)),
+                        Sense::click(),
+                    );
+                    let color = if response.hovered() {
+                        pal.ink
+                    } else {
+                        pal.ink_soft
+                    };
+                    let mut job = egui::text::LayoutJob::default();
+                    job.append(
+                        BLOOM_LABELS[i],
+                        0.0,
+                        TextFormat {
+                            font_id: font.clone(),
+                            extra_letter_spacing: tracking,
+                            color,
+                            ..Default::default()
+                        },
+                    );
+                    let painted = ui.painter().layout_job(job);
+                    ui.painter().galley(
+                        Pos2::new(x, y - painted.size().y * 0.5),
+                        painted,
+                        color,
+                    );
+                    if response.clicked() {
+                        self.summon(i);
+                    }
+                    x += size.x + gap;
+                }
+                ui.painter().hline(
+                    rect.x_range(),
+                    rect.bottom() - 0.5,
+                    Stroke::new(1.0, pal.edge),
+                );
+            });
+    }
+
     fn review_bar(&mut self, ui: &mut Ui) {
         let pal = self.palette;
         let branch = self.review.as_ref().map(|r| short_branch(&r.branch));
@@ -2848,6 +2941,9 @@ impl eframe::App for Zenith {
             self.top_bar(ui);
         }
         if self.review.is_some() || self.review_load.is_some() {
+            if !self.show_review_base {
+                self.review_bloom_bar(ui);
+            }
             self.review_bar(ui);
         }
 
@@ -3071,7 +3167,9 @@ impl Zenith {
             || self.show_settings
             || self.palette_open
             || self.search_open
-            || self.show_review_base;
+            || self.show_review_base
+            || self.review.is_some()
+            || self.review_load.is_some();
         let now = ctx.input(|i| i.time);
         let pal = self.palette;
         if self.bloom_started < 0.0 {

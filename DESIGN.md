@@ -357,9 +357,12 @@ opens it; `g b` chooses what it compares with. The default is the working tree, 
 that is the ordinary uncommitted change. For a colleague's pull request, choose their
 branch as `HEAD` (it is already checked out) and the target branch as the base; the
 comparison starts from their common ancestor, as a pull request does. Staged changes and
-the last commit are one choice each. A branch or commit can be typed. The base is never a
-permanent toolbar: a 64 pt review strip carries `REVIEW`, the branch, the base, the current
-file count and the changed-file strip; `base` opens a summoned sheet. `J K` moves through
+the last commit are one choice each. A branch or commit can be typed. The full bloom
+contracts in review to one line — a single accent dot and four tracked words, `INDEX`,
+`CONTENTS`, `LAUNCHER`, `SETTINGS` — still the same four doors, without the constellation
+of bubbles and stems that belongs to the reading page. The base is never a permanent
+toolbar: a review strip carries `REVIEW`, the branch, the base, the current file count and
+the changed-file strip; `base` opens a summoned sheet. `J K` moves through
 the changed files and `[ ]` through the changes.
 
 The file is always whole. There are no hunks to expand and no side-by-side columns. A
