@@ -33,7 +33,7 @@ use self::launch::*;
 use self::widgets::*;
 mod tree;
 use self::page::{focus_block, reveal_pending, Pending};
-use self::tree::{TreeKey, TreeRow};
+use self::tree::{TreeRow, TreeState};
 mod review;
 use self::review::ReviewState;
 mod sheets;
@@ -402,23 +402,13 @@ pub struct Zenith {
     nav_settled: u32,
     #[cfg(debug_assertions)]
     then_done: bool,
-    /// Every row the folder panel is showing, in order, built once per frame so that the
-    /// keyboard and the drawing agree about what is on screen.
-    tree_rows: Vec<TreeRow>,
-    /// Whether the keyboard is in the tree rather than on the page.
-    tree_focus: bool,
-    /// The selected row, held by identity rather than by position.
-    tree_sel: Option<TreeKey>,
-    /// Set when a key just moved the selection, so the panel can scroll it into view.
-    tree_moved: bool,
-    /// A development affordance has been applied, once.
-    tree_hook_done: bool,
+    /// The folder tree: rows, keyboard focus, and the row held by identity.
+    tree: TreeState,
     /// The window's title needs telling what is open.
     title_dirty: bool,
     /// Height of the system's title strip on macOS, in points (0 elsewhere). Our own bar
     /// sits below it, so the system's title and traffic lights have the room they expect.
     chrome_strip: f32,
-    tree_hook_step: u8,
     /// The places we have been, so `ctrl-o` can take us back — across files, because a
     /// definition is usually in another one.
     jumps: Vec<Place>,
@@ -557,6 +547,7 @@ impl Zenith {
             frame: 0,
             loading: None,
             folder_load: None,
+            tree: TreeState::default(),
             available: Vec::new(),
             lsp_kinds: Vec::new(),
             lsp_path_dirty: std::collections::BTreeSet::new(),
@@ -576,14 +567,8 @@ impl Zenith {
             nav_settled: 0,
             #[cfg(debug_assertions)]
             then_done: false,
-            tree_rows: Vec::new(),
-            tree_focus: false,
-            tree_sel: None,
-            tree_moved: false,
-            tree_hook_done: false,
             title_dirty: true,
             chrome_strip,
-            tree_hook_step: 0,
             jumps: Vec::new(),
             jump_pos: 0,
             outline_sel: None,
@@ -657,7 +642,7 @@ impl Zenith {
         if std::env::var("ZENITH_FORCE_TREE").is_ok() {
             app.show_panels = true;
             app.show_outline = false;
-            app.tree_focus = true;
+            app.tree.focus = true;
         }
         if std::env::var("ZENITH_FORCE_OUTLINE").is_ok() {
             app.show_outline = true;
@@ -1425,7 +1410,7 @@ impl Zenith {
                     if self.show_settings {
                         self.show_panels = false;
                         self.show_outline = false;
-                        self.tree_focus = false;
+                        self.tree.focus = false;
                         self.settings_rail_focus = true;
                         self.settings_focus = 0;
                     }
@@ -1438,7 +1423,7 @@ impl Zenith {
                     self.session.show_base = false;
                     self.show_panels = false;
                     self.show_outline = false;
-                    self.tree_focus = false;
+                    self.tree.focus = false;
                     self.bloom_open = false;
                     self.chords.clear();
                     continue;
@@ -1447,7 +1432,7 @@ impl Zenith {
                     self.show_settings = true;
                     self.show_panels = false;
                     self.show_outline = false;
-                    self.tree_focus = false;
+                    self.tree.focus = false;
                     self.settings_tab = 4;
                     self.settings_rail_focus = true;
                     self.settings_focus = 0;
@@ -1486,24 +1471,24 @@ impl Zenith {
             }
 
             // ---- the tree owns the keyboard while it has focus ----
-            if self.tree_focus {
+            if self.tree.focus {
                 // Tab is also how you get *in*, so it has to be handled here as well as
                 // in the command block, where it would be read as a page key.
                 if key == Key::Tab {
-                    self.tree_focus = false;
+                    self.tree.focus = false;
                 } else {
                     self.tree_key(key, shift, ctrl);
                 }
                 continue;
             }
-            if key == Key::Tab && !self.tree_rows.is_empty() {
+            if key == Key::Tab && !self.tree.rows.is_empty() {
                 self.show_panels = true;
                 self.show_outline = false;
-                self.tree_focus = true;
-                if self.tree_sel.is_none() {
-                    self.tree_sel = self.tree_index().map(|i| self.tree_rows[i].key());
+                self.tree.focus = true;
+                if self.tree.selected.is_none() {
+                    self.tree.selected = self.tree_index().map(|i| self.tree.rows[i].key());
                 }
-                self.tree_moved = true;
+                self.tree.moved = true;
                 continue;
             }
 
@@ -1529,11 +1514,11 @@ impl Zenith {
         }
         // Two-key sequences mean the same thing in the tree as on the page: `gg` is the
         // top of what you are looking at.
-        if self.tree_focus {
+        if self.tree.focus {
             if done == vim::Chord::FileTop {
-                let first = self.tree_rows.first().map(|r| r.key());
-                self.tree_sel = first;
-                self.tree_moved = true;
+                let first = self.tree.rows.first().map(|r| r.key());
+                self.tree.selected = first;
+                self.tree.moved = true;
             }
             return;
         }
@@ -1863,7 +1848,7 @@ impl Zenith {
         self.show_panels = false;
         self.show_outline = false;
         self.show_settings = false;
-        self.tree_focus = false;
+        self.tree.focus = false;
         self.palette_open = true;
         self.palette_opened_frame = self.frame;
         self.palette_files_only = false;
@@ -1931,7 +1916,7 @@ impl Zenith {
                 self.show_outline = true;
                 self.show_settings = false;
                 self.search_open = false;
-                self.tree_focus = false;
+                self.tree.focus = false;
             }
             Launch::Search => self.open_search(),
             Launch::CopyBlock => self.copy_to_clipboard(ctx, false),
@@ -1943,11 +1928,11 @@ impl Zenith {
                 self.show_outline = false;
                 self.show_settings = false;
                 self.search_open = false;
-                self.tree_focus = true;
-                if self.tree_sel.is_none() {
-                    self.tree_sel = self.tree_index().map(|i| self.tree_rows[i].key());
+                self.tree.focus = true;
+                if self.tree.selected.is_none() {
+                    self.tree.selected = self.tree_index().map(|i| self.tree.rows[i].key());
                 }
-                self.tree_moved = true;
+                self.tree.moved = true;
             }
             Launch::OpenFolder => self.pick_folder(),
             Launch::Review => self.toggle_review(),
@@ -2008,7 +1993,7 @@ impl Zenith {
         self.show_panels = false;
         self.show_outline = false;
         self.show_settings = false;
-        self.tree_focus = false;
+        self.tree.focus = false;
         self.search_open = true;
         self.search_query.clear();
         self.search_hits.clear();
@@ -2418,17 +2403,18 @@ impl eframe::App for Zenith {
 
         // The rows first: both the keyboard and the panel read this list, and they have to
         // agree about what "the row below this one" means.
-        self.tree_rows = self.build_tree_rows();
-        self.tree_moved = false;
+        self.tree.rows = self.build_tree_rows();
+        self.tree.moved = false;
 
         // A development affordance: move the tree selection without a keyboard, so a
         // screenshot can show the focused tree with something selected.
-        if !self.tree_hook_done {
+        if !self.tree.hook_done {
             if let Ok(n) = std::env::var("ZENITH_TREE_DOWN") {
-                if self.tree_hook_step == 0 {
+                if self.tree.hook_step == 0 {
                     // First open the folders, so there is somewhere to go.
                     let dirs: Vec<String> = self
-                        .tree_rows
+                        .tree
+                        .rows
                         .iter()
                         .filter_map(|r| match r {
                             TreeRow::Dir { rel, .. } => Some(rel.clone()),
@@ -2438,32 +2424,32 @@ impl eframe::App for Zenith {
                     for d in dirs {
                         self.expanded.insert(d);
                     }
-                    self.tree_hook_step = 1;
+                    self.tree.hook_step = 1;
                 } else {
                     let n: i32 = n.parse().unwrap_or(0);
-                    self.tree_focus = true;
-                    if self.tree_sel.is_none() {
-                        self.tree_sel = self.tree_index().map(|i| self.tree_rows[i].key());
+                    self.tree.focus = true;
+                    if self.tree.selected.is_none() {
+                        self.tree.selected = self.tree_index().map(|i| self.tree.rows[i].key());
                     }
                     for _ in 0..n.abs() {
                         self.tree_key(if n < 0 { Key::K } else { Key::J }, false, false);
                     }
-                    self.tree_moved = true;
-                    self.tree_hook_done = true;
+                    self.tree.moved = true;
+                    self.tree.hook_done = true;
                     if debug() {
                         eprintln!(
                             "zenith[tree]: moved {n} in {} rows, sel={:?}",
-                            self.tree_rows.len(),
-                            self.tree_sel
+                            self.tree.rows.len(),
+                            self.tree.selected
                         );
                     }
                 }
-            } else if std::env::var("ZENITH_FORCE_TREE").is_ok() && !self.tree_rows.is_empty() {
-                if self.tree_sel.is_none() {
-                    self.tree_sel = self.tree_index().map(|i| self.tree_rows[i].key());
+            } else if std::env::var("ZENITH_FORCE_TREE").is_ok() && !self.tree.rows.is_empty() {
+                if self.tree.selected.is_none() {
+                    self.tree.selected = self.tree_index().map(|i| self.tree.rows[i].key());
                 }
-                self.tree_moved = true;
-                self.tree_hook_done = true;
+                self.tree.moved = true;
+                self.tree.hook_done = true;
             }
         }
 
@@ -2825,16 +2811,16 @@ impl Zenith {
         self.show_settings = false;
         self.palette_open = false;
         self.search_open = false;
-        self.tree_focus = false;
+        self.tree.focus = false;
         match which {
             0 => {
                 self.show_panels = true;
                 self.show_outline = false;
-                self.tree_focus = true;
-                if self.tree_sel.is_none() {
-                    self.tree_sel = self.tree_index().map(|i| self.tree_rows[i].key());
+                self.tree.focus = true;
+                if self.tree.selected.is_none() {
+                    self.tree.selected = self.tree_index().map(|i| self.tree.rows[i].key());
                 }
-                self.tree_moved = true;
+                self.tree.moved = true;
             }
             1 => {
                 self.show_panels = false;

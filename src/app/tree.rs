@@ -7,17 +7,29 @@
 use super::widgets::*;
 use super::*;
 
+/// The tree's own state: the rows on screen, the keyboard focus, and the selection held
+/// by identity so expanding a folder cannot move it to another file.
+#[derive(Default)]
+pub(super) struct TreeState {
+    pub(super) rows: Vec<TreeRow>,
+    pub(super) focus: bool,
+    pub(super) selected: Option<TreeKey>,
+    pub(super) moved: bool,
+    pub(super) hook_done: bool,
+    pub(super) hook_step: u8,
+}
+
 impl Zenith {
     /// The index of the selected row, falling back to the file being read.
     ///
     /// Opening the tree should put you where you already are, not at the top of a list of
     /// twenty folders.
     pub(super) fn tree_index(&self) -> Option<usize> {
-        let rows = &self.tree_rows;
+        let rows = &self.tree.rows;
         if rows.is_empty() {
             return None;
         }
-        if let Some(key) = &self.tree_sel {
+        if let Some(key) = &self.tree.selected {
             if let Some(i) = rows.iter().position(|r| &r.key() == key) {
                 return Some(i);
             }
@@ -30,21 +42,21 @@ impl Zenith {
     }
 
     pub(super) fn tree_move(&mut self, delta: i32) -> bool {
-        let len = self.tree_rows.len();
+        let len = self.tree.rows.len();
         if len == 0 {
             return false;
         }
         let idx = walk_index(len, self.tree_index(), delta);
-        let key = self.tree_rows[idx].key();
-        let changed = self.tree_sel.as_ref() != Some(&key);
-        self.tree_sel = Some(key);
+        let key = self.tree.rows[idx].key();
+        let changed = self.tree.selected.as_ref() != Some(&key);
+        self.tree.selected = Some(key);
         changed
     }
 
     /// `l`, Right or Enter: go in, or open.
     pub(super) fn tree_open(&mut self) {
         let Some(idx) = self.tree_index() else { return };
-        match self.tree_rows[idx].clone() {
+        match self.tree.rows[idx].clone() {
             TreeRow::Dir { rel, open, .. } => {
                 if open {
                     // Already open: step into it, the way a file manager does.
@@ -66,16 +78,16 @@ impl Zenith {
         let Some(idx) = self.tree_index() else { return };
         if let TreeRow::Dir {
             rel, open: true, ..
-        } = &self.tree_rows[idx]
+        } = &self.tree.rows[idx]
         {
             let rel = rel.clone();
             self.expanded.remove(&rel);
             return;
         }
-        if let Some(parent) = parent_index(&self.tree_rows, idx) {
-            let key = self.tree_rows[parent].key();
-            self.tree_sel = Some(key);
-            self.tree_moved = true;
+        if let Some(parent) = parent_index(&self.tree.rows, idx) {
+            let key = self.tree.rows[parent].key();
+            self.tree.selected = Some(key);
+            self.tree.moved = true;
         }
     }
 
@@ -91,10 +103,10 @@ impl Zenith {
             Key::D if ctrl => self.tree_move(page / 2),
             Key::U if ctrl => self.tree_move(-page / 2),
             Key::G if shift => {
-                let last = self.tree_rows.len().saturating_sub(1);
-                let key = self.tree_rows.get(last).map(|r| r.key());
-                let changed = key.is_some() && self.tree_sel != key;
-                self.tree_sel = key;
+                let last = self.tree.rows.len().saturating_sub(1);
+                let key = self.tree.rows.get(last).map(|r| r.key());
+                let changed = key.is_some() && self.tree.selected != key;
+                self.tree.selected = key;
                 changed
             }
             Key::L | Key::ArrowRight | Key::Enter => {
@@ -106,7 +118,7 @@ impl Zenith {
                 false
             }
             Key::Tab => {
-                self.tree_focus = false;
+                self.tree.focus = false;
                 false
             }
             // `/` is how a reader looks for a file, and this is the file list.
@@ -117,7 +129,7 @@ impl Zenith {
             _ => false,
         };
         if moved {
-            self.tree_moved = true;
+            self.tree.moved = true;
         }
     }
 
@@ -142,7 +154,7 @@ impl Zenith {
         // Collect what we need before mutating. The rows come from the one list the
         // keyboard walks, so a row and its key action can never disagree about which row
         // is which.
-        let rows: Vec<TreeRow> = self.tree_rows.clone();
+        let rows: Vec<TreeRow> = self.tree.rows.clone();
         let tree_files: Vec<TreeRow> = rows.clone();
         let folder_name = self
             .folder
@@ -234,7 +246,8 @@ impl Zenith {
                     .show(ui, |ui| {
                         for item in &tree_files {
                             let key = item.key();
-                            let picked = self.tree_focus && self.tree_sel.as_ref() == Some(&key);
+                            let picked =
+                                self.tree.focus && self.tree.selected.as_ref() == Some(&key);
                             let (name, depth, doorway, empty_file, path, rel, is_open) = match item
                             {
                                 TreeRow::Dir {
@@ -284,12 +297,12 @@ impl Zenith {
                                 None,
                                 if rel.is_some() { Some(is_open) } else { None },
                             );
-                            if self.tree_moved && picked {
+                            if self.tree.moved && picked {
                                 resp.scroll_to_me(Some(egui::Align::Center));
                             }
                             if resp.clicked() {
-                                self.tree_focus = true;
-                                self.tree_sel = Some(key);
+                                self.tree.focus = true;
+                                self.tree.selected = Some(key);
                                 match item {
                                     TreeRow::Dir { .. } => toggled_dir = rel,
                                     TreeRow::File { path, .. } => clicked_file = Some(path.clone()),

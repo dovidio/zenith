@@ -340,7 +340,7 @@ impl Zenith {
             // A click on the page is also the way back from a summoned drawer.
             self.show_panels = false;
             self.show_outline = false;
-            self.tree_focus = false;
+            self.tree.focus = false;
         }
 
         // The spine stays with the page, not with the text: it is a bookmark, not a
