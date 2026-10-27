@@ -357,6 +357,8 @@ pub struct Zenith {
     review_load: Option<ReviewLoad>,
     /// The base sheet, and the ref typed into it.
     show_review_base: bool,
+    review_base_sel: usize,
+    review_base_opened_frame: usize,
     review_ref: String,
     review_branches: Vec<String>,
     review_error: String,
@@ -533,6 +535,8 @@ impl Zenith {
             review_base: Base::Working,
             review_load: None,
             show_review_base: false,
+            review_base_sel: 0,
+            review_base_opened_frame: 0,
             review_ref: String::new(),
             review_branches: Vec::new(),
             review_error: String::new(),
@@ -1091,6 +1095,23 @@ impl Zenith {
             return;
         };
         self.review_branches = review::branches(&root);
+        self.review_base_sel = match &self.review_base {
+            Base::Working => 0,
+            Base::Staged => 1,
+            Base::LastCommit => 2,
+            Base::Ref(reference) => self
+                .review_branches
+                .iter()
+                .position(|branch| branch == reference)
+                .map(|index| 3 + index)
+                .unwrap_or_else(|| {
+                    // A commit or a branch the recent list does not hold: leave it in
+                    // the field so the current base is still visible in the sheet.
+                    self.review_ref = reference.clone();
+                    0
+                }),
+        };
+        self.review_base_opened_frame = self.frame;
         self.review_error.clear();
         self.show_review_base = true;
     }
@@ -1385,167 +1406,360 @@ impl Zenith {
     fn review_base_overlay(&mut self, ctx: &egui::Context) {
         let pal = self.palette;
         let screen = ctx.content_rect();
-        let width = (430.0 * self.scale)
-            .clamp(430.0, 620.0)
-            .min((screen.width() - 40.0).max(320.0));
+        let width = (560.0 * self.scale)
+            .clamp(560.0, 820.0)
+            .min((screen.width() - 40.0).max(360.0));
+        let top = if self.scale > 1.3 || screen.height() <= 700.0 {
+            screen.top() + 72.0
+        } else {
+            screen.top() + screen.height() / 3.0
+        };
+        let pos = Pos2::new(screen.center().x - width * 0.5, top);
+
+        let branches = self.review_branches.clone();
+        let row_count = 3 + branches.len();
+        self.review_base_sel = self.review_base_sel.min(row_count.saturating_sub(1));
+
+        let field_id = egui::Id::new("review-base-ref");
+        if self.frame == self.review_base_opened_frame {
+            ctx.memory_mut(|m| m.surrender_focus(field_id));
+        }
+        let field_focused = ctx.memory(|m| m.has_focus(field_id));
+
+        let (kd, ku, kj, kk, kenter, ktab, kesc) = ctx.input(|i| {
+            (
+                i.key_pressed(Key::ArrowDown),
+                i.key_pressed(Key::ArrowUp),
+                i.key_pressed(Key::J),
+                i.key_pressed(Key::K),
+                i.key_pressed(Key::Enter),
+                i.key_pressed(Key::Tab),
+                i.key_pressed(Key::Escape),
+            )
+        });
+
         let mut choose: Option<Base> = None;
-        let mut close = false;
         let mut custom = false;
-        egui::Window::new("review-base")
+        let mut close = false;
+        let mut focus_field = false;
+
+        if field_focused {
+            if kenter && !self.review_ref.trim().is_empty() {
+                custom = true;
+            }
+            if ktab {
+                ctx.memory_mut(|m| m.surrender_focus(field_id));
+            }
+            if kesc {
+                close = true;
+            }
+        } else {
+            let count = row_count.max(1);
+            if kd || kj {
+                self.review_base_sel = (self.review_base_sel + 1) % count;
+            }
+            if ku || kk {
+                self.review_base_sel = self
+                    .review_base_sel
+                    .checked_sub(1)
+                    .unwrap_or(count.saturating_sub(1));
+            }
+            if ktab {
+                focus_field = true;
+            }
+            if kesc {
+                close = true;
+            }
+            if kenter {
+                choose = if self.review_base_sel < 3 {
+                    Some(
+                        [Base::Working, Base::Staged, Base::LastCommit]
+                            [self.review_base_sel]
+                            .clone(),
+                    )
+                } else {
+                    branches
+                        .get(self.review_base_sel - 3)
+                        .cloned()
+                        .map(Base::Ref)
+                };
+            }
+        }
+
+        let row_h = (36.0 * self.scale).clamp(36.0, 52.0);
+        let branch_h = (28.0 * self.scale).clamp(28.0, 42.0);
+        let title_font = self.typo.prose_id(20.0 * self.scale);
+        let label_font = self.typo.ui_id(9.5 * self.scale);
+        let body_font = self.typo.ui_id(10.5 * self.scale);
+        let row_font = self.typo.ui_id(12.5 * self.scale);
+        let row_small = self.typo.ui_id(10.5 * self.scale);
+        let code_font = self.typo.code_id(11.5 * self.scale);
+        let hint_font = self.typo.ui_id(9.5 * self.scale);
+        let field_font = self.typo.code_id(13.0 * self.scale);
+
+        let sheet = egui::Window::new("review-base")
             .title_bar(false)
             .resizable(false)
             .movable(false)
             .collapsible(false)
-            .fixed_pos(Pos2::new(
-                screen.center().x - width * 0.5,
-                screen.top() + 96.0,
-            ))
+            .fixed_pos(pos)
             .fixed_size(vec2(width, 0.0))
             .frame(
                 Frame::NONE
                     .fill(pal.panel)
                     .stroke(Stroke::new(1.0, pal.edge))
                     .corner_radius(CornerRadius::same(SHEET_RADIUS))
-                    .inner_margin(Margin::symmetric(18, 16))
+                    .inner_margin(Margin::symmetric(16, 14))
                     .shadow(sheet_shadow(&pal)),
             )
             .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing.y = 7.0;
-                ui.label(
-                    RichText::new("Compare changes with")
-                        .font(self.typo.prose_id(20.0 * self.scale))
-                        .color(pal.ink),
+                ui.visuals_mut().extreme_bg_color = pal.panel_deep;
+                ui.spacing_mut().item_spacing.y = 0.0;
+
+                ui.painter().text(
+                    ui.min_rect().min,
+                    Align2::LEFT_TOP,
+                    "Compare changes with",
+                    title_font,
+                    pal.ink,
                 );
+                ui.add_space(24.0 * self.scale);
+                let mut at = ui.cursor().left_top();
                 if let Some(review) = &self.review {
-                    ui.label(
-                        RichText::new(format!("on {}", review.branch))
-                            .font(self.typo.code_id(10.5 * self.scale))
-                            .color(pal.ink_soft),
+                    paint_tracked(
+                        ui.painter(),
+                        at,
+                        Align2::LEFT_TOP,
+                        &format!("ON {}", short_branch(&review.branch).to_uppercase()),
+                        label_font.clone(),
+                        pal.ink_soft,
+                        LABEL_TRACKING * 9.5 * self.scale,
                     );
+                    at.y += 17.0 * self.scale;
+                    ui.add_space(17.0 * self.scale);
                 }
-                ui.label(
-                    RichText::new("A branch is compared from its common ancestor with HEAD.")
-                        .font(self.typo.ui_id(10.5 * self.scale))
-                        .color(pal.ink_soft),
+                ui.painter().text(
+                    Pos2::new(at.x, at.y),
+                    Align2::LEFT_TOP,
+                    "A branch is compared from its common ancestor with HEAD.",
+                    body_font,
+                    pal.ink_soft,
                 );
-                ui.add_space(4.0);
-                for base in [Base::Working, Base::Staged, Base::LastCommit] {
+                ui.add_space(22.0 * self.scale);
+
+                for (i, base) in [Base::Working, Base::Staged, Base::LastCommit]
+                    .into_iter()
+                    .enumerate()
+                {
                     let selected = self.review_base == base;
-                    let response = ui.add(
-                        egui::Button::new(
-                            RichText::new(format!(
-                                "{}{}",
-                                if selected { "●  " } else { "○  " },
-                                match base {
-                                    Base::Working => "Working tree · uncommitted changes",
-                                    Base::Staged => "Staged · the index against HEAD",
-                                    Base::LastCommit => "Last commit · HEAD against its parent",
-                                    Base::Ref(_) => "",
-                                }
-                            ))
-                            .font(self.typo.ui_id(12.0 * self.scale))
-                            .color(if selected { pal.ink } else { pal.ink_soft }),
-                        )
-                        .frame(false),
+                    let cursor = self.review_base_sel == i;
+                    let (rect, response) =
+                        ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
+                    if selected || cursor || response.hovered() {
+                        ui.painter().rect_filled(
+                            rect,
+                            CornerRadius::same(4),
+                            pal.selection,
+                        );
+                    }
+                    if selected {
+                        ui.painter().rect_filled(
+                            Rect::from_min_size(
+                                Pos2::new(rect.left(), rect.top() + 8.0),
+                                vec2(2.0, (rect.height() - 16.0).max(1.0)),
+                            ),
+                            CornerRadius::same(1),
+                            pal.accent,
+                        );
+                    }
+                    let (title, detail) = match base {
+                        Base::Working => ("Working tree", "uncommitted changes"),
+                        Base::Staged => ("Staged", "the index against HEAD"),
+                        Base::LastCommit => ("Last commit", "HEAD against its parent"),
+                        Base::Ref(_) => ("", ""),
+                    };
+                    let ink = if selected || cursor || response.hovered() {
+                        pal.ink
+                    } else {
+                        pal.ink_soft
+                    };
+                    ui.painter().text(
+                        Pos2::new(rect.left() + 13.0, rect.center().y),
+                        Align2::LEFT_CENTER,
+                        title,
+                        row_font.clone(),
+                        ink,
+                    );
+                    ui.painter().text(
+                        Pos2::new(rect.right() - 8.0, rect.center().y),
+                        Align2::RIGHT_CENTER,
+                        detail,
+                        row_small.clone(),
+                        pal.ink_soft,
                     );
                     if response.clicked() {
                         choose = Some(base);
                     }
                 }
-                ui.add_space(5.0);
-                ui.painter().hline(
-                    ui.min_rect().left()..=ui.min_rect().right(),
-                    ui.cursor().top(),
-                    Stroke::new(1.0, pal.edge),
-                );
-                ui.add_space(7.0);
-                ui.label(
-                    RichText::new("A branch or commit")
-                        .font(self.typo.ui_id(10.5 * self.scale))
-                        .color(pal.ink_soft),
-                );
-                let input = ui.add(
-                    egui::TextEdit::singleline(&mut self.review_ref)
-                        .hint_text("main, origin/main, 3a1f2c")
-                        .font(self.typo.code_id(12.0 * self.scale))
-                        .desired_width(f32::INFINITY)
-                        .frame(Frame::NONE),
-                );
-                let enter = ui.input(|i| i.key_pressed(Key::Enter));
-                if enter && input.has_focus() && !self.review_ref.trim().is_empty() {
-                    custom = true;
-                }
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new("Compare")
-                                .font(self.typo.ui_id(11.5 * self.scale))
-                                .color(pal.ink),
-                        )
-                        .frame(true),
-                    )
-                    .clicked()
-                    && !self.review_ref.trim().is_empty()
-                {
-                    custom = true;
-                }
-                if !self.review_branches.is_empty() {
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new("Recent branches")
-                            .font(self.typo.ui_id(9.5 * self.scale))
-                            .color(pal.ink_soft),
+
+                if !branches.is_empty() {
+                    ui.add_space(14.0 * self.scale);
+                    paint_tracked(
+                        ui.painter(),
+                        ui.cursor().left_top(),
+                        Align2::LEFT_TOP,
+                        "RECENT BRANCHES",
+                        label_font.clone(),
+                        pal.ink_soft,
+                        LABEL_TRACKING * 9.5 * self.scale,
                     );
+                    ui.add_space(17.0 * self.scale);
                     ScrollArea::vertical()
-                        .id_salt("review-branches")
-                        .max_height(148.0)
+                        .id_salt("review-bases")
+                        .max_height((148.0 * self.scale).min(screen.height() * 0.28))
                         .show(ui, |ui| {
-                            for branch in &self.review_branches {
-                                if ui
-                                    .add(
-                                        egui::Button::new(
-                                            RichText::new(branch)
-                                                .font(self.typo.code_id(11.0 * self.scale))
-                                                .color(pal.ink_soft),
-                                        )
-                                        .frame(false),
-                                    )
-                                    .clicked()
-                                {
+                            for (j, branch) in branches.iter().enumerate() {
+                                let i = 3 + j;
+                                let selected = self.review_base == Base::Ref(branch.clone());
+                                let cursor = self.review_base_sel == i;
+                                let (rect, response) = ui.allocate_exact_size(
+                                    vec2(ui.available_width(), branch_h),
+                                    Sense::click(),
+                                );
+                                if selected || cursor || response.hovered() {
+                                    ui.painter().rect_filled(
+                                        rect,
+                                        CornerRadius::same(4),
+                                        pal.selection,
+                                    );
+                                }
+                                if selected {
+                                    ui.painter().rect_filled(
+                                        Rect::from_min_size(
+                                            Pos2::new(rect.left(), rect.top() + 7.0),
+                                            vec2(2.0, (rect.height() - 14.0).max(1.0)),
+                                        ),
+                                        CornerRadius::same(1),
+                                        pal.accent,
+                                    );
+                                }
+                                let ink = if selected || cursor || response.hovered() {
+                                    pal.ink
+                                } else {
+                                    pal.ink_soft
+                                };
+                                ui.painter().text(
+                                    Pos2::new(rect.left() + 13.0, rect.center().y),
+                                    Align2::LEFT_CENTER,
+                                    branch,
+                                    code_font.clone(),
+                                    ink,
+                                );
+                                if cursor {
+                                    response.scroll_to_me(Some(egui::Align::Center));
+                                }
+                                if response.clicked() {
                                     choose = Some(Base::Ref(branch.clone()));
                                 }
                             }
                         });
                 }
-                if !self.review_error.is_empty() {
-                    ui.label(
-                        RichText::new(&self.review_error)
-                            .font(self.typo.ui_id(10.5 * self.scale))
-                            .color(pal.accent),
+
+                ui.add_space(14.0 * self.scale);
+                let y = ui.cursor().top();
+                let left = ui.min_rect().left();
+                let right = ui.min_rect().right();
+                ui.painter()
+                    .hline(left..=right, y, Stroke::new(1.0, pal.edge));
+                ui.add_space(14.0 * self.scale);
+
+                paint_tracked(
+                    ui.painter(),
+                    ui.cursor().left_top(),
+                    Align2::LEFT_TOP,
+                    "A BRANCH OR COMMIT",
+                    label_font,
+                    pal.ink_soft,
+                    LABEL_TRACKING * 9.5 * self.scale,
+                );
+                ui.add_space(15.0 * self.scale);
+                let can = !self.review_ref.trim().is_empty();
+                ui.horizontal(|ui| {
+                    let field = ui.add(
+                        egui::TextEdit::singleline(&mut self.review_ref)
+                            .id(field_id)
+                            .hint_text("main, origin/main, 3a1f2c")
+                            .font(field_font.clone())
+                            .desired_width(ui.available_width() - 62.0)
+                            .frame(Frame::NONE),
                     );
-                }
-                ui.add_space(4.0);
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new("Close")
-                                .font(self.typo.ui_id(11.0 * self.scale))
-                                .color(pal.ink_soft),
+                    if focus_field {
+                        field.request_focus();
+                    }
+                    let action = ui.add(
+                        egui::Label::new(
+                            RichText::new("Review")
+                                .font(self.typo.ui_id(11.5 * self.scale).clone())
+                                .color(if can { pal.accent } else { pal.ink_faint }),
                         )
-                        .frame(false),
-                    )
-                    .clicked()
-                {
-                    close = true;
+                        .sense(Sense::click()),
+                    );
+                    if action.clicked() && can {
+                        custom = true;
+                    }
+                });
+                let y = ui.cursor().top();
+                ui.painter()
+                    .hline(left..=right, y, Stroke::new(1.0, pal.edge));
+
+                if !self.review_error.is_empty() {
+                    ui.add_space(8.0 * self.scale);
+                    ui.painter().text(
+                        ui.cursor().left_top(),
+                        Align2::LEFT_TOP,
+                        &self.review_error,
+                        self.typo.ui_id(10.5 * self.scale),
+                        pal.accent,
+                    );
+                    ui.add_space(14.0 * self.scale);
+                } else {
+                    ui.add_space(10.0 * self.scale);
                 }
+
+                let hint = if field_focused {
+                    "enter  review    ·    esc  close"
+                } else {
+                    "j k  choose    ·    enter  review    ·    tab  type    ·    esc  close"
+                };
+                ui.painter().text(
+                    ui.cursor().left_top(),
+                    Align2::LEFT_TOP,
+                    hint,
+                    hint_font,
+                    pal.ink_soft,
+                );
+                ui.add_space(16.0 * self.scale);
             });
+
         if custom {
             choose = Some(Base::Ref(self.review_ref.trim().to_string()));
+        }
+        if close {
+            self.show_review_base = false;
+            return;
         }
         if let Some(base) = choose {
             self.show_review_base = false;
             self.start_review(base);
-        } else if close {
+            return;
+        }
+        let sheet_rect = sheet.as_ref().map(|s| s.response.rect);
+        if self.frame > self.review_base_opened_frame
+            && ctx.input(|i| i.pointer.primary_clicked())
+            && ctx
+                .input(|i| i.pointer.interact_pos())
+                .is_some_and(|p| sheet_rect.is_none_or(|rect| !rect.contains(p)))
+        {
             self.show_review_base = false;
         }
     }

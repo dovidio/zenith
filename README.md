@@ -26,7 +26,8 @@ Navigation is vim's, as far as a reader needs it: `j k` (or `ctrl-j` / `ctrl-k`)
 where it is defined, and `ctrl-o` / `ctrl-i` to go back and forward through everywhere you
 have been. `g r` reviews a branch's changes as one reading page at a time: the working
 tree by default, or a branch or commit with `g b` (a branch is compared from its common
-ancestor with `HEAD`, as a pull request is). Changed lines carry a little more weight;
+ancestor with `HEAD`, as a pull request is). The base sheet is keyboard-driven: `j k` or
+the arrows choose, `enter` reviews, `tab` types a ref, and `esc` closes. Changed lines carry a little more weight;
 the code they replaced lifts in place when you hover the line (or press `p` at the
 cursor). `J K` walks the changed
 files across the strip, and `[ ]` walks the changes in the page. `gd` into a definition

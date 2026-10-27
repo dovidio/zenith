@@ -350,8 +350,10 @@ the last commit are one choice each. A branch or commit can be typed. The bloom 
 same dot and four words in review, held in its own band above the review strip so the page
 cannot scroll under it. The base is never a permanent toolbar: a review strip carries
 `REVIEW`, the branch, the base, the current file count and the changed-file strip; `base`
-opens a summoned sheet. `J K` moves through
-the changed files and `[ ]` through the changes.
+opens a summoned sheet. The sheet is a single quiet list — the three revisions, recent
+branches, and a ref field — with `j k` or the arrows to choose, `enter` to review, `tab` to
+type a ref, and `esc` to close. It is not a form. `J K` moves through the changed files and
+`[ ]` through the changes.
 
 The review is a mode, not a page you leave by walking. `gd` to a definition keeps it; a
 changed file reattaches its marks when you return, and a definition opens without them.
