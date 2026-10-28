@@ -12,6 +12,15 @@ use super::*;
 ///
 /// It lives beside the review methods rather than in the window struct, so the module
 /// owns the thing it operates on.
+/// What a key press on the base sheet decided.
+#[derive(Default)]
+struct BaseIntent {
+    choose: Option<Base>,
+    custom: bool,
+    close: bool,
+    focus_field: bool,
+}
+
 #[derive(Default)]
 pub(super) struct ReviewState {
     pub(super) changes: Option<Review>,
@@ -294,26 +303,16 @@ impl Zenith {
         }
     }
 
-    pub(super) fn review_base_overlay(&mut self, ctx: &egui::Context) {
-        let pal = self.palette;
-        let screen = ctx.content_rect();
-        let width = (560.0 * self.scale)
-            .clamp(560.0, 820.0)
-            .min((screen.width() - 40.0).max(360.0));
-        let high = self.scale > 1.3 || screen.height() <= 700.0;
-        let top = self.sheet_top(screen, high, false);
-        let pos = Pos2::new(screen.center().x - width * 0.5, top);
-
-        let branches = self.session.branches.clone();
-        let row_count = 3 + branches.len();
-        self.session.base_sel = self.session.base_sel.min(row_count.saturating_sub(1));
-
-        let field_id = egui::Id::new("review-base-ref");
-        if self.frame == self.session.base_opened_frame {
-            ctx.memory_mut(|m| m.surrender_focus(field_id));
-        }
-        let field_focused = ctx.memory(|m| m.has_focus(field_id));
-
+    /// The base sheet's keyboard. Returns what the key press decided, without touching
+    /// the review: the sheet's drawing and its outcome stay separate.
+    fn base_keys(
+        &mut self,
+        ctx: &egui::Context,
+        field_id: egui::Id,
+        field_focused: bool,
+        row_count: usize,
+        branches: &[String],
+    ) -> BaseIntent {
         let (kd, ku, kj, kk, kenter, ktab, kesc) = ctx.input(|i| {
             (
                 i.key_pressed(Key::ArrowDown),
@@ -373,6 +372,116 @@ impl Zenith {
                 };
             }
         }
+        BaseIntent {
+            choose,
+            custom,
+            close,
+            focus_field,
+        }
+    }
+
+    /// The recent branches under the three fixed bases. Its own scroll, its own
+    /// selection, and no knowledge of what happens after a choice.
+    fn base_branches(
+        &mut self,
+        ui: &mut Ui,
+        branches: &[String],
+        choose: &mut Option<Base>,
+        branch_h: f32,
+        screen_h: f32,
+    ) {
+        let pal = self.palette;
+        let label_font = self.typo.ui_id(9.5 * self.scale);
+        let code_font = self.typo.code_id(11.5 * self.scale);
+        if !branches.is_empty() {
+            ui.add_space(14.0 * self.scale);
+            paint_tracked(
+                ui.painter(),
+                ui.cursor().left_top(),
+                Align2::LEFT_TOP,
+                "RECENT BRANCHES",
+                label_font.clone(),
+                pal.ink_soft,
+                LABEL_TRACKING * 9.5 * self.scale,
+            );
+            ui.add_space(17.0 * self.scale);
+            ui.spacing_mut().scroll.floating = false;
+            ui.spacing_mut().scroll.foreground_color = true;
+            ui.spacing_mut().scroll.bar_width = 4.0;
+            ScrollArea::vertical()
+                .id_salt("review-bases")
+                .max_height((148.0 * self.scale).min(screen_h * 0.28))
+                .show(ui, |ui| {
+                    for (j, branch) in branches.iter().enumerate() {
+                        let i = 3 + j;
+                        let selected = self.session.base == Base::Ref(branch.clone());
+                        let cursor = self.session.base_sel == i;
+                        let (rect, response) = ui.allocate_exact_size(
+                            vec2(ui.available_width(), branch_h),
+                            Sense::click(),
+                        );
+                        if selected || cursor || response.hovered() {
+                            ui.painter()
+                                .rect_filled(rect, CornerRadius::same(4), pal.selection);
+                        }
+                        if selected {
+                            ui.painter().rect_filled(
+                                Rect::from_min_size(
+                                    Pos2::new(rect.left(), rect.top() + 7.0),
+                                    vec2(2.0, (rect.height() - 14.0).max(1.0)),
+                                ),
+                                CornerRadius::same(1),
+                                pal.accent,
+                            );
+                        }
+                        let ink = if selected || cursor || response.hovered() {
+                            pal.ink
+                        } else {
+                            pal.ink_soft
+                        };
+                        ui.painter().text(
+                            Pos2::new(rect.left() + 13.0, rect.center().y),
+                            Align2::LEFT_CENTER,
+                            branch,
+                            code_font.clone(),
+                            ink,
+                        );
+                        if cursor {
+                            response.scroll_to_me(Some(egui::Align::Center));
+                        }
+                        if response.clicked() {
+                            *choose = Some(Base::Ref(branch.clone()));
+                        }
+                    }
+                });
+        }
+    }
+
+    pub(super) fn review_base_overlay(&mut self, ctx: &egui::Context) {
+        let pal = self.palette;
+        let screen = ctx.content_rect();
+        let width = (560.0 * self.scale)
+            .clamp(560.0, 820.0)
+            .min((screen.width() - 40.0).max(360.0));
+        let high = self.scale > 1.3 || screen.height() <= 700.0;
+        let top = self.sheet_top(screen, high, false);
+        let pos = Pos2::new(screen.center().x - width * 0.5, top);
+
+        let branches = self.session.branches.clone();
+        let row_count = 3 + branches.len();
+        self.session.base_sel = self.session.base_sel.min(row_count.saturating_sub(1));
+
+        let field_id = egui::Id::new("review-base-ref");
+        if self.frame == self.session.base_opened_frame {
+            ctx.memory_mut(|m| m.surrender_focus(field_id));
+        }
+        let field_focused = ctx.memory(|m| m.has_focus(field_id));
+
+        let intent = self.base_keys(ctx, field_id, field_focused, row_count, &branches);
+        let mut choose = intent.choose;
+        let mut custom = intent.custom;
+        let close = intent.close;
+        let focus_field = intent.focus_field;
 
         let row_h = (36.0 * self.scale).clamp(36.0, 52.0);
         let branch_h = (28.0 * self.scale).clamp(28.0, 42.0);
@@ -381,7 +490,6 @@ impl Zenith {
         let body_font = self.typo.ui_id(10.5 * self.scale);
         let row_font = self.typo.ui_id(12.5 * self.scale);
         let row_small = self.typo.ui_id(10.5 * self.scale);
-        let code_font = self.typo.code_id(11.5 * self.scale);
         let hint_font = self.typo.ui_id(9.5 * self.scale);
         let field_font = self.typo.code_id(13.0 * self.scale);
 
@@ -487,71 +595,7 @@ impl Zenith {
                     }
                 }
 
-                if !branches.is_empty() {
-                    ui.add_space(14.0 * self.scale);
-                    paint_tracked(
-                        ui.painter(),
-                        ui.cursor().left_top(),
-                        Align2::LEFT_TOP,
-                        "RECENT BRANCHES",
-                        label_font.clone(),
-                        pal.ink_soft,
-                        LABEL_TRACKING * 9.5 * self.scale,
-                    );
-                    ui.add_space(17.0 * self.scale);
-                    ui.spacing_mut().scroll.floating = false;
-                    ui.spacing_mut().scroll.foreground_color = true;
-                    ui.spacing_mut().scroll.bar_width = 4.0;
-                    ScrollArea::vertical()
-                        .id_salt("review-bases")
-                        .max_height((148.0 * self.scale).min(screen.height() * 0.28))
-                        .show(ui, |ui| {
-                            for (j, branch) in branches.iter().enumerate() {
-                                let i = 3 + j;
-                                let selected = self.session.base == Base::Ref(branch.clone());
-                                let cursor = self.session.base_sel == i;
-                                let (rect, response) = ui.allocate_exact_size(
-                                    vec2(ui.available_width(), branch_h),
-                                    Sense::click(),
-                                );
-                                if selected || cursor || response.hovered() {
-                                    ui.painter().rect_filled(
-                                        rect,
-                                        CornerRadius::same(4),
-                                        pal.selection,
-                                    );
-                                }
-                                if selected {
-                                    ui.painter().rect_filled(
-                                        Rect::from_min_size(
-                                            Pos2::new(rect.left(), rect.top() + 7.0),
-                                            vec2(2.0, (rect.height() - 14.0).max(1.0)),
-                                        ),
-                                        CornerRadius::same(1),
-                                        pal.accent,
-                                    );
-                                }
-                                let ink = if selected || cursor || response.hovered() {
-                                    pal.ink
-                                } else {
-                                    pal.ink_soft
-                                };
-                                ui.painter().text(
-                                    Pos2::new(rect.left() + 13.0, rect.center().y),
-                                    Align2::LEFT_CENTER,
-                                    branch,
-                                    code_font.clone(),
-                                    ink,
-                                );
-                                if cursor {
-                                    response.scroll_to_me(Some(egui::Align::Center));
-                                }
-                                if response.clicked() {
-                                    choose = Some(Base::Ref(branch.clone()));
-                                }
-                            }
-                        });
-                }
+                self.base_branches(ui, &branches, &mut choose, branch_h, screen.height());
 
                 ui.add_space(14.0 * self.scale);
                 let y = ui.cursor().top();

@@ -324,6 +324,40 @@ impl Zenith {
         }
     }
 
+    /// The launcher's keyboard: arrows move, Enter chooses, Escape closes.
+    ///
+    /// The selection is a field, not a local, so the pointer and the keys agree on the
+    /// same row. Returns the chosen row (if any) and whether the sheet should close.
+    fn palette_keys(&mut self, ctx: &egui::Context, row_count: usize) -> (Option<usize>, bool) {
+        let mut chosen = None;
+        let mut close = false;
+        let (kd, ku, kenter, kesc) = ctx.input(|i| {
+            (
+                i.key_pressed(Key::ArrowDown),
+                i.key_pressed(Key::ArrowUp),
+                i.key_pressed(Key::Enter),
+                i.key_pressed(Key::Escape),
+            )
+        });
+        if kesc {
+            close = true;
+        }
+        if kd && row_count > 0 {
+            self.sheets.palette_sel = (self.sheets.palette_sel + 1) % row_count;
+        }
+        if ku && row_count > 0 {
+            self.sheets.palette_sel = self
+                .sheets
+                .palette_sel
+                .checked_sub(1)
+                .unwrap_or(row_count.saturating_sub(1));
+        }
+        if kenter && row_count > 0 {
+            chosen = Some(self.sheets.palette_sel.min(row_count - 1));
+        }
+        (chosen, close)
+    }
+
     pub(super) fn palette_overlay(&mut self, ctx: &egui::Context) {
         let pal = self.palette;
         let screen = ctx.content_rect();
@@ -389,29 +423,12 @@ impl Zenith {
                 );
                 ui.add_space(6.0);
 
-                let (kd, ku, kenter, kesc) = ctx.input(|i| {
-                    (
-                        i.key_pressed(Key::ArrowDown),
-                        i.key_pressed(Key::ArrowUp),
-                        i.key_pressed(Key::Enter),
-                        i.key_pressed(Key::Escape),
-                    )
-                });
-                if kesc {
+                let (key_choice, key_close) = self.palette_keys(ctx, row_count);
+                if key_choice.is_some() {
+                    chosen = key_choice;
+                }
+                if key_close {
                     close = true;
-                }
-                if kd && row_count > 0 {
-                    self.sheets.palette_sel = (self.sheets.palette_sel + 1) % row_count;
-                }
-                if ku && row_count > 0 {
-                    self.sheets.palette_sel = self
-                        .sheets
-                        .palette_sel
-                        .checked_sub(1)
-                        .unwrap_or(row_count.saturating_sub(1));
-                }
-                if kenter && row_count > 0 {
-                    chosen = Some(self.sheets.palette_sel.min(row_count - 1));
                 }
 
                 let row_h = (28.0 * self.scale).clamp(28.0, 46.0);

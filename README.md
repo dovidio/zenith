@@ -278,7 +278,7 @@ moved.
 ## Working on it
 
 The checks are local, not remote: `.githooks/pre-commit` runs rustfmt, clippy with warnings
-denied — including the cognitive-complexity gate in `clippy.toml` — and the test suite.
+denied — including the cognitive-complexity and function-length gates in `clippy.toml` — and the test suite.
 Enable it once per clone:
 
     git config core.hooksPath .githooks

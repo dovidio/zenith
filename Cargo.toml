@@ -50,6 +50,7 @@ serde_json = "1"
 # The local smell gate. Clippy computes cognitive complexity itself; the threshold is
 # in clippy.toml. Denied here so `cargo clippy` fails outside the hook too.
 cognitive_complexity = "deny"
+too_many_lines = "deny"
 
 [profile.release]
 opt-level = 2

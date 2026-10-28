@@ -23,7 +23,7 @@ step() {
 step "rustfmt"
 cargo fmt --check
 
-step "clippy (warnings denied, cognitive complexity ≤ 25)"
+step "clippy (warnings denied, smell thresholds in clippy.toml)"
 cargo clippy --all-targets --locked --quiet -- -D warnings
 
 step "tests"

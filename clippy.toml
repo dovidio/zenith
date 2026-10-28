@@ -3,3 +3,7 @@
 # 25 is Clippy's default; writing it here makes the gate a decision rather than an
 # accident of the toolchain version.
 cognitive-complexity-threshold = 25
+
+# A function over 250 lines is a feature hiding in a function. This is deliberately
+# generous: the cognitive-complexity gate handles ordinary long-but-flat code.
+too-many-lines-threshold = 250
