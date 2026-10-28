@@ -7,6 +7,27 @@ use super::launch::*;
 use super::widgets::*;
 use super::*;
 
+/// The state of the three summoned surfaces. Each owns its open flag, its query and its
+/// keyboard focus, so a sheet can be read (and reset) without touching the page.
+#[derive(Default)]
+pub(super) struct Sheets {
+    pub(super) show_settings: bool,
+    pub(super) settings_tab: usize,
+    pub(super) settings_rail_focus: bool,
+    pub(super) settings_focus: usize,
+    pub(super) keys_query: String,
+    pub(super) palette_open: bool,
+    pub(super) palette_opened_frame: usize,
+    pub(super) palette_files_only: bool,
+    pub(super) query: String,
+    pub(super) palette_sel: usize,
+    pub(super) search_open: bool,
+    pub(super) search_query: String,
+    pub(super) search_seen: String,
+    pub(super) search_hits: Vec<vim::Caret>,
+    pub(super) search_idx: usize,
+}
+
 impl Zenith {
     /// The launcher's rows: matched files, then the curated or ranked commands.
     ///
@@ -50,7 +71,7 @@ impl Zenith {
         };
 
         let mut rows: Vec<LaunchRow> = Vec::new();
-        if self.palette_files_only {
+        if self.sheets.palette_files_only {
             // `⌘P` keeps the old, narrow promise: files only, no command menu.
             rows.extend(file_rows.iter().take(8).cloned());
         } else if needle.is_empty() {
@@ -303,13 +324,13 @@ impl Zenith {
         let high = self.scale > 1.3 || screen.height() <= 700.0;
         let top = self.sheet_top(screen, high, true);
         let pos = Pos2::new(screen.center().x - width * 0.5, top);
-        let needle = self.query.trim().to_string();
+        let needle = self.sheets.query.trim().to_string();
 
         let (rows, matched_total) = self.palette_rows(&needle);
 
         let row_count = rows.len();
-        self.palette_sel = self.palette_sel.min(row_count.saturating_sub(1));
-        let hint = if self.palette_files_only {
+        self.sheets.palette_sel = self.sheets.palette_sel.min(row_count.saturating_sub(1));
+        let hint = if self.sheets.palette_files_only {
             "find a file in this folder"
         } else {
             "a file, a view, or an action"
@@ -337,7 +358,7 @@ impl Zenith {
             .show(ctx, |ui| {
                 ui.visuals_mut().extreme_bg_color = pal.panel_deep;
                 let resp = ui.add(
-                    egui::TextEdit::singleline(&mut self.query)
+                    egui::TextEdit::singleline(&mut self.sheets.query)
                         .hint_text(hint)
                         .font(input_font.clone())
                         .desired_width(width - 24.0)
@@ -347,7 +368,7 @@ impl Zenith {
                     resp.request_focus();
                 }
                 if resp.changed() {
-                    self.palette_sel = 0;
+                    self.sheets.palette_sel = 0;
                 }
                 ui.add_space(6.0);
                 ui.painter().hline(
@@ -369,21 +390,22 @@ impl Zenith {
                     close = true;
                 }
                 if kd && row_count > 0 {
-                    self.palette_sel = (self.palette_sel + 1) % row_count;
+                    self.sheets.palette_sel = (self.sheets.palette_sel + 1) % row_count;
                 }
                 if ku && row_count > 0 {
-                    self.palette_sel = self
+                    self.sheets.palette_sel = self
+                        .sheets
                         .palette_sel
                         .checked_sub(1)
                         .unwrap_or(row_count.saturating_sub(1));
                 }
                 if kenter && row_count > 0 {
-                    chosen = Some(self.palette_sel.min(row_count - 1));
+                    chosen = Some(self.sheets.palette_sel.min(row_count - 1));
                 }
 
                 let row_h = (28.0 * self.scale).clamp(28.0, 46.0);
                 let file_row_h = (44.0 * self.scale).clamp(44.0, 64.0);
-                let group_count = if self.palette_files_only || !needle.is_empty() {
+                let group_count = if self.sheets.palette_files_only || !needle.is_empty() {
                     0
                 } else {
                     let mut count = 0;
@@ -423,7 +445,7 @@ impl Zenith {
                                 let mut last_group: Option<LaunchGroup> = None;
 
                                 for (i, row) in rows.iter().enumerate() {
-                                    if !self.palette_files_only && needle.is_empty() {
+                                    if !self.sheets.palette_files_only && needle.is_empty() {
                                         let group = row.group();
                                         if last_group != Some(group) {
                                             ui.add_space(if last_group.is_none() {
@@ -448,7 +470,7 @@ impl Zenith {
                                         }
                                     }
 
-                                    let selected = i == self.palette_sel;
+                                    let selected = i == self.sheets.palette_sel;
                                     let height = if row.is_file() { file_row_h } else { row_h };
                                     let (rect, resp) = ui.allocate_exact_size(
                                         vec2(ui.available_width(), height),
@@ -541,7 +563,7 @@ impl Zenith {
             });
 
         if !close
-            && self.frame > self.palette_opened_frame
+            && self.frame > self.sheets.palette_opened_frame
             && ctx.input(|i| i.pointer.primary_clicked())
             && ctx.input(|i| i.pointer.interact_pos()).is_some_and(|p| {
                 launcher
@@ -562,7 +584,7 @@ impl Zenith {
             close = true;
         }
         if close {
-            self.palette_open = false;
+            self.sheets.palette_open = false;
         }
     }
 
@@ -572,15 +594,15 @@ impl Zenith {
         let font = self.typo.ui_id(13.5 * self.scale);
 
         // Recompute on every keystroke, and jump to the first hit as it appears.
-        let changed = self.search_seen != self.search_query;
+        let changed = self.sheets.search_seen != self.sheets.search_query;
         if changed {
-            self.search_seen = self.search_query.clone();
-            self.search_hits = self
+            self.sheets.search_seen = self.sheets.search_query.clone();
+            self.sheets.search_hits = self
                 .open
                 .as_ref()
-                .map(|o| vim::matches(&o.doc, &self.search_query))
+                .map(|o| vim::matches(&o.doc, &self.sheets.search_query))
                 .unwrap_or_default();
-            if let Some(first) = self.search_hits.first().copied() {
+            if let Some(first) = self.sheets.search_hits.first().copied() {
                 self.caret = first;
                 self.ensure_visible();
             }
@@ -610,7 +632,7 @@ impl Zenith {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("/").font(font.clone()).color(pal.accent));
                     let resp = ui.add(
-                        egui::TextEdit::singleline(&mut self.search_query)
+                        egui::TextEdit::singleline(&mut self.sheets.search_query)
                             .hint_text("search this file")
                             .font(font.clone())
                             .desired_width(width - 110.0)
@@ -619,10 +641,10 @@ impl Zenith {
                     if !resp.has_focus() {
                         resp.request_focus();
                     }
-                    let count = if self.search_hits.is_empty() {
+                    let count = if self.sheets.search_hits.is_empty() {
                         "no match".to_string()
                     } else {
-                        format!("{} match(es)", self.search_hits.len())
+                        format!("{} match(es)", self.sheets.search_hits.len())
                     };
                     ui.label(RichText::new(count).font(font.clone()).color(pal.ink_soft));
                 });
@@ -645,14 +667,14 @@ impl Zenith {
             self.search_step(forward);
         }
         if close {
-            self.search_open = false;
+            self.sheets.search_open = false;
             self.chords.clear();
         }
     }
 
     /// How many controls the current settings section has, excluding the reset action.
     pub(super) fn settings_focus_count(&self) -> usize {
-        match self.settings_tab {
+        match self.sheets.settings_tab {
             0 => 14,
             1 => self.typo.mono_voices.len() + self.typo.prose_voices.len(),
             2 => theme::THEMES.len(),
@@ -679,72 +701,74 @@ impl Zenith {
             return false;
         }
         let tabs = SETTINGS_SECTIONS.len();
-        if self.settings_tab >= tabs {
-            self.settings_tab = tabs - 1;
+        if self.sheets.settings_tab >= tabs {
+            self.sheets.settings_tab = tabs - 1;
         }
         let count = self.settings_focus_count();
         let total = count + 1;
-        if self.settings_rail_focus {
+        if self.sheets.settings_rail_focus {
             match key {
                 Key::ArrowUp | Key::ArrowLeft => {
-                    self.settings_tab = (self.settings_tab + tabs - 1) % tabs;
-                    self.settings_focus = 0;
+                    self.sheets.settings_tab = (self.sheets.settings_tab + tabs - 1) % tabs;
+                    self.sheets.settings_focus = 0;
                     true
                 }
                 Key::ArrowDown | Key::ArrowRight => {
-                    self.settings_tab = (self.settings_tab + 1) % tabs;
-                    self.settings_focus = 0;
+                    self.sheets.settings_tab = (self.sheets.settings_tab + 1) % tabs;
+                    self.sheets.settings_focus = 0;
                     true
                 }
                 Key::Tab | Key::Enter | Key::Space => {
-                    self.settings_rail_focus = false;
-                    self.settings_focus = 0;
+                    self.sheets.settings_rail_focus = false;
+                    self.sheets.settings_focus = 0;
                     true
                 }
                 _ => false,
             }
         } else {
-            self.settings_focus = self.settings_focus.min(total.saturating_sub(1));
+            self.sheets.settings_focus = self.sheets.settings_focus.min(total.saturating_sub(1));
             match key {
                 Key::Tab => {
                     if shift {
-                        if self.settings_focus == 0 {
-                            self.settings_rail_focus = true;
+                        if self.sheets.settings_focus == 0 {
+                            self.sheets.settings_rail_focus = true;
                         } else {
-                            self.settings_focus -= 1;
+                            self.sheets.settings_focus -= 1;
                         }
                     } else {
-                        self.settings_focus += 1;
-                        if self.settings_focus >= total {
-                            self.settings_rail_focus = true;
-                            self.settings_focus = 0;
+                        self.sheets.settings_focus += 1;
+                        if self.sheets.settings_focus >= total {
+                            self.sheets.settings_rail_focus = true;
+                            self.sheets.settings_focus = 0;
                         }
                     }
                     true
                 }
                 Key::ArrowUp | Key::ArrowDown => {
                     if key == Key::ArrowDown {
-                        if self.settings_focus < total.saturating_sub(1) {
-                            self.settings_focus += 1;
+                        if self.sheets.settings_focus < total.saturating_sub(1) {
+                            self.sheets.settings_focus += 1;
                         }
-                    } else if self.settings_focus > 0 {
-                        self.settings_focus -= 1;
+                    } else if self.sheets.settings_focus > 0 {
+                        self.sheets.settings_focus -= 1;
                     }
                     true
                 }
                 Key::ArrowLeft | Key::ArrowRight => {
                     let direction = if key == Key::ArrowLeft { -1 } else { 1 };
-                    if self.settings_tab == 0 && matches!(self.settings_focus, 11..=13) {
-                        self.settings_adjust(ctx, self.settings_focus, direction as f32);
-                    } else if self.settings_focus < count {
-                        self.settings_focus = (self.settings_focus as i32 + direction)
+                    if self.sheets.settings_tab == 0
+                        && matches!(self.sheets.settings_focus, 11..=13)
+                    {
+                        self.settings_adjust(ctx, self.sheets.settings_focus, direction as f32);
+                    } else if self.sheets.settings_focus < count {
+                        self.sheets.settings_focus = (self.sheets.settings_focus as i32 + direction)
                             .clamp(0, count as i32 - 1)
                             as usize;
                     }
                     true
                 }
                 Key::Space | Key::Enter => {
-                    self.settings_activate(ctx, self.settings_focus);
+                    self.settings_activate(ctx, self.sheets.settings_focus);
                     true
                 }
                 _ => false,
@@ -761,14 +785,14 @@ impl Zenith {
             if armed {
                 self.reset_asked = None;
                 self.reset_defaults(ctx);
-                self.settings_rail_focus = true;
-                self.settings_focus = 0;
+                self.sheets.settings_rail_focus = true;
+                self.sheets.settings_focus = 0;
             } else {
                 self.reset_asked = Some(now);
             }
             return;
         }
-        match self.settings_tab {
+        match self.sheets.settings_tab {
             0 => self.settings_toggle_page(ctx, focus),
             1 => {
                 let mono = self.typo.mono_voices.len();
@@ -870,7 +894,7 @@ impl Zenith {
         // fit a column.
         let label_w = 19.0 * (12.5 * self.scale) * 0.5 + (12.5 * self.scale) * 0.88 + 9.0;
         let single = ((content - 12.0) * 0.5) < label_w;
-        let mut open = self.show_settings;
+        let mut open = self.sheets.show_settings;
         let mut changed = false;
         let mut lsp_changed = false;
         let mut tree_changed = false;
@@ -917,7 +941,7 @@ impl Zenith {
                     ui.vertical(|ui| {
                         ui.set_width(rail);
                         for (i, name) in SETTINGS_SECTIONS.iter().enumerate() {
-                            let selected = self.settings_tab == i;
+                            let selected = self.sheets.settings_tab == i;
                             let text = RichText::new(*name).font(head.clone()).color(if selected {
                                 pal.ink
                             } else {
@@ -925,7 +949,7 @@ impl Zenith {
                             });
                             let response =
                                 ui.add(egui::Label::new(text).sense(egui::Sense::click()));
-                            if selected && self.settings_rail_focus {
+                            if selected && self.sheets.settings_rail_focus {
                                 ui.painter().rect_filled(
                                     Rect::from_min_size(
                                         Pos2::new(response.rect.left() - 8.0, response.rect.top() + 2.0),
@@ -936,9 +960,9 @@ impl Zenith {
                                 );
                             }
                             if response.clicked() {
-                                self.settings_tab = i;
-                                self.settings_rail_focus = true;
-                                self.settings_focus = 0;
+                                self.sheets.settings_tab = i;
+                                self.sheets.settings_rail_focus = true;
+                                self.sheets.settings_focus = 0;
                             }
                         }
                         rail_edge = ui.min_rect().right();
@@ -951,12 +975,12 @@ impl Zenith {
                         // A fixed minimum height keeps the screen from jumping as the
                         // reader moves down the rail.
                         ui.set_min_height(296.0);
-                        let focus = if self.settings_rail_focus {
+                        let focus = if self.sheets.settings_rail_focus {
                             None
                         } else {
-                            Some(self.settings_focus)
+                            Some(self.sheets.settings_focus)
                         };
-                        match self.settings_tab {
+                        match self.sheets.settings_tab {
                             // -------------------------------------------- page
                             0 => {
                                 if single {
@@ -1315,7 +1339,7 @@ impl Zenith {
                             4 => {
                                 ui.visuals_mut().extreme_bg_color = pal.panel_deep;
                                 let edit = ui.add(
-                                    egui::TextEdit::singleline(&mut self.keys_query)
+                                    egui::TextEdit::singleline(&mut self.sheets.keys_query)
                                         .hint_text("filter keys")
                                         .font(self.typo.ui_id(12.5 * self.scale))
                                         .desired_width(content)
@@ -1327,7 +1351,7 @@ impl Zenith {
                                     Stroke::new(1.0, pal.edge),
                                 );
                                 ui.add_space(8.0);
-                                let query = self.keys_query.to_lowercase();
+                                let query = self.sheets.keys_query.to_lowercase();
                                 ScrollArea::vertical()
                                     .id_salt("keys")
                                     .max_height(280.0)
@@ -1404,8 +1428,8 @@ impl Zenith {
                 ui.add_space(10.0);
                 let now = ui.input(|i| i.time);
                 let armed = self.reset_asked.is_some_and(|t| now - t < 5.0);
-                let reset_focused = !self.settings_rail_focus
-                    && self.settings_focus == self.settings_focus_count();
+                let reset_focused = !self.sheets.settings_rail_focus
+                    && self.sheets.settings_focus == self.settings_focus_count();
                 let text = if armed { "restore defaults?" } else { "restore defaults" };
                 let colour = if armed { pal.tone(Tone::Invalid) } else { pal.ink_soft };
                 let galley = ui.painter().layout_no_wrap(text.to_string(), small.clone(), colour);
@@ -1497,7 +1521,7 @@ impl Zenith {
         if modal.should_close() {
             open = false;
         }
-        self.show_settings = open;
+        self.sheets.show_settings = open;
     }
 
     /// Put every piece of taste back to how it shipped.

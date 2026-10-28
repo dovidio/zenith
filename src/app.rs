@@ -34,6 +34,7 @@ mod lsp_ui;
 mod page;
 mod review;
 mod sheets;
+use self::sheets::Sheets;
 mod smoke;
 mod tree;
 mod widgets;
@@ -423,15 +424,8 @@ pub struct Zenith {
 
     show_panels: bool,
     show_outline: bool,
-    show_settings: bool,
-    /// Which section of the settings panel is showing.
-    settings_tab: usize,
-    /// The settings sheet's keyboard focus: the rail, then the section's controls,
-    /// then the reset action.
-    settings_rail_focus: bool,
-    settings_focus: usize,
-    /// The filter on the Keys page.
-    keys_query: String,
+    /// The summoned sheets: launcher, find, settings.
+    sheets: Sheets,
     /// The bloom is the one piece of chrome that offers itself. Its state is frame
     /// timing, not taste; `started` at -1 until the first frame can measure time.
     bloom_open: bool,
@@ -439,17 +433,6 @@ pub struct Zenith {
     bloom_last_touch: f64,
     bloom_hover_since: Option<f64>,
     page_center_x: f32,
-    palette_open: bool,
-    palette_opened_frame: usize,
-    palette_files_only: bool,
-    query: String,
-    palette_sel: usize,
-    search_open: bool,
-    search_query: String,
-    /// The query as of the last frame, so hits are recomputed only on a keystroke.
-    search_seen: String,
-    search_hits: Vec<vim::Caret>,
-    search_idx: usize,
 
     /// A pending movement of the page, resolved once the layout is known.
     pending: Pending,
@@ -580,26 +563,15 @@ impl Zenith {
             outline_sel: None,
             show_panels: false,
             show_outline: false,
-            show_settings: false,
-            settings_tab: 0,
-            settings_rail_focus: true,
-            settings_focus: 0,
-            keys_query: String::new(),
+            sheets: Sheets {
+                settings_rail_focus: true,
+                ..Sheets::default()
+            },
             bloom_open: true,
             bloom_started: -1.0,
             bloom_last_touch: 0.0,
             bloom_hover_since: None,
             page_center_x: 0.0,
-            palette_open: false,
-            palette_opened_frame: 0,
-            palette_files_only: false,
-            query: String::new(),
-            palette_sel: 0,
-            search_open: false,
-            search_query: String::new(),
-            search_seen: String::new(),
-            search_hits: Vec::new(),
-            search_idx: 0,
             pending: Pending::None,
             scroll: 0.0,
             view_h: 0.0,
@@ -630,20 +602,20 @@ impl Zenith {
         if std::env::var("ZENITH_FORCE_PALETTE").is_ok() {
             app.open_palette();
             if std::env::var("ZENITH_PALETTE_FILES").is_ok() {
-                app.palette_files_only = true;
+                app.sheets.palette_files_only = true;
             }
             if let Ok(q) = std::env::var("ZENITH_PALETTE_QUERY") {
-                app.query = q;
+                app.sheets.query = q;
             }
         }
         if std::env::var("ZENITH_FORCE_SEARCH").is_ok() {
             app.open_search();
             if let Ok(q) = std::env::var("ZENITH_SEARCH_QUERY") {
-                app.search_query = q;
+                app.sheets.search_query = q;
             }
         }
         if std::env::var("ZENITH_FORCE_SETTINGS").is_ok() {
-            app.show_settings = true;
+            app.sheets.show_settings = true;
         }
         if std::env::var("ZENITH_FORCE_TREE").is_ok() {
             app.show_panels = true;
@@ -655,11 +627,11 @@ impl Zenith {
             app.show_panels = false;
         }
         if let Ok(tab) = std::env::var("ZENITH_SETTINGS_TAB") {
-            app.settings_tab = tab.parse().unwrap_or(0);
+            app.sheets.settings_tab = tab.parse().unwrap_or(0);
         }
         if let Ok(focus) = std::env::var("ZENITH_SETTINGS_FOCUS") {
-            app.settings_rail_focus = false;
-            app.settings_focus = focus.parse().unwrap_or(0);
+            app.sheets.settings_rail_focus = false;
+            app.sheets.settings_focus = focus.parse().unwrap_or(0);
         }
         app
     }
@@ -1362,11 +1334,11 @@ impl Zenith {
         // Two different kinds of "busy", which want different keys to work. A text box
         // (the file finder, the search field) owns every letter. An open panel (settings,
         // help) owns none of them, but should still keep the page still behind it.
-        let text_entry = self.search_open
-            || self.palette_open
+        let text_entry = self.sheets.search_open
+            || self.sheets.palette_open
             || self.session.show_base
-            || (self.show_settings && ctx.memory(|m| m.focused().is_some()));
-        let modal = self.show_settings || self.session.show_base;
+            || (self.sheets.show_settings && ctx.memory(|m| m.focused().is_some()));
+        let modal = self.sheets.show_settings || self.session.show_base;
 
         // Every key press this frame, with the modifiers that came with it.
         let presses: Vec<(Key, bool, bool, bool)> = ctx.input(|i| {
@@ -1412,20 +1384,20 @@ impl Zenith {
                     continue;
                 }
                 if (cmd && key == Key::Comma) || (!cmd && !ctrl && key == Key::S) {
-                    self.show_settings = !self.show_settings;
-                    if self.show_settings {
+                    self.sheets.show_settings = !self.sheets.show_settings;
+                    if self.sheets.show_settings {
                         self.show_panels = false;
                         self.show_outline = false;
                         self.tree.focus = false;
-                        self.settings_rail_focus = true;
-                        self.settings_focus = 0;
+                        self.sheets.settings_rail_focus = true;
+                        self.sheets.settings_focus = 0;
                     }
                     continue;
                 }
                 if key == Key::Escape {
-                    self.show_settings = false;
-                    self.palette_open = false;
-                    self.search_open = false;
+                    self.sheets.show_settings = false;
+                    self.sheets.palette_open = false;
+                    self.sheets.search_open = false;
                     self.session.show_base = false;
                     self.show_panels = false;
                     self.show_outline = false;
@@ -1435,14 +1407,14 @@ impl Zenith {
                     continue;
                 }
                 if !cmd && !ctrl && key == Key::Questionmark {
-                    self.show_settings = true;
+                    self.sheets.show_settings = true;
                     self.show_panels = false;
                     self.show_outline = false;
                     self.tree.focus = false;
-                    self.settings_tab = 4;
-                    self.settings_rail_focus = true;
-                    self.settings_focus = 0;
-                    self.keys_query.clear();
+                    self.sheets.settings_tab = 4;
+                    self.sheets.settings_rail_focus = true;
+                    self.sheets.settings_focus = 0;
+                    self.sheets.keys_query.clear();
                     continue;
                 }
                 if ctrl && key == Key::O {
@@ -1454,7 +1426,7 @@ impl Zenith {
                     continue;
                 }
             }
-            if self.show_settings && self.settings_key(ctx, key, shift, ctrl, cmd) {
+            if self.sheets.show_settings && self.settings_key(ctx, key, shift, ctrl, cmd) {
                 continue;
             }
             if text_entry || modal {
@@ -1850,23 +1822,23 @@ impl Zenith {
 
     fn open_palette(&mut self) {
         // One summoned surface at a time: the launcher replaces a drawer or the search.
-        self.search_open = false;
+        self.sheets.search_open = false;
         self.show_panels = false;
         self.show_outline = false;
-        self.show_settings = false;
+        self.sheets.show_settings = false;
         self.tree.focus = false;
-        self.palette_open = true;
-        self.palette_opened_frame = self.frame;
-        self.palette_files_only = false;
-        self.query.clear();
-        self.palette_sel = 0;
+        self.sheets.palette_open = true;
+        self.sheets.palette_opened_frame = self.frame;
+        self.sheets.palette_files_only = false;
+        self.sheets.query.clear();
+        self.sheets.palette_sel = 0;
     }
 
     /// `⌘P` / `ctrl-P` keep the narrow promise: this is the file finder, not the
     /// command sheet. `⌘K` opens the launcher.
     fn open_palette_files(&mut self) {
         self.open_palette();
-        self.palette_files_only = true;
+        self.sheets.palette_files_only = true;
     }
 
     /// Which launcher commands make sense in this state?
@@ -1915,13 +1887,13 @@ impl Zenith {
     /// Run one command from the launcher. The launcher closes first; the command opens
     /// whatever surface it means to open.
     fn launch(&mut self, action: Launch, ctx: &egui::Context) {
-        self.palette_open = false;
+        self.sheets.palette_open = false;
         match action {
             Launch::Contents => {
                 self.show_panels = false;
                 self.show_outline = true;
-                self.show_settings = false;
-                self.search_open = false;
+                self.sheets.show_settings = false;
+                self.sheets.search_open = false;
                 self.tree.focus = false;
             }
             Launch::Search => self.open_search(),
@@ -1932,8 +1904,8 @@ impl Zenith {
             Launch::Index => {
                 self.show_panels = true;
                 self.show_outline = false;
-                self.show_settings = false;
-                self.search_open = false;
+                self.sheets.show_settings = false;
+                self.sheets.search_open = false;
                 self.tree.focus = true;
                 if self.tree.selected.is_none() {
                     self.tree.selected = self.tree_index().map(|i| self.tree.rows[i].key());
@@ -1955,19 +1927,19 @@ impl Zenith {
             Launch::Settings => {
                 self.show_panels = false;
                 self.show_outline = false;
-                self.show_settings = true;
-                self.settings_tab = 0;
-                self.settings_rail_focus = true;
-                self.settings_focus = 0;
+                self.sheets.show_settings = true;
+                self.sheets.settings_tab = 0;
+                self.sheets.settings_rail_focus = true;
+                self.sheets.settings_focus = 0;
             }
             Launch::Keys => {
                 self.show_panels = false;
                 self.show_outline = false;
-                self.show_settings = true;
-                self.settings_tab = 4;
-                self.settings_rail_focus = true;
-                self.settings_focus = 0;
-                self.keys_query.clear();
+                self.sheets.show_settings = true;
+                self.sheets.settings_tab = 4;
+                self.sheets.settings_rail_focus = true;
+                self.sheets.settings_focus = 0;
+                self.sheets.keys_query.clear();
             }
         }
     }
@@ -1995,15 +1967,15 @@ impl Zenith {
     }
 
     fn open_search(&mut self) {
-        self.palette_open = false;
+        self.sheets.palette_open = false;
         self.show_panels = false;
         self.show_outline = false;
-        self.show_settings = false;
+        self.sheets.show_settings = false;
         self.tree.focus = false;
-        self.search_open = true;
-        self.search_query.clear();
-        self.search_hits.clear();
-        self.search_idx = 0;
+        self.sheets.search_open = true;
+        self.sheets.search_query.clear();
+        self.sheets.search_hits.clear();
+        self.sheets.search_idx = 0;
     }
 
     /// Apply a motion and make sure the result is on screen.
@@ -2082,13 +2054,13 @@ impl Zenith {
     }
 
     fn search_step(&mut self, forward: bool) {
-        if self.search_query.is_empty() {
+        if self.sheets.search_query.is_empty() {
             return;
         }
         let found = {
             let Some(open) = &self.open else { return };
-            let hit = vim::search(&open.doc, &self.search_query, self.caret, forward);
-            let total = vim::matches(&open.doc, &self.search_query).len();
+            let hit = vim::search(&open.doc, &self.sheets.search_query, self.caret, forward);
+            let total = vim::matches(&open.doc, &self.sheets.search_query).len();
             hit.map(|h| (h, total))
         };
         match found {
@@ -2096,7 +2068,7 @@ impl Zenith {
                 self.jump_to(hit);
                 self.status = format!("{total} match(es)");
             }
-            None => self.status = format!("no match for {:?}", self.search_query),
+            None => self.status = format!("no match for {:?}", self.sheets.search_query),
         }
     }
 
@@ -2570,7 +2542,8 @@ impl Zenith {
 
         // Settings already owns an egui Modal with the same backdrop; the other sheets
         // are plain Windows and need the scrim supplied here.
-        let sheet_open = self.palette_open || self.search_open || self.session.show_base;
+        let sheet_open =
+            self.sheets.palette_open || self.sheets.search_open || self.session.show_base;
         if sheet_open {
             let screen = ctx.content_rect();
             let _ = ui.interact(screen, ui.id().with("sheet-scrim"), Sense::click());
@@ -2578,13 +2551,13 @@ impl Zenith {
                 .rect_filled(screen, CornerRadius::ZERO, theme::alpha(pal.ink, 44));
         }
 
-        if self.palette_open {
+        if self.sheets.palette_open {
             self.palette_overlay(&ctx);
         }
-        if self.search_open {
+        if self.sheets.search_open {
             self.search_overlay(&ctx);
         }
-        if self.show_settings {
+        if self.sheets.show_settings {
             self.settings_overlay(&ctx);
         }
         if self.session.show_base {
@@ -2776,9 +2749,9 @@ impl Zenith {
         }
         let surfaces = self.show_panels
             || self.show_outline
-            || self.show_settings
-            || self.palette_open
-            || self.search_open
+            || self.sheets.show_settings
+            || self.sheets.palette_open
+            || self.sheets.search_open
             || self.session.show_base;
         if surfaces {
             self.bloom_open = false;
@@ -2844,9 +2817,9 @@ impl Zenith {
 
     /// Open one of the bloom's four doors.
     fn summon(&mut self, which: usize) {
-        self.show_settings = false;
-        self.palette_open = false;
-        self.search_open = false;
+        self.sheets.show_settings = false;
+        self.sheets.palette_open = false;
+        self.sheets.search_open = false;
         self.tree.focus = false;
         match which {
             0 => {
@@ -2870,10 +2843,10 @@ impl Zenith {
             3 => {
                 self.show_panels = false;
                 self.show_outline = false;
-                self.show_settings = true;
-                self.settings_tab = 0;
-                self.settings_rail_focus = true;
-                self.settings_focus = 0;
+                self.sheets.show_settings = true;
+                self.sheets.settings_tab = 0;
+                self.sheets.settings_rail_focus = true;
+                self.sheets.settings_focus = 0;
             }
             _ => {}
         }
