@@ -7,6 +7,7 @@
 
 pub mod catalog;
 pub mod distill;
+pub mod find;
 pub mod folder;
 pub mod fuzzy;
 pub mod lsp;

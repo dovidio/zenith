@@ -32,6 +32,8 @@ use zenith_core::vim;
 mod launch;
 mod lsp_ui;
 use self::lsp_ui::LspState;
+mod find;
+use self::find::FindState;
 mod page;
 mod review;
 mod sheets;
@@ -405,8 +407,10 @@ pub struct Zenith {
 
     show_panels: bool,
     show_outline: bool,
-    /// The summoned sheets: launcher, find, settings.
+    /// The summoned sheets: launcher, in-file search, project search, settings.
     sheets: Sheets,
+    /// Search across every file in the folder, streaming into a result sheet.
+    find: FindState,
     /// The bloom dot and its four words.
     bloom: BloomState,
     page_center_x: f32,
@@ -542,6 +546,7 @@ impl Zenith {
                 settings_rail_focus: true,
                 ..Sheets::default()
             },
+            find: FindState::default(),
             bloom: BloomState {
                 open: true,
                 started: -1.0,
@@ -588,6 +593,12 @@ impl Zenith {
             app.open_search();
             if let Ok(q) = std::env::var("ZENITH_SEARCH_QUERY") {
                 app.sheets.search_query = q;
+            }
+        }
+        if std::env::var("ZENITH_FORCE_FIND").is_ok() {
+            app.open_project_search();
+            if let Ok(q) = std::env::var("ZENITH_FIND_QUERY") {
+                app.find.set_query(q);
             }
         }
         if std::env::var("ZENITH_FORCE_SETTINGS").is_ok() {
@@ -658,6 +669,7 @@ impl Zenith {
         let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
         self.store.session.last_root = Some(root.clone());
+        self.find.close();
         self.leave_review();
         self.folder = None;
         self.expanded.clear();
@@ -1331,6 +1343,20 @@ impl Zenith {
 
     // -- keyboard ----------------------------------------------------------
 
+    /// `s` / `⌘,` toggles the settings sheet. Kept out of the key pass so the pass
+    /// reads as commands rather than as the settings sheet's own state.
+    fn toggle_settings(&mut self) {
+        self.sheets.show_settings = !self.sheets.show_settings;
+        if self.sheets.show_settings {
+            self.find.close();
+            self.show_panels = false;
+            self.show_outline = false;
+            self.tree.focus = false;
+            self.sheets.settings_rail_focus = true;
+            self.sheets.settings_focus = 0;
+        }
+    }
+
     /// The keyboard layer, as one ordered pass over this frame's key presses.
     ///
     /// Every press is visited once, in the order it happened. A key that does not complete
@@ -1342,9 +1368,10 @@ impl Zenith {
         // help) owns none of them, but should still keep the page still behind it.
         let text_entry = self.sheets.search_open
             || self.sheets.palette_open
+            || self.find.open
             || self.session.show_base
             || (self.sheets.show_settings && ctx.memory(|m| m.focused().is_some()));
-        let modal = self.sheets.show_settings || self.session.show_base;
+        let modal = self.sheets.show_settings || self.session.show_base || self.find.open;
 
         // Every key press this frame, with the modifiers that came with it.
         let presses: Vec<(Key, bool, bool, bool)> = ctx.input(|i| {
@@ -1385,25 +1412,23 @@ impl Zenith {
                     self.open_palette_files();
                     continue;
                 }
+                if key == Key::F && (cmd || ctrl) && shift {
+                    self.open_project_search();
+                    continue;
+                }
                 if key == Key::F && (cmd || ctrl) {
                     self.open_search();
                     continue;
                 }
                 if (cmd && key == Key::Comma) || (!cmd && !ctrl && key == Key::S) {
-                    self.sheets.show_settings = !self.sheets.show_settings;
-                    if self.sheets.show_settings {
-                        self.show_panels = false;
-                        self.show_outline = false;
-                        self.tree.focus = false;
-                        self.sheets.settings_rail_focus = true;
-                        self.sheets.settings_focus = 0;
-                    }
+                    self.toggle_settings();
                     continue;
                 }
                 if key == Key::Escape {
                     self.sheets.show_settings = false;
                     self.sheets.palette_open = false;
                     self.sheets.search_open = false;
+                    self.find.close();
                     self.session.show_base = false;
                     self.show_panels = false;
                     self.show_outline = false;
@@ -1829,6 +1854,7 @@ impl Zenith {
     fn open_palette(&mut self) {
         // One summoned surface at a time: the launcher replaces a drawer or the search.
         self.sheets.search_open = false;
+        self.find.close();
         self.show_panels = false;
         self.show_outline = false;
         self.sheets.show_settings = false;
@@ -1858,6 +1884,7 @@ impl Zenith {
             | Launch::Reload => self.open.is_some() || self.folder.is_some(),
             Launch::Markdown => self.open.as_ref().is_some_and(|o| o.prose),
             Launch::Index => self.folder.is_some(),
+            Launch::FindAll => self.folder.is_some(),
             Launch::OpenFolder => true,
             Launch::Review => self.folder.is_some() || self.open.is_some(),
             Launch::ReviewBase => self.folder.is_some() || self.open.is_some(),
@@ -1903,6 +1930,7 @@ impl Zenith {
                 self.tree.focus = false;
             }
             Launch::Search => self.open_search(),
+            Launch::FindAll => self.open_project_search(),
             Launch::CopyBlock => self.copy_to_clipboard(ctx, false),
             Launch::CloseFile => self.close_file(),
             Launch::Bookmark => self.toggle_bookmark(),
@@ -1974,6 +2002,7 @@ impl Zenith {
 
     fn open_search(&mut self) {
         self.sheets.palette_open = false;
+        self.find.close();
         self.show_panels = false;
         self.show_outline = false;
         self.sheets.show_settings = false;
@@ -2588,8 +2617,10 @@ impl Zenith {
 
         // Settings already owns an egui Modal with the same backdrop; the other sheets
         // are plain Windows and need the scrim supplied here.
-        let sheet_open =
-            self.sheets.palette_open || self.sheets.search_open || self.session.show_base;
+        let sheet_open = self.sheets.palette_open
+            || self.sheets.search_open
+            || self.find.open
+            || self.session.show_base;
         if sheet_open {
             let screen = ctx.content_rect();
             let _ = ui.interact(screen, ui.id().with("sheet-scrim"), Sense::click());
@@ -2602,6 +2633,9 @@ impl Zenith {
         }
         if self.sheets.search_open {
             self.search_overlay(&ctx);
+        }
+        if self.find.open {
+            self.find_overlay(&ctx);
         }
         if self.sheets.show_settings {
             self.settings_overlay(&ctx);

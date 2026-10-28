@@ -198,6 +198,7 @@ READING KEYS:
     /  or ⌘F                  find inside this file
     ⌘K                        the launcher: files, views, actions
     ⌘P or ctrl-p              find a file in the folder
+    ⌘⇧F                       search the contents of every file
     s  or ⌘,                  settings
     ?                         the key map (Settings › Keys)
     esc                       close what is open

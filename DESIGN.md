@@ -142,7 +142,8 @@ The window has one permanent surface: the page. Everything else is a state.
 | **contents** | the page and the right drawer |
 | **launcher** | the page and the launcher sheet |
 | **settings** | the page and the settings sheet |
-| **search** | the page and the search sheet at the foot |
+| **in-file search** | the page and the search sheet at the foot |
+| **project search** | the page and the project search sheet, centered |
 
 The index is 252 pt wide and resizes 200–340. The contents are 240 pt wide and resize
 180–340. A drawer meets the page at one continuous hairline in `edge`; there is no gap and
@@ -296,8 +297,8 @@ becomes a menu is a menu, and the answer to a longer list is a more specific que
 at 1.80× are still eight rows, not a sheet clipped by the window.
 
 The empty state is contextual, in three groups. `HERE` comes first — `Contents`, then
-`Search this file`. `FOLDER` follows — `Index`, the matching files, and `Open folder…`
-when there is no file open or no folder yet. `ZENITH` carries the page's own switches and doors — `Focus lens`, `Soft wrap`, `Line
+`Search this file`. `FOLDER` follows — `Index`, `Search every file`, the matching files,
+and `Open folder…` when there is no file open or no folder yet. `ZENITH` carries the page's own switches and doors — `Focus lens`, `Soft wrap`, `Line
 numbers`, `Distilled`, `Render markdown`, `Next theme` / `Previous theme`, `Larger type` /
 `Smaller type`, `Settings` and `Keys`. With no file open the `HERE` group is absent; with
 no folder, `Open folder…` is the only folder action. The list is curated to eight; the rest
@@ -430,11 +431,34 @@ accent on hover.
 
 ### Search
 
-`/` or `⌘F` opens the in-file search at the foot of the page: a sheet, 14 pt corners, the
-field at the left, the match count at the right. It searches the text of the file you are
-reading; it is not the launcher. Enter and shift-enter step through matches; `esc` closes.
+Two scopes, two surfaces; neither is the launcher.
 
-Finding a *file* is the launcher's job. There is no second file finder.
+`/` or `⌘F` opens the **in-file** search at the foot of the page: a sheet, 14 pt corners,
+the field at the left, the match count at the right. It searches the text of the file you
+are reading. Enter and shift-enter step through matches; `esc` closes.
+
+`⌘⇧F` / `ctrl-shift-F` opens the **project** search: a centered sheet 780 pt wide at 1.00×,
+`panel`, 14 pt corners, 1 pt `edge`, the sheet shadow. The field is chrome 16 pt, no box,
+with a hairline under it and `EVERY FILE` in tracked chrome 8.5 pt at the top right. The
+placeholder is `type a pattern`; the first status line is `regex · smart case`. A result
+row is one matching line: a faint line number, then the line in code 11.5 pt with the
+matched bytes in `accent`. Matches are grouped under their relative path in code 10 pt
+`ink_soft`; there is no folder icon and no excerpt beyond the line. Selected uses the
+same wash and 2 pt accent tab as every other row.
+
+The sheet is compact while it is empty, waiting or has no hits, and grows with the result
+set to a 540 pt body at most, then scrolls. Results stream in from a background scan; the
+status line carries the truth (`searching every file…`, `168 matches · 16 files`, or
+`invalid pattern · unclosed character class`). A 300-hit cap stops a broad query and the
+status says `first 300 matches`. `↑↓` or `ctrl-j` / `ctrl-k` choose, `enter` opens the page
+at that line with a center landing, `esc` or a click outside closes.
+
+The scan is the ripgrep engine embedded in `zenith-core`; it reads the indexed files and
+honors the same ignore and noise rules. There is no index, no daemon and no `rg` binary to
+install. A search starts 90 ms after the last keystroke and cancels its predecessor; the
+results are a snapshot of the folder index, refreshed by `r`.
+
+Finding a *file* is still the launcher's job. There is no second file finder.
 
 ## Motion
 

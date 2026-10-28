@@ -7,6 +7,7 @@ use super::*;
 pub(super) enum Launch {
     Contents,
     Search,
+    FindAll,
     CopyBlock,
     CloseFile,
     Bookmark,
@@ -75,6 +76,13 @@ pub(super) const LAUNCH_COMMANDS: &[CommandSpec] = &[
         group: LaunchGroup::Here,
         shortcut: Some("/"),
         keywords: "find in file grep search",
+    },
+    CommandSpec {
+        action: Launch::FindAll,
+        label: "Search every file",
+        group: LaunchGroup::Folder,
+        shortcut: Some("⌘⇧F"),
+        keywords: "project full text content grep ripgrep find across files",
     },
     CommandSpec {
         action: Launch::CopyBlock,
@@ -316,6 +324,7 @@ pub(super) const HELP_GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("enter, G, gg", "in the index: open, last row, first row"),
             ("⌘K", "the launcher: files, views, actions"),
             ("⌘P or ctrl-p", "find a file in the folder"),
+            ("⌘⇧F", "search the contents of every file"),
             ("/ or ⌘F", "find inside this file"),
             ("q", "close the file, and go back to the one you came from"),
             ("⌘O", "open a folder to read"),

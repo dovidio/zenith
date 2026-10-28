@@ -8,8 +8,10 @@ license = "MIT"
 authors = ["Umberto D'Ovidio"]
 
 [dependencies]
-# Gitignore-aware, read-only directory walking.
+# Gitignore-aware walking and the ripgrep search engine. Both are read-only and
+# vendored as source; no rg binary is shipped.
 ignore = "0.4"
+grep = "0.4"
 
 # Real syntax parsing (Sublime grammars) so highlighting is accurate...
 syntect = { version = "5.3", default-features = false, features = [

@@ -23,8 +23,8 @@ decision.
 
 | path | owns |
 |---|---|
-| `zenith-core/` | the reading model: document, syntax, tone, motions, folder walk, review, outline, language servers |
-| `src/app/` | the window's feature modules: review, sheets, tree, page, LSP UI, launcher, widgets, smoke |
+| `zenith-core/` | the reading model: document, syntax, tone, motions, folder walk, full-text search, review, outline, language servers |
+| `src/app/` | the window's feature modules: review, search, sheets, tree, page, LSP UI, launcher, widgets, smoke |
 | `src/app.rs` | `Zenith` state, startup, keyboard/actions, frame assembly |
 | `src/reader.rs`, `src/theme.rs`, `src/typography.rs` | layout/painting, palettes, font discovery |
 | `docs/` | the public site and its screenshots |
@@ -41,9 +41,10 @@ cargo tree -p zenith-core | grep -E 'egui|eframe'
 No matches is the expected result. A TUI would depend on `zenith-core` only.
 
 The window's modules are feature-shaped, not layered: `app/review.rs` owns the review
-surface, `app/sheets.rs` the launcher/find/settings, `app/tree.rs` the index and contents,
-`app/page.rs` the reading page, `app/lsp_ui.rs` server orchestration. State groups live
-beside their features (`ReviewState`, `TreeState`, `Sheets`, `LspState`, `BloomState`).
+surface, `app/find.rs` project-wide search, `app/sheets.rs` the launcher/in-file
+search/settings, `app/tree.rs` the index and contents, `app/page.rs` the reading page,
+`app/lsp_ui.rs` server orchestration. State groups live beside their features
+(`ReviewState`, `FindState`, `TreeState`, `Sheets`, `LspState`, `BloomState`).
 
 ## Commands
 
@@ -91,8 +92,9 @@ ZENITH_FORCE_REVIEW=1 ZENITH_REVIEW_HOVER=16 \
 
 `ZENITH_CONFIG_DIR` keeps captures from touching the reader's real settings. Useful test
 hooks: `ZENITH_FORCE_REVIEW`, `ZENITH_REVIEW_BASE_SHEET`, `ZENITH_REVIEW_INDEX`,
-`ZENITH_REVIEW_BASE`, `ZENITH_PALETTE_QUERY`, `ZENITH_FORCE_PALETTE`, `ZENITH_FORCE_SETTINGS`,
-`ZENITH_FORCE_TREE`, `ZENITH_FORCE_OUTLINE`, `ZENITH_CARET`, `ZENITH_GOTO`.
+`ZENITH_REVIEW_BASE`, `ZENITH_FORCE_FIND`, `ZENITH_FIND_QUERY`, `ZENITH_PALETTE_QUERY`,
+`ZENITH_FORCE_PALETTE`, `ZENITH_FORCE_SETTINGS`, `ZENITH_FORCE_TREE`, `ZENITH_FORCE_OUTLINE`,
+`ZENITH_CARET`, `ZENITH_GOTO`.
 The smoke harness writes two phases: the page, and the focus lens.
 
 ## Invariants
@@ -157,6 +159,21 @@ sheet. A branch is compared from its merge base with `HEAD`, not from the tip.
 - `r` re-reads the open file and rescans the folder in the background. The page, caret,
   review and expanded folders stay put. The index is a snapshot, not a watcher.
 
+## Search
+
+`⌘⇧F` / `ctrl-shift-F` searches the contents of every file in the indexed folder. `⌘P`
+remains the file-name finder, `/` remains in-file search.
+
+- The engine is the ripgrep workspace crates (`grep`), embedded in `zenith-core`; the `rg`
+  binary is not required, downloaded or bundled. There is no index: each query reads the
+  files the folder walk already found, respecting the same ignore/noise rules.
+- Regex with smart case; an invalid pattern is a line in the sheet, not a panic.
+- Results stream in from a background thread, grouped by relative path, one row per
+  matching line with the match in accent. `↑↓` or `ctrl-j` / `ctrl-k` choose, `enter` opens
+  the page at the line, `esc` closes. A 300-hit cap stops a broad query; the sheet says
+  when it truncated.
+- `ZENITH_FORCE_FIND=1 ZENITH_FIND_QUERY=palette` opens the sheet for a screenshot.
+
 ## Language servers
 
 - Discovery is passive: a table plus a search of known locations. Zenith never downloads,
@@ -188,8 +205,8 @@ sheet. A branch is compared from its merge base with `HEAD`, not from the tip.
   items, but methods called from the parent need `pub(super)`.
 - Feature modules are children, so `use super::*` brings the window's imports; core imports
   are explicit `zenith_core::...`.
-- `ReviewState`, `TreeState`, `Sheets`, `LspState`, `BloomState` are state groups, not
-  widgets. Keep the state beside its methods.
+- `ReviewState`, `FindState`, `TreeState`, `Sheets`, `LspState`, `BloomState` are state
+  groups, not widgets. Keep the state beside its methods.
 - Macro-heavy formatting in `typography.rs` has `#[rustfmt::skip]` on the typeface ranking;
   do not let rustfmt turn one face per line into six.
 - The smoke harness is not an assertion suite. Tests live beside the domain logic; UI

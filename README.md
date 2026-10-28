@@ -29,7 +29,7 @@ Changed lines carry more weight, and the code they replaced lifts in place when 
 
 ## Reading
 
-Vim motions as far as a reader needs them: `j k`, `w b e`, `gg G`, `%`, `gd` to a definition, `ctrl-o` back. Code is set in mono, comments in serif, chrome in a humanist sans. Six complete themes, rendered Markdown, a focus lens and distilled reading. Nothing is written into the project.
+Vim motions as far as a reader needs them: `j k`, `w b e`, `gg G`, `%`, `gd` to a definition, `ctrl-o` back. Search the whole folder with `⌘⇧F`; matches are grouped by file and open at the line. Code is set in mono, comments in serif, chrome in a humanist sans. Six complete themes, rendered Markdown, a focus lens and distilled reading. Nothing is written into the project.
 
 ## Read more
 

@@ -55,6 +55,9 @@ lighter editor; it is a different reading surface.
   commit, staged index or the last commit; a branch is compared from its merge base.
   Changed lines are set in a heavier face and the code they replaced lifts in place.
   Untracked source is included; ignored noise, including dependency trees, is not.
+- Searches the contents of every indexed file with an embedded ripgrep engine: regex,
+  smart case, results grouped by file. There is no search index; each query reads the
+  folder's snapshot and a background thread keeps typing responsive.
 - Language-server support is discovery and navigation only: definition and document
   symbols; no diagnostics, completion, hover or edits. Servers start implicitly unless
   disabled in settings, and are never downloaded, bundled or installed.
