@@ -99,10 +99,10 @@ pub(super) const LAUNCH_COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         action: Launch::Reload,
-        label: "Reload file",
+        label: "Reload from disk",
         group: LaunchGroup::Here,
         shortcut: Some("r"),
-        keywords: "reload refresh disk reread",
+        keywords: "reload refresh disk reread index tree folders modules",
     },
     CommandSpec {
         action: Launch::Index,
@@ -334,7 +334,7 @@ pub(super) const HELP_GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("- =", "smaller / larger type"),
             ("#", "toggle line numbers"),
             ("x", "render markdown, or its source"),
-            ("r", "re-read from disk"),
+            ("r", "re-read the page and the file index"),
         ],
     ),
     (

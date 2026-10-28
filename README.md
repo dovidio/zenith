@@ -179,6 +179,10 @@ each folder. Opening a project puts you in front of its README, not the first fi
 alphabetically. Nothing is catalogued or remembered beyond the folder itself: there is no
 collection to curate, no workspace to configure.
 
+The index is a snapshot, not a watcher. When another tool adds a module or a folder, `r`
+re-reads the open file and rescans the folder in the background; the page, caret, review
+and open folders stay where they are.
+
 ## Following the code
 
 `gd` goes to the definition of the name under the cursor; `ctrl-o` comes back. That is the

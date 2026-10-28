@@ -273,6 +273,8 @@ struct FolderLoad {
     rx: std::sync::mpsc::Receiver<std::io::Result<folder::Folder>>,
     root: PathBuf,
     focus: Option<PathBuf>,
+    /// A rescan of an already-open folder, which must not move the reader.
+    refresh: bool,
 }
 
 /// A review being read from git in the background.
@@ -654,24 +656,50 @@ impl Zenith {
         // relative path remembered in the session breaks the next time zenith is launched
         // from somewhere else.
         let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        let root = root.as_path();
-        let name = root
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| root.to_string_lossy().to_string());
-        let cfg = self.store.config.clone();
 
-        self.store.session.last_root = Some(root.to_path_buf());
+        self.store.session.last_root = Some(root.clone());
         self.leave_review();
         self.folder = None;
         self.expanded.clear();
         self.expanded.insert(String::new());
         self.store.save_session();
 
-        self.status = format!("reading {name}…");
+        self.walk_folder(root, focus, false);
+    }
 
-        let root_for_thread = root.to_path_buf();
-        let name_for_thread = name.clone();
+    /// Re-read the folder's file list without moving the reader.
+    ///
+    /// The index is a snapshot taken when the folder opens. During a long reading session
+    /// files and modules are added by other tools; `r` asks for a fresh snapshot and keeps
+    /// the page, caret, review and expanded folders exactly where they are.
+    fn refresh_index(&mut self) {
+        let Some(root) = self.folder.as_ref().map(|f| f.root.clone()) else {
+            return;
+        };
+        if self.folder_load.is_some() {
+            self.status = "the folder is already being read".into();
+            return;
+        }
+        self.walk_folder(root, None, true);
+    }
+
+    /// Start a background walk. `open_folder` clears the old index first; a refresh does
+    /// not, because the old one is what the reader is still looking at.
+    fn walk_folder(&mut self, root: PathBuf, focus: Option<PathBuf>, refresh: bool) {
+        let name = root
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| root.to_string_lossy().to_string());
+        let cfg = self.store.config.clone();
+
+        self.status = if refresh {
+            format!("refreshing {name}…")
+        } else {
+            format!("reading {name}…")
+        };
+
+        let root_for_thread = root.clone();
+        let name_for_thread = name;
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let t = std::time::Instant::now();
@@ -694,8 +722,9 @@ impl Zenith {
         });
         self.folder_load = Some(FolderLoad {
             rx,
-            root: root.to_path_buf(),
+            root,
             focus,
+            refresh,
         });
     }
 
@@ -1151,6 +1180,9 @@ impl Zenith {
     }
 
     fn reload(&mut self) {
+        // `r` means "re-read from disk", and the index is part of what is on disk. The
+        // rescan runs in the background; the file is re-read now.
+        self.refresh_index();
         if let Some(path) = self.open.as_ref().map(|o| o.path.clone()) {
             let caret = self.caret;
             self.open_file(&path);
@@ -1823,7 +1855,7 @@ impl Zenith {
             | Launch::CopyBlock
             | Launch::CloseFile
             | Launch::Bookmark
-            | Launch::Reload => self.open.is_some(),
+            | Launch::Reload => self.open.is_some() || self.folder.is_some(),
             Launch::Markdown => self.open.as_ref().is_some_and(|o| o.prose),
             Launch::Index => self.folder.is_some(),
             Launch::OpenFolder => true,
@@ -2224,8 +2256,43 @@ impl Zenith {
                 Ok(Ok(folder)) => {
                     let focus = load.focus.clone();
                     let root = load.root.clone();
+                    let refresh = load.refresh;
                     self.folder_load = None;
                     self.folder = Some(folder);
+                    if refresh {
+                        // The reader's page, caret and review stay put. Only the index
+                        // changed; bring the current file's relative path up to date and
+                        // keep it visible if it still belongs to the folder.
+                        let path = self.open.as_ref().map(|o| o.path.clone());
+                        let mut in_index = false;
+                        if let Some(path) = &path {
+                            if let Some(rel) = self
+                                .folder
+                                .as_ref()
+                                .and_then(|f| f.file(path).map(|e| e.rel.clone()))
+                            {
+                                if let Some(open) = self.open.as_mut() {
+                                    open.rel = rel;
+                                    self.title_dirty = true;
+                                }
+                                in_index = true;
+                                self.expand_to(path);
+                            }
+                        }
+                        self.start_discovery();
+                        let count = self.folder.as_ref().map_or(0, |f| f.files.len());
+                        self.status = match &self.open {
+                            Some(open) if open.path.starts_with(&root) && !in_index => {
+                                "index refreshed · this file is no longer in it".into()
+                            }
+                            _ => format!(
+                                "index refreshed · {} file{}",
+                                count,
+                                if count == 1 { "" } else { "s" }
+                            ),
+                        };
+                        return;
+                    }
                     // A review started before the folder walk finished owns the page.
                     // Opening the walk's first doorway here would clear it by accident.
                     let keep_review = self.session.changes.is_some() || self.session.load.is_some();
@@ -2274,8 +2341,13 @@ impl Zenith {
                 }
                 Ok(Err(e)) => {
                     let root = load.root.clone();
+                    let refresh = load.refresh;
                     self.folder_load = None;
-                    self.status = format!("cannot read {root:?}: {e}");
+                    self.status = if refresh {
+                        format!("cannot refresh the index for {root:?}: {e}")
+                    } else {
+                        format!("cannot read {root:?}: {e}")
+                    };
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(120));

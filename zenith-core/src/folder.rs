@@ -507,6 +507,20 @@ mod tests {
     }
 
     #[test]
+    fn a_second_walk_sees_files_and_folders_added_after_the_first() {
+        let dir = TempDir::new("folder-refresh");
+        dir.write("src/main.rs", "fn main() {}\n");
+        assert_eq!(rels(&folder_at(&dir, true, false)), ["src/main.rs"]);
+
+        dir.write("src/new/mod.rs", "pub fn added() {}\n");
+        assert_eq!(
+            rels(&folder_at(&dir, true, false)),
+            ["src/main.rs", "src/new/mod.rs"],
+            "a second walk is a new snapshot, not a cached one"
+        );
+    }
+
+    #[test]
     fn an_empty_source_file_is_still_source() {
         let dir = TempDir::new("folder-empty");
         dir.write("empty.rs", "");
