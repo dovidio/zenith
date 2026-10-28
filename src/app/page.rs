@@ -7,6 +7,77 @@ use super::*;
 
 impl Zenith {
     /// The page itself: a title block, then the text, typeset.
+    /// The reading room, empty: one door, no key legend.
+    fn empty_page(&mut self, ui: &mut Ui) {
+        let pal = self.palette;
+        // The reading room, empty. One door, no key legend: silence in an empty
+        // room is a dead end, but a list of shortcuts is not an invitation either.
+        let rect = ui.max_rect();
+        self.page_center_x = rect.center().x;
+        let title = self.typo.prose_id(22.0 * self.scale);
+        let small = self.typo.ui_id(13.0 * self.scale);
+        ui.painter().text(
+            rect.center() - vec2(0.0, 42.0),
+            Align2::CENTER_CENTER,
+            "Zenith",
+            title,
+            pal.ink,
+        );
+        ui.painter().text(
+            rect.center() - vec2(0.0, 12.0),
+            Align2::CENTER_CENTER,
+            "a reading room for source code",
+            small.clone(),
+            pal.ink_soft,
+        );
+        let label = "Open a folder…";
+        let galley = ui
+            .painter()
+            .layout_no_wrap(label.to_string(), small.clone(), pal.ink);
+        let row = Rect::from_center_size(
+            rect.center() + vec2(0.0, 38.0),
+            vec2(galley.size().x + 28.0, 28.0),
+        );
+        let response = ui.interact(row, ui.id().with("open-folder"), Sense::click());
+        if response.hovered() {
+            ui.painter()
+                .rect_filled(row, CornerRadius::same(ROW_RADIUS), pal.selection);
+        }
+        ui.painter().galley(
+            Pos2::new(
+                row.center().x - galley.size().x * 0.5,
+                row.center().y - galley.size().y * 0.5,
+            ),
+            galley,
+            pal.ink,
+        );
+        if response.clicked() {
+            self.pick_folder();
+        }
+    }
+
+    /// A file that could not be read: the path, and the reason, and nothing else.
+    fn error_page(&mut self, ui: &mut Ui, rel: String, err: String) {
+        let pal = self.palette;
+        let rect = ui.max_rect();
+        let font = self.typo.prose_id(18.0 * self.scale);
+        let small = self.typo.ui_id(13.0 * self.scale);
+        ui.painter().text(
+            rect.center() - vec2(0.0, 14.0),
+            Align2::CENTER_CENTER,
+            rel,
+            font,
+            pal.ink,
+        );
+        ui.painter().text(
+            rect.center() + vec2(0.0, 20.0),
+            Align2::CENTER_CENTER,
+            err,
+            small,
+            pal.ink_soft,
+        );
+    }
+
     pub(super) fn page(&mut self, ui: &mut Ui) {
         let pal = self.palette;
         let ctx = ui.ctx().clone();
@@ -27,71 +98,14 @@ impl Zenith {
         let style = self.style();
 
         let Some(open) = &self.open else {
-            // The reading room, empty. One door, no key legend: silence in an empty
-            // room is a dead end, but a list of shortcuts is not an invitation either.
-            let rect = ui.max_rect();
-            self.page_center_x = rect.center().x;
-            let title = self.typo.prose_id(22.0 * self.scale);
-            let small = self.typo.ui_id(13.0 * self.scale);
-            ui.painter().text(
-                rect.center() - vec2(0.0, 42.0),
-                Align2::CENTER_CENTER,
-                "Zenith",
-                title,
-                pal.ink,
-            );
-            ui.painter().text(
-                rect.center() - vec2(0.0, 12.0),
-                Align2::CENTER_CENTER,
-                "a reading room for source code",
-                small.clone(),
-                pal.ink_soft,
-            );
-            let label = "Open a folder…";
-            let galley = ui
-                .painter()
-                .layout_no_wrap(label.to_string(), small.clone(), pal.ink);
-            let row = Rect::from_center_size(
-                rect.center() + vec2(0.0, 38.0),
-                vec2(galley.size().x + 28.0, 28.0),
-            );
-            let response = ui.interact(row, ui.id().with("open-folder"), Sense::click());
-            if response.hovered() {
-                ui.painter()
-                    .rect_filled(row, CornerRadius::same(ROW_RADIUS), pal.selection);
-            }
-            ui.painter().galley(
-                Pos2::new(
-                    row.center().x - galley.size().x * 0.5,
-                    row.center().y - galley.size().y * 0.5,
-                ),
-                galley,
-                pal.ink,
-            );
-            if response.clicked() {
-                self.pick_folder();
-            }
+            self.empty_page(ui);
             return;
         };
 
         if let Some(err) = &open.error {
-            let rect = ui.max_rect();
-            let font = self.typo.prose_id(18.0 * self.scale);
-            let small = self.typo.ui_id(13.0 * self.scale);
-            ui.painter().text(
-                rect.center() - vec2(0.0, 14.0),
-                Align2::CENTER_CENTER,
-                open.rel.clone(),
-                font,
-                pal.ink,
-            );
-            ui.painter().text(
-                rect.center() + vec2(0.0, 20.0),
-                Align2::CENTER_CENTER,
-                err.clone(),
-                small,
-                pal.ink_soft,
-            );
+            let rel = open.rel.clone();
+            let err = err.clone();
+            self.error_page(ui, rel, err);
             return;
         }
         let Some(laid) = &open.laid else { return };
@@ -129,54 +143,8 @@ impl Zenith {
         let remember = self.store.position_of(&open.path);
         let view_top = self.scroll;
         let view_h = self.view_h;
-        let mut cursor_hint: Option<usize> = None;
-        // The furthest the page can scroll, which is a fact about the content, not about
-        // what some motion would like. Asking for more than this is how the page ended up
-        // straining against the end of the file: the request is granted for a frame (the
-        // content is drawn shifted) and then corrected, so the bottom flickers. Nothing
-        // below may exceed this.
-        let max_scroll = (laid.total - view_h).max(0.0);
-
-        let target: Option<f32> = match pending {
-            Pending::None => None,
-            Pending::Restore => {
-                let y = laid.y_for_frac(remember);
-                // The page comes back where it was left, and so does the cursor: a
-                // reader returns to a *place*, not to a byte offset.
-                cursor_hint = Some(laid.line_at(y));
-                Some(y)
-            }
-            Pending::Centre(line) => {
-                Some((laid.top_of(line) + laid.height_of(line) * 0.5 - view_h * 0.5).max(0.0))
-            }
-            Pending::Top(line) => Some(laid.top_of(line).max(0.0)),
-            Pending::Bottom(line) => {
-                Some((laid.top_of(line) + laid.height_of(line) - view_h).max(0.0))
-            }
-            // `gg` and `G` mean the ends of the *page*, not the ends of the text: the
-            // title block sits above the first line, and stopping short of it leaves a
-            // few pixels that cannot be scrolled to on purpose but can by hand.
-            Pending::Start => Some(0.0),
-            Pending::End => Some(max_scroll),
-            Pending::Reveal(line) => {
-                let pad = laid.row_h * 2.5;
-                let top = laid.top_of(line);
-                let bottom = top + laid.height_of(line);
-                if top < view_top + pad {
-                    Some((top - pad).max(0.0))
-                } else if bottom > view_top + view_h - pad {
-                    Some(bottom + pad - view_h)
-                } else {
-                    None // already in view: do not move the page under the reader
-                }
-            }
-        }
-        // Clamp, then ignore a request that would move the page by less than a pixel:
-        // a sub-pixel nudge per frame reads as a shimmer, and it also keeps the app
-        // repainting forever at the end of a file.
-        .map(|y| y.clamp(0.0, max_scroll))
-        .filter(|y| view_h > 1.0 && (y - self.scroll).abs() >= 0.75);
-
+        let (target, cursor_hint) =
+            scroll_target(pending, laid, remember, view_top, view_h, self.scroll);
         let mut review_hover: Option<usize> = None;
         let mut area = ScrollArea::vertical()
             .id_salt("zenith-page")
@@ -420,6 +388,66 @@ impl Zenith {
             None => 0.0,
         }
     }
+}
+
+/// Turn a requested movement into a scroll offset, clamped to the page.
+///
+/// Returns the target offset and, for a restored position, the line the caret should
+/// land on. Pure: the page decides what to do with the answer.
+fn scroll_target(
+    pending: Pending,
+    laid: &Laid,
+    remember: f32,
+    view_top: f32,
+    view_h: f32,
+    current_scroll: f32,
+) -> (Option<f32>, Option<usize>) {
+    let mut cursor_hint: Option<usize> = None;
+    // The furthest the page can scroll, which is a fact about the content, not about
+    // what some motion would like. Asking for more than this is how the page ended up
+    // straining against the end of the file: the request is granted for a frame (the
+    // content is drawn shifted) and then corrected, so the bottom flickers. Nothing
+    // below may exceed this.
+    let max_scroll = (laid.total - view_h).max(0.0);
+
+    let target: Option<f32> = match pending {
+        Pending::None => None,
+        Pending::Restore => {
+            let y = laid.y_for_frac(remember);
+            // The page comes back where it was left, and so does the cursor: a
+            // reader returns to a *place*, not to a byte offset.
+            cursor_hint = Some(laid.line_at(y));
+            Some(y)
+        }
+        Pending::Centre(line) => {
+            Some((laid.top_of(line) + laid.height_of(line) * 0.5 - view_h * 0.5).max(0.0))
+        }
+        Pending::Top(line) => Some(laid.top_of(line).max(0.0)),
+        Pending::Bottom(line) => Some((laid.top_of(line) + laid.height_of(line) - view_h).max(0.0)),
+        // `gg` and `G` mean the ends of the *page*, not the ends of the text: the
+        // title block sits above the first line, and stopping short of it leaves a
+        // few pixels that cannot be scrolled to on purpose but can by hand.
+        Pending::Start => Some(0.0),
+        Pending::End => Some(max_scroll),
+        Pending::Reveal(line) => {
+            let pad = laid.row_h * 2.5;
+            let top = laid.top_of(line);
+            let bottom = top + laid.height_of(line);
+            if top < view_top + pad {
+                Some((top - pad).max(0.0))
+            } else if bottom > view_top + view_h - pad {
+                Some(bottom + pad - view_h)
+            } else {
+                None // already in view: do not move the page under the reader
+            }
+        }
+    }
+    // Clamp, then ignore a request that would move the page by less than a pixel:
+    // a sub-pixel nudge per frame reads as a shimmer, and it also keeps the app
+    // repainting forever at the end of a file.
+    .map(|y| y.clamp(0.0, max_scroll))
+    .filter(|y| view_h > 1.0 && (y - current_scroll).abs() >= 0.75);
+    (target, cursor_hint)
 }
 
 pub(super) fn focus_block(open: &Open, cursor: usize) -> (usize, usize) {
