@@ -1238,7 +1238,7 @@ impl Zenith {
         }
         ui.add_space(10.0);
 
-        if self.lsp_kinds.is_empty() {
+        if self.lsp.kinds.is_empty() {
             ui.label(
                 RichText::new(
                     "nothing in this folder speaks a language zenith \
@@ -1248,7 +1248,7 @@ impl Zenith {
                 .color(pal.ink_soft),
             );
         }
-        for kind in self.lsp_kinds.clone() {
+        for kind in self.lsp.kinds.clone() {
             let (state, why) = self.server_state(kind.id);
             ui.horizontal(|ui| {
                 ui.label(
@@ -1267,6 +1267,7 @@ impl Zenith {
                 ui.label(RichText::new(why).font(small.clone()).color(pal.ink_soft));
             }
             let discovered = self
+                .lsp
                 .available
                 .iter()
                 .find(|a| a.kind.id == kind.id)
@@ -1300,9 +1301,9 @@ impl Zenith {
             );
             if edit.changed() {
                 changed = true;
-                self.lsp_path_dirty.insert(kind.id.to_string());
+                self.lsp.path_dirty.insert(kind.id.to_string());
             }
-            if edit.lost_focus() && self.lsp_path_dirty.remove(kind.id) {
+            if edit.lost_focus() && self.lsp.path_dirty.remove(kind.id) {
                 // Finishing the edit restarts that language's
                 // server, so the new path is the one in use. A
                 // field visited and left alone is not an edit.
@@ -1689,16 +1690,16 @@ impl Zenith {
             // Not running is not the same as not found: nothing was looked for.
             return ("off".into(), None);
         }
-        if let Some(session) = self.servers.iter().find(|s| s.id() == id) {
+        if let Some(session) = self.lsp.servers.iter().find(|s| s.id() == id) {
             return match session.state() {
                 lsp::State::Starting => ("starting".into(), None),
                 lsp::State::Ready => ("ready".into(), None),
                 lsp::State::Failed(why) => ("failed".into(), Some(why.clone())),
             };
         }
-        if self.available.iter().any(|a| a.kind.id == id) {
+        if self.lsp.available.iter().any(|a| a.kind.id == id) {
             ("found".into(), None)
-        } else if self.discovering.is_some() {
+        } else if self.lsp.discovering.is_some() {
             ("looking…".into(), None)
         } else {
             ("not found".into(), None)
@@ -1708,17 +1709,18 @@ impl Zenith {
     /// Stop a language's server so the next question starts it again — with the path the
     /// reader has just written down.
     pub(super) fn restart_server(&mut self, id: &str) {
-        for session in self.servers.iter_mut().filter(|s| s.id() == id) {
+        for session in self.lsp.servers.iter_mut().filter(|s| s.id() == id) {
             session.stop();
         }
-        self.servers.retain(|s| s.id() != id);
-        self.available.retain(|a| a.kind.id != id);
-        self.outline_asked = None;
+        self.lsp.servers.retain(|s| s.id() != id);
+        self.lsp.available.retain(|a| a.kind.id != id);
+        self.lsp.outline_asked = None;
         let Some(root) = self.folder.as_ref().map(|f| f.root.clone()) else {
             return;
         };
         let kinds: Vec<&'static lsp::servers::Kind> = self
-            .lsp_kinds
+            .lsp
+            .kinds
             .iter()
             .filter(|k| k.id == id)
             .copied()

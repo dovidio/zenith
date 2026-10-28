@@ -84,8 +84,8 @@ impl Zenith {
         self.session.hover = None;
         self.session.peek = None;
         self.session.return_to = None;
-        self.bloom_open = true;
-        self.bloom_last_touch = 0.0;
+        self.bloom.open = true;
+        self.bloom.last_touch = 0.0;
         self.session.base = base.clone();
         self.session.show_base = false;
         self.session.error.clear();
@@ -146,12 +146,12 @@ impl Zenith {
             )
             .show(ui, |ui| {
                 let now = ui.ctx().input(|i| i.time);
-                if self.bloom_last_touch <= 0.0 {
-                    self.bloom_last_touch = now;
+                if self.bloom.last_touch <= 0.0 {
+                    self.bloom.last_touch = now;
                 }
                 let open_t = ui.ctx().animate_bool_with_time(
                     egui::Id::new("zenith-review-bloom"),
-                    self.bloom_open,
+                    self.bloom.open,
                     0.18,
                 );
                 let rect = ui.max_rect();

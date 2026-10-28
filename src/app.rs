@@ -31,6 +31,7 @@ use crate::vim;
 
 mod launch;
 mod lsp_ui;
+use self::lsp_ui::LspState;
 mod page;
 mod review;
 mod sheets;
@@ -374,26 +375,12 @@ pub struct Zenith {
     folder_load: Option<FolderLoad>,
     /// The review: the branch, the file, the base, and where the reader was.
     session: ReviewState,
-    /// Every language server found on this machine for the languages this folder holds.
-    available: Vec<lsp::servers::Available>,
-    /// The languages this folder holds that zenith has a server for, found once per
-    /// folder so the settings panel can list them without walking the tree every frame.
-    lsp_kinds: Vec<&'static lsp::servers::Kind>,
-    /// Languages whose server path has been typed into but not yet left: the server is
-    /// restarted when the reader finishes, not on every keystroke.
-    lsp_path_dirty: std::collections::BTreeSet<String>,
+    /// The language servers: what was found, what is running, and the question in flight.
+    lsp: LspState,
     /// The theme tiles' sample, toned once and painted six times.
     theme_preview: Option<Vec<SampleLine>>,
     /// When "restore defaults" was first clicked, so the second click has to be meant.
     reset_asked: Option<f64>,
-    /// A search for those servers, running in the background.
-    discovering: Option<Discovery>,
-    /// Servers that have been started, at most one per language and folder.
-    servers: Vec<lsp::Session>,
-    /// A navigation request on its way to a server.
-    nav: Option<Nav>,
-    /// The document whose outline has been asked of a server.
-    outline_asked: Option<PathBuf>,
     /// The message the strip is currently showing, and when it started showing it.
     shown: String,
     shown_at: f64,
@@ -401,14 +388,6 @@ pub struct Zenith {
     /// saying it again rather than as saying nothing.
     status_seq: u64,
     shown_seq: u64,
-    /// The debug-only `ZENITH_GOTO` hook has fired.
-    #[cfg(debug_assertions)]
-    nav_tried: bool,
-    /// Frames to let pass after a landing, so the page can act on it before the report.
-    #[cfg(debug_assertions)]
-    nav_settled: u32,
-    #[cfg(debug_assertions)]
-    then_done: bool,
     /// The folder tree: rows, keyboard focus, and the row held by identity.
     tree: TreeState,
     /// The window's title needs telling what is open.
@@ -426,12 +405,8 @@ pub struct Zenith {
     show_outline: bool,
     /// The summoned sheets: launcher, find, settings.
     sheets: Sheets,
-    /// The bloom is the one piece of chrome that offers itself. Its state is frame
-    /// timing, not taste; `started` at -1 until the first frame can measure time.
-    bloom_open: bool,
-    bloom_started: f64,
-    bloom_last_touch: f64,
-    bloom_hover_since: Option<f64>,
+    /// The bloom dot and its four words.
+    bloom: BloomState,
     page_center_x: f32,
 
     /// A pending movement of the page, resolved once the layout is known.
@@ -450,6 +425,16 @@ pub struct Zenith {
     last_saved: f64,
 
     smoke: Option<Smoke>,
+}
+
+/// The bloom's timing: open or folded, when it was first shown, and when it was last
+/// touched. `started` is -1 until the first frame can measure time.
+#[derive(Default)]
+struct BloomState {
+    open: bool,
+    started: f64,
+    last_touch: f64,
+    hover_since: Option<f64>,
 }
 
 /// What `q` means while a review is open.
@@ -537,25 +522,13 @@ impl Zenith {
             loading: None,
             folder_load: None,
             tree: TreeState::default(),
-            available: Vec::new(),
-            lsp_kinds: Vec::new(),
-            lsp_path_dirty: std::collections::BTreeSet::new(),
+            lsp: LspState::default(),
             theme_preview: None,
             reset_asked: None,
-            discovering: None,
-            servers: Vec::new(),
-            nav: None,
-            outline_asked: None,
             shown: String::new(),
             shown_at: 0.0,
             status_seq: 0,
             shown_seq: 0,
-            #[cfg(debug_assertions)]
-            nav_tried: false,
-            #[cfg(debug_assertions)]
-            nav_settled: 0,
-            #[cfg(debug_assertions)]
-            then_done: false,
             title_dirty: true,
             chrome_strip,
             jumps: Vec::new(),
@@ -567,10 +540,11 @@ impl Zenith {
                 settings_rail_focus: true,
                 ..Sheets::default()
             },
-            bloom_open: true,
-            bloom_started: -1.0,
-            bloom_last_touch: 0.0,
-            bloom_hover_since: None,
+            bloom: BloomState {
+                open: true,
+                started: -1.0,
+                ..BloomState::default()
+            },
             page_center_x: 0.0,
             pending: Pending::None,
             scroll: 0.0,
@@ -839,13 +813,13 @@ impl Zenith {
         if self.open.is_none() {
             // The first page earns the words once; after that the dot is the mark and
             // the words are there for a reader who reaches for it.
-            self.bloom_open = true;
-            self.bloom_last_touch = 0.0;
+            self.bloom.open = true;
+            self.bloom.last_touch = 0.0;
         }
-        self.nav = None;
+        self.lsp.nav = None;
         self.remember_position();
         if self.open.as_ref().map(|o| o.path.as_path()) != Some(path) {
-            self.outline_asked = None;
+            self.lsp.outline_asked = None;
         }
         let rel = self
             .folder
@@ -1012,19 +986,19 @@ impl Zenith {
     /// pointer is on them, then fold away. The dot and line are the app's only motion.
     fn bloom_hover(&mut self, hovered: bool, now: f64) {
         if hovered {
-            self.bloom_last_touch = now;
-            if self.bloom_open {
-                self.bloom_hover_since = None;
+            self.bloom.last_touch = now;
+            if self.bloom.open {
+                self.bloom.hover_since = None;
             } else {
-                let since = *self.bloom_hover_since.get_or_insert(now);
+                let since = *self.bloom.hover_since.get_or_insert(now);
                 if now - since > 0.16 {
-                    self.bloom_open = true;
+                    self.bloom.open = true;
                 }
             }
         } else {
-            self.bloom_hover_since = None;
-            if self.bloom_open && now - self.bloom_last_touch > 2.6 {
-                self.bloom_open = false;
+            self.bloom.hover_since = None;
+            if self.bloom.open && now - self.bloom.last_touch > 2.6 {
+                self.bloom.open = false;
             }
         }
     }
@@ -1075,14 +1049,14 @@ impl Zenith {
         let dot_hover = dot.hovered();
         let mut hovered = dot_hover;
         if dot.clicked() {
-            self.bloom_open = !self.bloom_open;
-            self.bloom_last_touch = now;
-            if self.bloom_open {
-                self.bloom_hover_since = None;
+            self.bloom.open = !self.bloom.open;
+            self.bloom.last_touch = now;
+            if self.bloom.open {
+                self.bloom.hover_since = None;
             } else {
                 // A click that folds the words must not be undone by the pointer that
                 // is still resting on the dot; it re-arms when the pointer leaves.
-                self.bloom_hover_since = Some(now + 10.0);
+                self.bloom.hover_since = Some(now + 10.0);
             }
         }
         let dot_ink = theme::alpha(pal.accent, (alpha * 255.0) as u8);
@@ -1113,9 +1087,9 @@ impl Zenith {
             let word_hover = response.hovered();
             hovered |= word_hover;
             if response.clicked() {
-                self.bloom_open = false;
-                self.bloom_last_touch = now;
-                self.bloom_hover_since = Some(now + 10.0);
+                self.bloom.open = false;
+                self.bloom.last_touch = now;
+                self.bloom.hover_since = Some(now + 10.0);
                 self.summon(i);
             }
             let color = if word_hover { pal.ink } else { pal.ink_soft };
@@ -1402,7 +1376,7 @@ impl Zenith {
                     self.show_panels = false;
                     self.show_outline = false;
                     self.tree.focus = false;
-                    self.bloom_open = false;
+                    self.bloom.open = false;
                     self.chords.clear();
                     continue;
                 }
@@ -1801,7 +1775,7 @@ impl Zenith {
 
     fn close_file(&mut self) {
         self.remember_position();
-        self.nav = None;
+        self.lsp.nav = None;
         let here = self.open.as_ref().map(|o| o.path.clone());
         let back = (0..self.jump_pos.min(self.jumps.len()))
             .rev()
@@ -1982,7 +1956,7 @@ impl Zenith {
     fn motion(&mut self, motion: vim::Motion) {
         // Moving is how a reader says they are no longer waiting: a slow answer must not
         // arrive later and carry the page off somewhere.
-        self.nav = None;
+        self.lsp.nav = None;
         let Some(open) = &self.open else { return };
         let next = vim::resolve(&open.doc, self.caret, motion);
         if next != self.caret {
@@ -2500,7 +2474,7 @@ impl Zenith {
         self.dev_nav(ctx);
         #[cfg(debug_assertions)]
         self.forced_notice();
-        if self.discovering.is_some() || self.nav.is_some() {
+        if self.lsp.discovering.is_some() || self.lsp.nav.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(60));
         }
     }
@@ -2754,21 +2728,21 @@ impl Zenith {
             || self.sheets.search_open
             || self.session.show_base;
         if surfaces {
-            self.bloom_open = false;
+            self.bloom.open = false;
             return;
         }
         let now = ctx.input(|i| i.time);
-        if self.bloom_started < 0.0 {
-            self.bloom_started = now;
-            self.bloom_last_touch = now;
+        if self.bloom.started < 0.0 {
+            self.bloom.started = now;
+            self.bloom.last_touch = now;
         }
-        if self.bloom_last_touch <= 0.0 {
-            self.bloom_last_touch = now;
+        if self.bloom.last_touch <= 0.0 {
+            self.bloom.last_touch = now;
         }
         let at_top = self.scroll < 4.0;
         if !at_top {
-            self.bloom_open = false;
-            self.bloom_hover_since = None;
+            self.bloom.open = false;
+            self.bloom.hover_since = None;
         }
 
         let screen = ctx.content_rect();
@@ -2784,7 +2758,7 @@ impl Zenith {
         if vis_t <= 0.001 {
             return;
         }
-        let open_t = ctx.animate_bool_with_time(dot_id.with("open"), self.bloom_open, 0.18);
+        let open_t = ctx.animate_bool_with_time(dot_id.with("open"), self.bloom.open, 0.18);
         let area = Rect::from_center_size(
             Pos2::new(cx, top + 7.0),
             vec2(
@@ -2803,15 +2777,15 @@ impl Zenith {
         if at_top {
             self.bloom_hover(hovered, now);
         }
-        if self.bloom_open
+        if self.bloom.open
             && ctx.input(|i| i.pointer.primary_clicked())
             && ctx
                 .input(|i| i.pointer.interact_pos())
                 .is_some_and(|p| !area.contains(p))
         {
-            self.bloom_open = false;
-            self.bloom_last_touch = now;
-            self.bloom_hover_since = Some(now + 10.0);
+            self.bloom.open = false;
+            self.bloom.last_touch = now;
+            self.bloom.hover_since = Some(now + 10.0);
         }
     }
 

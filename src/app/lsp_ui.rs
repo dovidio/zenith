@@ -6,6 +6,25 @@
 
 use super::*;
 
+/// Everything the language-server layer owns: discovery results, running sessions, the
+/// one navigation in flight, and the outline that was asked for.
+#[derive(Default)]
+pub(super) struct LspState {
+    pub(super) available: Vec<lsp::servers::Available>,
+    pub(super) kinds: Vec<&'static lsp::servers::Kind>,
+    pub(super) path_dirty: std::collections::BTreeSet<String>,
+    pub(super) discovering: Option<Discovery>,
+    pub(super) servers: Vec<lsp::Session>,
+    pub(super) nav: Option<Nav>,
+    pub(super) outline_asked: Option<PathBuf>,
+    #[cfg(debug_assertions)]
+    pub(super) nav_tried: bool,
+    #[cfg(debug_assertions)]
+    pub(super) nav_settled: u32,
+    #[cfg(debug_assertions)]
+    pub(super) then_done: bool,
+}
+
 impl Zenith {
     /// Find the servers for the languages in this folder, in the background.
     ///
@@ -14,8 +33,8 @@ impl Zenith {
     pub(super) fn start_discovery(&mut self) {
         // The languages are a fact about the folder, so the panel can list them even
         // when the servers are turned off.
-        self.lsp_path_dirty.clear();
-        self.lsp_kinds = self
+        self.lsp.path_dirty.clear();
+        self.lsp.kinds = self
             .folder
             .as_ref()
             .map(|f| lsp::servers::kinds_among(f.files.iter().map(|e| e.path.as_path())))
@@ -26,22 +45,22 @@ impl Zenith {
         // rooted anywhere else is another folder's server and is let go.
         let enabled = self.store.config.lsp.enabled;
         let mut kept = Vec::new();
-        for mut session in std::mem::take(&mut self.servers) {
+        for mut session in std::mem::take(&mut self.lsp.servers) {
             if enabled && root.as_ref() == Some(&session.root) {
                 kept.push(session);
             } else {
                 session.stop();
             }
         }
-        self.servers = kept;
-        self.nav = None;
-        self.available.clear();
-        self.discovering = None;
+        self.lsp.servers = kept;
+        self.lsp.nav = None;
+        self.lsp.available.clear();
+        self.lsp.discovering = None;
         if !enabled {
             return;
         }
         let Some(root) = root else { return };
-        let kinds = self.lsp_kinds.clone();
+        let kinds = self.lsp.kinds.clone();
         if kinds.is_empty() {
             return;
         }
@@ -78,27 +97,29 @@ impl Zenith {
                 .collect();
             let _ = tx.send(found);
         });
-        self.discovering = Some(Discovery { rx, root });
+        self.lsp.discovering = Some(Discovery { rx, root });
     }
 
     pub(super) fn poll_discovery(&mut self) {
-        let Some(job) = &self.discovering else { return };
+        let Some(job) = &self.lsp.discovering else {
+            return;
+        };
         let root = job.root.clone();
         match job.rx.try_recv() {
             Ok(found) => {
-                self.discovering = None;
+                self.lsp.discovering = None;
                 // The reader may have opened another folder while this ran.
                 if self.folder.as_ref().map(|f| f.root.clone()) == Some(root) {
                     // Merged rather than replaced: a restart looks for one language, and
                     // must not forget the servers the others already have.
                     for server in found {
-                        self.available.retain(|a| a.kind.id != server.kind.id);
-                        self.available.push(server);
+                        self.lsp.available.retain(|a| a.kind.id != server.kind.id);
+                        self.lsp.available.push(server);
                     }
                 }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.discovering = None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.lsp.discovering = None,
         }
     }
 
@@ -123,37 +144,37 @@ impl Zenith {
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
         {
-            if !self.nav_tried && self.frame < 40 {
+            if !self.lsp.nav_tried && self.frame < 40 {
                 self.pending = Pending::Top(line.saturating_sub(1));
                 return;
             }
         }
         // Fire once discovery has had its chance — or once it is clear it never will,
         // which is what happens when servers are turned off.
-        if !self.nav_tried && (!self.available.is_empty() || self.frame > 90) {
-            self.nav_tried = true;
+        if !self.lsp.nav_tried && (!self.lsp.available.is_empty() || self.frame > 90) {
+            self.lsp.nav_tried = true;
             let mut parts = spec.rsplitn(3, ':');
             let col: usize = parts.next().and_then(|v| v.parse().ok()).unwrap_or(1);
             let line: usize = parts.next().and_then(|v| v.parse().ok()).unwrap_or(1);
             self.caret = vim::Caret::new(line.saturating_sub(1), col.saturating_sub(1));
             eprintln!(
                 "nav: asking at {line}:{col} — {} server(s) available, {} running",
-                self.available.len(),
-                self.servers.len()
+                self.lsp.available.len(),
+                self.lsp.servers.len()
             );
             self.goto_definition();
             eprintln!("nav: after gd — status {:?}", self.status);
         }
-        if self.nav_tried && self.nav.is_none() {
+        if self.lsp.nav_tried && self.lsp.nav.is_none() {
             // The page only acts on a landing when it draws, so let it draw first.
-            self.nav_settled += 1;
-            if self.nav_settled < 4 {
+            self.lsp.nav_settled += 1;
+            if self.lsp.nav_settled < 4 {
                 return;
             }
             // `ZENITH_THEN=back|close` presses the key that undoes a jump, so that the
             // way back can be checked without a hand on the keyboard.
-            if !self.then_done {
-                self.then_done = true;
+            if !self.lsp.then_done {
+                self.lsp.then_done = true;
                 match std::env::var("ZENITH_THEN").as_deref() {
                     Ok("back") => {
                         self.jump(-1);
@@ -179,12 +200,12 @@ impl Zenith {
                     }
                     _ => {}
                 }
-                self.nav_settled = 0;
+                self.lsp.nav_settled = 0;
                 return;
             }
             // Exit is not a shutdown here: the servers have to be let go first, or the
             // child processes outlive the test.
-            for session in &mut self.servers {
+            for session in &mut self.lsp.servers {
                 session.stop();
             }
             let outline: Vec<String> = self
@@ -225,8 +246,9 @@ impl Zenith {
             eprintln!(
                 "nav: gave up — status {:?}, nav {:?}, servers {:?}",
                 self.status,
-                self.nav.as_ref().map(|n| (n.id, n.tries)),
-                self.servers
+                self.lsp.nav.as_ref().map(|n| (n.id, n.tries)),
+                self.lsp
+                    .servers
                     .iter()
                     .map(|s| (s.id(), format!("{:?}", s.state())))
                     .collect::<Vec<_>>()
@@ -257,11 +279,11 @@ impl Zenith {
             self.status = "gd: no language server serves this kind of file".into();
             return;
         };
-        if self.discovering.is_some() && self.available.is_empty() {
+        if self.lsp.discovering.is_some() && self.lsp.available.is_empty() {
             self.status = format!("gd: still looking for a {} language server…", kind.title);
             return;
         }
-        if !self.available.iter().any(|a| a.kind.id == kind.id) {
+        if !self.lsp.available.iter().any(|a| a.kind.id == kind.id) {
             self.status = format!(
                 "gd: no {} language server on this machine — `zenith --lsp` says what it looks for",
                 kind.title
@@ -291,10 +313,11 @@ impl Zenith {
         let Some((kind, _)) = lsp::servers::kind_for(&path) else {
             return;
         };
-        if self.servers.iter().any(|s| s.id() == kind.id) {
+        if self.lsp.servers.iter().any(|s| s.id() == kind.id) {
             return;
         }
         let Some(found) = self
+            .lsp
             .available
             .iter()
             .find(|a| a.kind.id == kind.id)
@@ -308,7 +331,7 @@ impl Zenith {
             .map(|f| f.root.clone())
             .unwrap_or_else(|| crate::catalog::project_root(&path));
         match lsp::Session::start(kind, &found, &root) {
-            Ok(session) => self.servers.push(session),
+            Ok(session) => self.lsp.servers.push(session),
             Err(e) => self.status = format!("language server: {e}"),
         }
     }
@@ -318,17 +341,17 @@ impl Zenith {
         let Some((kind, _)) = lsp::servers::kind_for(&path) else {
             return;
         };
-        if self.discovering.is_some() && self.available.is_empty() {
+        if self.lsp.discovering.is_some() && self.lsp.available.is_empty() {
             self.status = format!("gd: still looking for a {} language server…", kind.title);
             return;
         }
         self.ensure_servers();
-        if !self.servers.iter().any(|s| s.id() == kind.id) {
+        if !self.lsp.servers.iter().any(|s| s.id() == kind.id) {
             self.status = format!("gd: no {} language server on this machine", kind.title);
             return;
         }
         self.status = format!("gd: asking {}…", kind.title);
-        self.nav = Some(Nav {
+        self.lsp.nav = Some(Nav {
             id: None,
             tries: 0,
             again_at: None,
@@ -342,12 +365,13 @@ impl Zenith {
 
     /// Send a waiting question once its server has finished its handshake.
     pub(super) fn advance_nav(&mut self) {
-        let Some(nav) = &self.nav else { return };
+        let Some(nav) = &self.lsp.nav else { return };
         let (root, path) = (nav.root.clone(), nav.path.clone());
         let (line, unit) = (nav.line, nav.unit);
         let (id, sent, again) = (nav.id, nav.sent_at, nav.again_at);
         let kind = lsp::servers::kind_for(&path).map(|(k, _)| k.id);
         let Some(index) = self
+            .lsp
             .servers
             .iter()
             .position(|s| s.root == root && Some(s.id()) == kind)
@@ -355,7 +379,7 @@ impl Zenith {
             // The server this question was waiting for is gone — it failed its handshake,
             // or the folder changed underneath it. Stop waiting: an unanswered question
             // must not keep asking for frames.
-            self.nav = None;
+            self.lsp.nav = None;
             return;
         };
 
@@ -364,22 +388,22 @@ impl Zenith {
         // honest one, and the strip says so.
         if id.is_some() {
             let waited = sent.map(|t| t.elapsed()).unwrap_or_default();
-            let idle = self.servers[index].is_idle();
+            let idle = self.lsp.servers[index].is_idle();
             let limit = if idle {
                 std::time::Duration::from_secs(5)
             } else {
                 std::time::Duration::from_secs(25)
             };
             if waited > limit {
-                let title = self.servers[index].kind.title;
-                self.nav = None;
+                let title = self.lsp.servers[index].kind.title;
+                self.lsp.nav = None;
                 if idle {
                     self.say("gd: the server did not answer");
                 } else {
                     self.say(format!("gd: {title} is still reading this project"));
                 }
             } else if !idle {
-                let title = self.servers[index].kind.title;
+                let title = self.lsp.servers[index].kind.title;
                 self.say(format!("gd: {title} is still reading this project…"));
             }
             return;
@@ -387,18 +411,18 @@ impl Zenith {
         if again.is_some_and(|t| t > std::time::Instant::now()) {
             return;
         }
-        if *self.servers[index].state() != lsp::State::Ready {
+        if *self.lsp.servers[index].state() != lsp::State::Ready {
             return;
         }
-        match self.servers[index].definition(&path, line as u32, unit) {
+        match self.lsp.servers[index].definition(&path, line as u32, unit) {
             Ok(id) => {
-                if let Some(nav) = &mut self.nav {
+                if let Some(nav) = &mut self.lsp.nav {
                     nav.id = Some(id);
                     nav.sent_at = Some(std::time::Instant::now());
                 }
             }
             Err(e) => {
-                self.nav = None;
+                self.lsp.nav = None;
                 self.say(format!("gd: {e}"));
             }
         }
@@ -415,11 +439,12 @@ impl Zenith {
         let Some(path) = self.open.as_ref().map(|o| o.path.clone()) else {
             return;
         };
-        if self.outline_asked.as_deref() == Some(path.as_path()) {
+        if self.lsp.outline_asked.as_deref() == Some(path.as_path()) {
             return;
         }
         let kind = lsp::servers::kind_for(&path).map(|(k, _)| k.id);
         let Some(session) = self
+            .lsp
             .servers
             .iter_mut()
             .find(|s| *s.state() == lsp::State::Ready && Some(s.id()) == kind)
@@ -427,20 +452,20 @@ impl Zenith {
             return;
         };
         if session.outline(&path).is_ok() {
-            self.outline_asked = Some(path);
+            self.lsp.outline_asked = Some(path);
         }
     }
 
     /// Take whatever the servers have said since the last frame.
     pub(super) fn poll_lsp(&mut self) {
-        if self.servers.is_empty() {
+        if self.lsp.servers.is_empty() {
             return;
         }
-        let asked = self.nav.as_ref().and_then(|n| n.id);
+        let asked = self.lsp.nav.as_ref().and_then(|n| n.id);
         let mut tries = 0u32;
         let mut land: Option<Vec<lsp::Target>> = None;
         let mut gone: Vec<String> = Vec::new();
-        for session in &mut self.servers {
+        for session in &mut self.lsp.servers {
             for answer in session.poll() {
                 match answer {
                     lsp::Answer::Ready => {}
@@ -461,7 +486,7 @@ impl Zenith {
                             // "nothing is defined there" would be a lie about a file it
                             // has not opened yet.
                             tries += 1;
-                            if let Some(nav) = &mut self.nav {
+                            if let Some(nav) = &mut self.lsp.nav {
                                 nav.id = None;
                                 nav.tries += 1;
                                 nav.again_at = Some(
@@ -481,7 +506,7 @@ impl Zenith {
                         if Some(id) == asked {
                             if lsp::transient(&message) && tries < 5 {
                                 tries += 1;
-                                if let Some(nav) = &mut self.nav {
+                                if let Some(nav) = &mut self.lsp.nav {
                                     nav.id = None;
                                     nav.tries += 1;
                                     nav.again_at = Some(
@@ -492,14 +517,14 @@ impl Zenith {
                                 self.status =
                                     format!("gd: {} is still settling…", session.kind.title);
                             } else {
-                                self.nav = None;
+                                self.lsp.nav = None;
                                 self.status = format!("gd: {message}");
                             }
                         }
                     }
                     lsp::Answer::Outline(symbols) => {
                         // A server's outline may arrive after the reader has moved on.
-                        let waiting = self.outline_asked.clone();
+                        let waiting = self.lsp.outline_asked.clone();
                         if waiting.is_none() || !symbols.is_empty() {
                             if let (Some(open), Some(waiting)) = (&mut self.open, waiting) {
                                 if open.path == waiting {
@@ -522,12 +547,13 @@ impl Zenith {
         }
         if !gone.is_empty() {
             self.status = format!("gd: {}", gone.join("; "));
-            self.nav = None;
-            self.servers
+            self.lsp.nav = None;
+            self.lsp
+                .servers
                 .retain(|s| !matches!(s.state(), lsp::State::Failed(_)));
         }
         if let Some(targets) = land {
-            self.nav = None;
+            self.lsp.nav = None;
             self.land(targets);
         }
     }
