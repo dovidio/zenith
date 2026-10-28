@@ -20,7 +20,7 @@ use skrifa::instance::{LocationRef, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::{FontRef, MetadataProvider};
 
-use crate::catalog::home_dir;
+use zenith_core::catalog::home_dir;
 
 /// Which of the three voices a face is a candidate for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

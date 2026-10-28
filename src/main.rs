@@ -10,7 +10,8 @@
 
 use std::path::PathBuf;
 
-use zenith::{app, catalog, distill, folder, lsp, markdown, outline, syntax, theme, typography};
+use zenith::{app, theme, typography};
+use zenith_core::{catalog, distill, folder, lsp, markdown, outline, syntax};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -600,7 +601,7 @@ fn dump(path: &std::path::Path) {
             "  {:>6}  {}{} {} {}",
             s.line + 1,
             "  ".repeat(s.depth.min(6)),
-            s.kind.glyph(&typography::build(0, 0, 0).marks),
+            typography::build(0, 0, 0).marks.pick(s.kind.mark()),
             s.name,
             if s.detail.is_empty() {
                 String::new()

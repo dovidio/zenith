@@ -10,7 +10,7 @@
 
 use egui::Color32;
 
-use crate::tone::Tone;
+use zenith_core::tone::Tone;
 
 // ---------------------------------------------------------------------------
 // Palette

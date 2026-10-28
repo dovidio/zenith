@@ -277,6 +277,10 @@ moved.
 
 ## Working on it
 
+Zenith is a two-crate workspace: `zenith` is the window (egui, typography, palette) and
+`zenith-core` is the reading model (document, folder walk, review, motions, language
+servers) with no egui dependency. A TUI would take only `zenith-core`.
+
 The checks are local, not remote: `.githooks/pre-commit` runs rustfmt, clippy with warnings
 denied — including the cognitive-complexity and function-length gates in `clippy.toml` — and the test suite.
 Enable it once per clone:

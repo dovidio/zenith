@@ -23,10 +23,10 @@ pub enum SymKind {
 }
 
 impl SymKind {
-    /// A single glyph for the margin. No icon fonts, no emoji, just typography — and a
-    /// letter, when this machine's fonts cannot draw the mark at all.
-    pub fn glyph(self, marks: &crate::typography::Marks) -> &'static str {
-        marks.pick(match self {
+    /// The pretty mark for the margin, before the window decides whether this machine's
+    /// fonts can draw it. The fallback belongs to the interface, not the outline.
+    pub fn mark(self) -> &'static str {
+        match self {
             SymKind::Function => "ƒ",
             SymKind::Type => "◆",
             SymKind::Trait => "◇",
@@ -35,7 +35,7 @@ impl SymKind {
             SymKind::Constant => "○",
             SymKind::Macro => "✦",
             SymKind::Heading => "§",
-        })
+        }
     }
 
     pub fn label(self) -> &'static str {

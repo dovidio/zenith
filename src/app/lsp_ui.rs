@@ -182,7 +182,7 @@ impl Zenith {
                             "nav: back to {} line {}",
                             self.open
                                 .as_ref()
-                                .map(|o| crate::catalog::display_path(&o.path))
+                                .map(|o| zenith_core::catalog::display_path(&o.path))
                                 .unwrap_or_default(),
                             self.caret.line + 1
                         );
@@ -193,7 +193,7 @@ impl Zenith {
                             "nav: closed to {} line {}",
                             self.open
                                 .as_ref()
-                                .map(|o| crate::catalog::display_path(&o.path))
+                                .map(|o| zenith_core::catalog::display_path(&o.path))
                                 .unwrap_or_else(|| "(the reading room)".into()),
                             self.caret.line + 1
                         );
@@ -294,7 +294,7 @@ impl Zenith {
             .folder
             .as_ref()
             .map(|f| f.root.clone())
-            .unwrap_or_else(|| crate::catalog::project_root(&path));
+            .unwrap_or_else(|| zenith_core::catalog::project_root(&path));
         self.begin_nav(root, path, line, unit);
     }
 
@@ -329,7 +329,7 @@ impl Zenith {
             .folder
             .as_ref()
             .map(|f| f.root.clone())
-            .unwrap_or_else(|| crate::catalog::project_root(&path));
+            .unwrap_or_else(|| zenith_core::catalog::project_root(&path));
         match lsp::Session::start(kind, &found, &root) {
             Ok(session) => self.lsp.servers.push(session),
             Err(e) => self.status = format!("language server: {e}"),

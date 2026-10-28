@@ -69,7 +69,16 @@ pub fn to_uri(path: &Path) -> String {
     // A `file:` URI is absolute or it is not a URI. A relative path here becomes
     // `file://src/main.rs`, and a server answers that with "url is not a file" — the
     // least useful sentence in the protocol.
-    let absolute = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let absolute = path
+        .canonicalize()
+        .or_else(|_| {
+            if path.is_absolute() {
+                Ok(path.to_path_buf())
+            } else {
+                std::env::current_dir().map(|dir| dir.join(path))
+            }
+        })
+        .unwrap_or_else(|_| path.to_path_buf());
     let mut out = String::from("file://");
     for b in absolute.to_string_lossy().bytes() {
         match b {

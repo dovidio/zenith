@@ -68,7 +68,7 @@ impl Zenith {
         let root = self.folder.as_ref().map(|f| f.root.clone()).or_else(|| {
             self.open
                 .as_ref()
-                .map(|o| crate::catalog::project_root(&o.path))
+                .map(|o| zenith_core::catalog::project_root(&o.path))
         });
         let Some(root) = root else {
             self.status = "open a folder to review its changes".into();
@@ -93,7 +93,11 @@ impl Zenith {
         let (tx, rx) = std::sync::mpsc::channel();
         let base_for_thread = base.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(crate::review::collect(&root, &base_for_thread, &files));
+            let _ = tx.send(zenith_core::review::collect(
+                &root,
+                &base_for_thread,
+                &files,
+            ));
         });
         self.session.load = Some(ReviewLoad { rx });
     }
@@ -102,12 +106,12 @@ impl Zenith {
         let Some(root) = self.folder.as_ref().map(|f| f.root.clone()).or_else(|| {
             self.open
                 .as_ref()
-                .map(|o| crate::catalog::project_root(&o.path))
+                .map(|o| zenith_core::catalog::project_root(&o.path))
         }) else {
             self.status = "open a folder to review its changes".into();
             return;
         };
-        self.session.branches = crate::review::branches(&root);
+        self.session.branches = zenith_core::review::branches(&root);
         self.session.base_sel = match &self.session.base {
             Base::Working => 0,
             Base::Staged => 1,
@@ -720,7 +724,7 @@ impl Zenith {
                     laid: None,
                     error: Some(e.clone()),
                     diff: None,
-                    deleted: file.status == crate::review::Status::Deleted,
+                    deleted: file.status == zenith_core::review::Status::Deleted,
                 });
                 self.session.index = index;
                 self.session.hover = None;
@@ -752,7 +756,7 @@ impl Zenith {
             laid: None,
             error: None,
             diff,
-            deleted: file.status == crate::review::Status::Deleted,
+            deleted: file.status == zenith_core::review::Status::Deleted,
         });
         self.session.index = index;
         self.session.hover = None;
@@ -801,7 +805,7 @@ impl Zenith {
 pub(super) fn paint_review_marks(
     painter: &egui::Painter,
     laid: &Laid,
-    diff: &crate::review::Diff,
+    diff: &zenith_core::review::Diff,
     origin_y: f32,
     visible: (f32, f32),
     style: &Style,

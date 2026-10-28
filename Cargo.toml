@@ -1,3 +1,12 @@
+[workspace]
+members = ["zenith-core"]
+resolver = "2"
+
+[workspace.lints.clippy]
+# The local smell gate; thresholds live in clippy.toml.
+cognitive_complexity = "deny"
+too_many_lines = "deny"
+
 [package]
 name = "zenith"
 version = "0.1.0"
@@ -8,6 +17,8 @@ license = "MIT"
 authors = ["Umberto D'Ovidio"]
 
 [dependencies]
+zenith-core = { path = "zenith-core" }
+
 # Only to ask the window for its traffic-light metrics on macOS (eframe links it already).
 raw-window-handle = "0.6"
 # Native shell + immediate-mode UI. 0.35 is the newest line compatible with the
@@ -25,9 +36,6 @@ syntect = { version = "5.3", default-features = false, features = [
 # ...while the *appearance* of every token is decided by zenith's own tone system
 # (see src/theme.rs), not by any editor color scheme.
 
-# Gitignore-aware, read-only directory walking.
-ignore = "0.4"
-
 # Native "open folder" dialog.
 rfd = "0.17"
 
@@ -39,18 +47,8 @@ skrifa = { version = "0.42.1", default-features = false, features = [
     "autohint_shaping",
 ] }
 
-serde = { version = "1", features = ["derive"] }
-toml = "1"
-
-# Talking to language servers. The one place where a hand-written parser would be a
-# mistake: JSON escapes strings in six ways and every one of them appears in a reply.
-serde_json = "1"
-
-[lints.clippy]
-# The local smell gate. Clippy computes cognitive complexity itself; the threshold is
-# in clippy.toml. Denied here so `cargo clippy` fails outside the hook too.
-cognitive_complexity = "deny"
-too_many_lines = "deny"
+[lints]
+workspace = true
 
 [profile.release]
 opt-level = 2

@@ -4441,12 +4441,20 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
- "ignore",
  "raw-window-handle",
  "rfd",
+ "skrifa",
+ "syntect",
+ "zenith-core",
+]
+
+[[package]]
+name = "zenith-core"
+version = "0.1.0"
+dependencies = [
+ "ignore",
  "serde",
  "serde_json",
- "skrifa",
  "syntect",
  "toml",
 ]

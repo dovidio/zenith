@@ -15,19 +15,19 @@ use egui::{
     ScrollArea, Sense, Stroke, TextStyle, Ui, ViewportCommand,
 };
 
-use crate::catalog::{display_path, Store};
-use crate::distill;
-use crate::folder::{self, Entry, FileEntry, Folder};
-use crate::fuzzy;
-use crate::lsp;
-use crate::outline::{self, SymKind, Symbol};
 use crate::reader::{self, Laid, Paint, Style};
-use crate::review::{Base, Review};
-use crate::syntax::{Document, Highlighter, Readable};
 use crate::theme::{self, Palette};
-use crate::tone::Tone;
 use crate::typography::{self, Typography};
-use crate::vim;
+use zenith_core::catalog::{display_path, Store};
+use zenith_core::distill;
+use zenith_core::folder::{self, Entry, FileEntry, Folder};
+use zenith_core::fuzzy;
+use zenith_core::lsp;
+use zenith_core::outline::{self, SymKind, Symbol};
+use zenith_core::review::{Base, Review};
+use zenith_core::syntax::{Document, Highlighter, Readable};
+use zenith_core::tone::Tone;
+use zenith_core::vim;
 
 mod launch;
 mod lsp_ui;
@@ -256,7 +256,7 @@ const NOTICE_SECONDS: f64 = 7.0;
 
 /// What the background read of a large file sends back.
 struct Loaded {
-    doc: crate::syntax::Document,
+    doc: zenith_core::syntax::Document,
     outline: Vec<outline::Symbol>,
     prose: bool,
 }
@@ -343,7 +343,7 @@ struct Open {
     error: Option<String>,
     /// Present when this file is being reviewed: the lines that changed and the code
     /// they replaced. `None` for ordinary reading.
-    diff: Option<crate::review::Diff>,
+    diff: Option<zenith_core::review::Diff>,
     /// The file exists only in the base revision (a deleted file).
     deleted: bool,
 }
@@ -361,7 +361,7 @@ pub struct Zenith {
 
     open: Option<Open>,
     /// Where the reader is: a line and a column, so word and bracket motions mean
-    /// something. See [`crate::vim`].
+    /// something. See [`zenith_core::vim`].
     caret: vim::Caret,
     /// Two-key sequences (`gg`, `zz`), which live across frames.
     chords: vim::Chords,
@@ -635,7 +635,7 @@ impl Zenith {
             self.open_folder(&target, None);
         } else if target.is_file() {
             // The file the reader asked for, now; the folder around it can take its time.
-            let root = crate::catalog::project_root(&target);
+            let root = zenith_core::catalog::project_root(&target);
             self.open_file(&target);
             self.open_folder(&root, Some(target));
         }
@@ -832,7 +832,7 @@ impl Zenith {
             });
         let head = read_head(path);
         let syntax = self.hl.syntax_for(path, &head).clone();
-        let readable = match crate::syntax::read_readable(path) {
+        let readable = match zenith_core::syntax::read_readable(path) {
             Ok(r) => r,
             Err(e) => {
                 self.open = Some(Open {
@@ -879,11 +879,11 @@ impl Zenith {
                 let big = text.len() > 256 * 1024 || count_lines(&text) > 1_500;
                 let t_open = std::time::Instant::now();
                 let (mut doc, syms, _background) = if big {
-                    let end = crate::syntax::prefix_end(&text, FIRST_PASS_LINES);
+                    let end = zenith_core::syntax::prefix_end(&text, FIRST_PASS_LINES);
                     let mut doc = self.hl.parse(&syntax, &text[..end], bytes);
                     let t_plain = std::time::Instant::now();
                     for line in text[end..].lines() {
-                        doc.lines.push(crate::syntax::Line::plain(line));
+                        doc.lines.push(zenith_core::syntax::Line::plain(line));
                     }
                     let syms = outline::extract(path, &doc.syntax, &doc.lines);
                     if std::env::var("ZENITH_TIMING").is_ok() {
@@ -899,7 +899,7 @@ impl Zenith {
                     let path_for_thread = path.to_path_buf();
                     let text_for_thread = text.clone();
                     std::thread::spawn(move || {
-                        let hl = crate::syntax::Highlighter::new();
+                        let hl = zenith_core::syntax::Highlighter::new();
                         let head = read_head(&path_for_thread);
                         let syntax = hl.syntax_for(&path_for_thread, &head).clone();
                         let mut doc = hl.parse(&syntax, &text_for_thread, bytes);
@@ -907,7 +907,7 @@ impl Zenith {
                         if outline::family(&path_for_thread, &doc.syntax)
                             == outline::Family::Markdown
                         {
-                            doc.md = Some(crate::markdown::render(&doc.lines));
+                            doc.md = Some(zenith_core::markdown::render(&doc.lines));
                         }
                         let outline = outline::extract(&path_for_thread, &doc.syntax, &doc.lines);
                         let prose = outline::family(&path_for_thread, &doc.syntax)
@@ -940,7 +940,7 @@ impl Zenith {
                 };
                 // A Markdown file gets a rendering of itself, kept beside the source.
                 if outline::family(path, &doc.syntax) == outline::Family::Markdown {
-                    doc.md = Some(crate::markdown::render(&doc.lines));
+                    doc.md = Some(zenith_core::markdown::render(&doc.lines));
                 }
                 doc.truncated |= truncated;
                 doc.lossy = lossy;

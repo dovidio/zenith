@@ -875,20 +875,24 @@ impl Zenith {
         match focus {
             11 => {
                 let next = (self.store.config.measure as f32 + direction).clamp(
-                    crate::catalog::MEASURE_MIN as f32,
-                    crate::catalog::MEASURE_MAX as f32,
+                    zenith_core::catalog::MEASURE_MIN as f32,
+                    zenith_core::catalog::MEASURE_MAX as f32,
                 );
                 self.store.config.measure = next.round() as usize;
                 self.style_dirty = true;
             }
             12 => {
-                self.store.config.leading = (self.store.config.leading + direction * 0.02)
-                    .clamp(crate::catalog::LEADING_MIN, crate::catalog::LEADING_MAX);
+                self.store.config.leading = (self.store.config.leading + direction * 0.02).clamp(
+                    zenith_core::catalog::LEADING_MIN,
+                    zenith_core::catalog::LEADING_MAX,
+                );
                 self.style_dirty = true;
             }
             13 => {
-                self.scale = (self.scale + direction * 0.02)
-                    .clamp(crate::catalog::SCALE_MIN, crate::catalog::SCALE_MAX);
+                self.scale = (self.scale + direction * 0.02).clamp(
+                    zenith_core::catalog::SCALE_MIN,
+                    zenith_core::catalog::SCALE_MAX,
+                );
                 self.store.config.font_scale = self.scale;
                 self.style_dirty = true;
                 self.rebuild_metrics(ctx);
@@ -1028,7 +1032,8 @@ impl Zenith {
             Slider {
                 label: "measure",
                 value: &mut measure,
-                range: crate::catalog::MEASURE_MIN as f32..=crate::catalog::MEASURE_MAX as f32,
+                range: zenith_core::catalog::MEASURE_MIN as f32
+                    ..=zenith_core::catalog::MEASURE_MAX as f32,
                 decimals: 0,
             },
             focus == Some(11),
@@ -1044,7 +1049,7 @@ impl Zenith {
             Slider {
                 label: "leading",
                 value: &mut cfg.leading,
-                range: crate::catalog::LEADING_MIN..=crate::catalog::LEADING_MAX,
+                range: zenith_core::catalog::LEADING_MIN..=zenith_core::catalog::LEADING_MAX,
                 decimals: 2,
             },
             focus == Some(12),
@@ -1057,7 +1062,7 @@ impl Zenith {
             Slider {
                 label: "type size",
                 value: &mut self.scale,
-                range: crate::catalog::SCALE_MIN..=crate::catalog::SCALE_MAX,
+                range: zenith_core::catalog::SCALE_MIN..=zenith_core::catalog::SCALE_MAX,
                 decimals: 2,
             },
             focus == Some(13),
@@ -1655,7 +1660,7 @@ impl Zenith {
     /// The servers' paths stay: a path is something the reader went and found on their own
     /// machine, not a preference, and throwing it away would cost them the search again.
     pub(super) fn reset_defaults(&mut self, ctx: &egui::Context) {
-        let mut fresh = crate::catalog::Config::default();
+        let mut fresh = zenith_core::catalog::Config::default();
         fresh.lsp.servers = std::mem::take(&mut self.store.config.lsp.servers);
         self.store.config = fresh;
         self.scale = self.store.config.font_scale;

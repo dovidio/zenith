@@ -21,10 +21,10 @@ step() {
 }
 
 step "rustfmt"
-cargo fmt --check
+cargo fmt --all --check
 
 step "clippy (warnings denied, smell thresholds in clippy.toml)"
-cargo clippy --all-targets --locked --quiet -- -D warnings
+cargo clippy --workspace --all-targets --locked --quiet -- -D warnings
 
 step "tests"
-cargo test --locked --quiet
+cargo test --workspace --locked --quiet

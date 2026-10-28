@@ -28,9 +28,9 @@ use egui::{
     Rect, Stroke, TextFormat,
 };
 
-use crate::syntax::{Document, Line};
 use crate::theme::{alpha, mix, Palette};
-use crate::tone::Tone;
+use zenith_core::syntax::{Document, Line};
+use zenith_core::tone::Tone;
 
 /// Indentation beyond this many columns is not drawn as guides (deep enough).
 const INDENT_CAP: usize = 28;
@@ -73,8 +73,8 @@ pub struct Style {
     /// Recede what a human is not reading in a strongly typed language: type
     /// annotations, modifiers, and the punctuation only the compiler needs.
     pub distilled: bool,
-    /// How this language writes its types, which is what [`crate::distill`] needs.
-    pub lang: crate::distill::Lang,
+    /// How this language writes its types, which is what [`zenith_core::distill`] needs.
+    pub lang: zenith_core::distill::Lang,
     /// The margin mark for a wrapped line, if this machine can draw it.
     pub wrap_mark: &'static str,
 
@@ -306,7 +306,10 @@ pub fn layout(
         // cursor walks them, search finds them, the status bar counts them — they simply
         // are not part of the page. A reader who wants the file's true geometry turns
         // "compress blank lines" off, which is the same question asked once.
-        let metadata = matches!(md_line.map(|m| m.kind), Some(crate::markdown::Kind::Meta));
+        let metadata = matches!(
+            md_line.map(|m| m.kind),
+            Some(zenith_core::markdown::Kind::Meta)
+        );
         line_style.strong = strong.and_then(|s| s.get(index)).copied().unwrap_or(false);
         let job = line_job(
             &line_style,
@@ -355,7 +358,7 @@ pub fn layout(
 fn line_job(
     style: &Style,
     line: &Line,
-    md: Option<&crate::markdown::MdLine>,
+    md: Option<&zenith_core::markdown::MdLine>,
     wrap_w: f32,
     row_h: f32,
 ) -> LayoutJob {
@@ -379,10 +382,10 @@ fn line_job(
         }
     }
 
-    // Which runs are *metadata* rather than the sentence? See `crate::distill` for
+    // Which runs are *metadata* rather than the sentence? See `zenith_core::distill` for
     // how that is decided, per language, and why it refuses more often than it fires.
     let marks = if style.distilled {
-        crate::distill::marks(style.lang, line)
+        zenith_core::distill::marks(style.lang, line)
     } else {
         Vec::new()
     };
@@ -429,8 +432,8 @@ fn line_job(
                 fmt.color = style.paper;
             } else {
                 match marks.get(index).cloned().flatten() {
-                    Some(crate::distill::Mark::All) => fmt.color = metadata,
-                    Some(crate::distill::Mark::Part(start, end)) => {
+                    Some(zenith_core::distill::Mark::All) => fmt.color = metadata,
+                    Some(zenith_core::distill::Mark::Part(start, end)) => {
                         // Part of a run is metadata: the grammar gave `total: number` a
                         // single token, so it has to be cut here.
                         let chars: Vec<char> = text.chars().collect();
@@ -496,8 +499,13 @@ fn line_job(
 /// with a hair more spacing: a reading page's emphasis is ink, not a second weight. The
 /// bold face belongs to the review's changed lines, where it means a different thing.
 /// Code is the monospace voice at a slightly smaller size on a tinted ground.
-fn markdown_job(style: &Style, md: &crate::markdown::MdLine, wrap_w: f32, row_h: f32) -> LayoutJob {
-    use crate::markdown::{Kind, Role};
+fn markdown_job(
+    style: &Style,
+    md: &zenith_core::markdown::MdLine,
+    wrap_w: f32,
+    row_h: f32,
+) -> LayoutJob {
+    use zenith_core::markdown::{Kind, Role};
 
     let level = match md.kind {
         Kind::Heading(n) => n.clamp(1, 6) as usize,
@@ -721,7 +729,7 @@ pub struct Paint<'a> {
     pub visible: (f32, f32),
     /// Where the reader is. The line gets the wash and the ribbon; the column gets a
     /// hairline, which is what makes `w`, `b`, `e` and `%` visible.
-    pub caret: crate::vim::Caret,
+    pub caret: zenith_core::vim::Caret,
     /// Optional (first, last) inclusive line range to keep at full strength.
     pub focus: Option<(usize, usize)>,
     /// Strength of the fade for unfocused lines, 0..=255.
@@ -853,7 +861,7 @@ fn paint_markdown(painter: &Painter, p: &Paint, first: usize, last: usize) {
             };
             for i in first..last {
                 let Some(line) = md.get(i) else { continue };
-                let quoted = matches!(line.kind, crate::markdown::Kind::Quote);
+                let quoted = matches!(line.kind, zenith_core::markdown::Kind::Quote);
                 let is_band = line.in_band() || quoted;
                 match (&mut run, is_band) {
                     (None, true) => run = Some((i, i, quoted)),
@@ -880,7 +888,7 @@ fn paint_markdown(painter: &Painter, p: &Paint, first: usize, last: usize) {
                 if let Some(line) = md.get(i) {
                     if matches!(
                         line.kind,
-                        crate::markdown::Kind::Rule | crate::markdown::Kind::TableRule
+                        zenith_core::markdown::Kind::Rule | zenith_core::markdown::Kind::TableRule
                     ) {
                         let y = t(p.laid.top_of(i) + p.laid.height_of(i) * 0.5);
                         painter.hline(

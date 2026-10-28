@@ -348,7 +348,7 @@ impl Zenith {
                             s.detail.clone(),
                             s.line,
                             s.depth,
-                            s.kind.glyph(&self.typo.marks).to_string(),
+                            self.typo.marks.pick(s.kind.mark()).to_string(),
                             s.kind,
                         )
                     })
