@@ -28,6 +28,17 @@ pub(super) struct Sheets {
     pub(super) search_idx: usize,
 }
 
+/// The palette, faces and measure shared by every settings section.
+struct SettingsStyle<'a> {
+    pal: &'a Palette,
+    font: &'a egui::FontId,
+    small: &'a egui::FontId,
+    values: &'a egui::FontId,
+    content: f32,
+    single: bool,
+    focus: Option<usize>,
+}
+
 impl Zenith {
     /// The launcher's rows: matched files, then the curated or ranked commands.
     ///
@@ -870,6 +881,485 @@ impl Zenith {
         self.store.save_config();
     }
 
+    /// The Page section: the switches about how text is set, then its three numbers.
+    fn settings_page(&mut self, ui: &mut Ui, style: &SettingsStyle) -> (bool, bool) {
+        let pal = *style.pal;
+        let font = style.font.clone();
+        let small = style.small.clone();
+        let values = style.values.clone();
+        let content = style.content;
+        let single = style.single;
+        let focus = style.focus;
+        let mut changed = false;
+        let mut tree_changed = false;
+        if single {
+            let cfg = &mut self.store.config;
+            ui.vertical(|ui| {
+                ui.set_width(content);
+                let mut base = 0;
+                changed |= toggles(
+                    ui,
+                    &font,
+                    &pal,
+                    &mut [
+                        ("soft wrap", &mut cfg.wrap),
+                        ("indentation whispers", &mut cfg.guides),
+                        ("comments as prose", &mut cfg.serif_comments),
+                        ("focus lens", &mut cfg.focus_lens),
+                        ("line numbers", &mut cfg.line_numbers),
+                        ("compress blank lines", &mut cfg.compress_blank),
+                        ("distilled types", &mut cfg.distilled),
+                        ("themed window bar", &mut cfg.frameless),
+                        ("render markdown", &mut cfg.markdown),
+                    ],
+                    focus,
+                    &mut base,
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("the tree")
+                        .font(small.clone())
+                        .color(pal.ink_soft),
+                );
+                let tree = toggles(
+                    ui,
+                    &font,
+                    &pal,
+                    &mut [
+                        ("source files only", &mut cfg.code_only),
+                        ("include hidden files", &mut cfg.show_hidden),
+                    ],
+                    focus,
+                    &mut base,
+                );
+                changed |= tree;
+                tree_changed |= tree;
+            });
+        } else {
+            let half = (content - 12.0) * 0.5;
+            let mut left = 0;
+            let mut right = 5;
+            let mut tree_base = 9;
+            ui.horizontal_top(|ui| {
+                let cfg = &mut self.store.config;
+                ui.vertical(|ui| {
+                    ui.set_width(half);
+                    changed |= toggles(
+                        ui,
+                        &font,
+                        &pal,
+                        &mut [
+                            ("soft wrap", &mut cfg.wrap),
+                            ("indentation whispers", &mut cfg.guides),
+                            ("comments as prose", &mut cfg.serif_comments),
+                            ("focus lens", &mut cfg.focus_lens),
+                            ("line numbers", &mut cfg.line_numbers),
+                        ],
+                        focus,
+                        &mut left,
+                    );
+                });
+                ui.vertical(|ui| {
+                    ui.set_width(half);
+                    changed |= toggles(
+                        ui,
+                        &font,
+                        &pal,
+                        &mut [
+                            ("compress blank lines", &mut cfg.compress_blank),
+                            ("distilled types", &mut cfg.distilled),
+                            ("themed window bar", &mut cfg.frameless),
+                            ("render markdown", &mut cfg.markdown),
+                        ],
+                        focus,
+                        &mut right,
+                    );
+                    // The tree's own two questions, which are
+                    // about what to read rather than how to set
+                    // it. They re-read the folder as they change,
+                    // so they still answer on the clicked frame.
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("the tree")
+                            .font(small.clone())
+                            .color(pal.ink_soft),
+                    );
+                    let tree = toggles(
+                        ui,
+                        &font,
+                        &pal,
+                        &mut [
+                            ("source files only", &mut cfg.code_only),
+                            ("include hidden files", &mut cfg.show_hidden),
+                        ],
+                        focus,
+                        &mut tree_base,
+                    );
+                    changed |= tree;
+                    tree_changed |= tree;
+                });
+            });
+        }
+        ui.add_space(6.0);
+        let cfg = &mut self.store.config;
+        let mut measure = cfg.measure as f32;
+        if line_slider(
+            ui,
+            &pal,
+            &font,
+            &values,
+            Slider {
+                label: "measure",
+                value: &mut measure,
+                range: crate::catalog::MEASURE_MIN as f32..=crate::catalog::MEASURE_MAX as f32,
+                decimals: 0,
+            },
+            focus == Some(11),
+        ) {
+            cfg.measure = measure.round() as usize;
+            changed = true;
+        }
+        changed |= line_slider(
+            ui,
+            &pal,
+            &font,
+            &values,
+            Slider {
+                label: "leading",
+                value: &mut cfg.leading,
+                range: crate::catalog::LEADING_MIN..=crate::catalog::LEADING_MAX,
+                decimals: 2,
+            },
+            focus == Some(12),
+        );
+        changed |= line_slider(
+            ui,
+            &pal,
+            &font,
+            &values,
+            Slider {
+                label: "type size",
+                value: &mut self.scale,
+                range: crate::catalog::SCALE_MIN..=crate::catalog::SCALE_MAX,
+                decimals: 2,
+            },
+            focus == Some(13),
+        );
+        (changed, tree_changed)
+    }
+
+    /// The Type section: the two voices, chosen by name.
+    fn settings_type(&mut self, ui: &mut Ui, style: &SettingsStyle) -> (usize, usize) {
+        let pal = *style.pal;
+        let font = style.font.clone();
+        let small = style.small.clone();
+        let content = style.content;
+        let focus = style.focus;
+        let mut new_mono = self.typo.mono_idx;
+        let mut new_prose = self.typo.prose_idx;
+        let column = (content - 16.0) * 0.5;
+        let mono_len = self.typo.mono_voices.len();
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(column);
+                ui.label(
+                    RichText::new("code")
+                        .font(small.clone())
+                        .color(pal.ink_soft),
+                );
+                for (i, v) in self.typo.mono_voices.iter().enumerate() {
+                    let selected = i == self.typo.mono_idx;
+                    let ok = typography::loads(v);
+                    let text = RichText::new(v.label.clone())
+                        .font(font.clone())
+                        .color(if ok { pal.ink_soft } else { pal.ink_faint });
+                    let r = ui.selectable_label(selected, text);
+                    if focus == Some(i) {
+                        ui.painter().rect_stroke(
+                            r.rect.shrink(1.0),
+                            CornerRadius::same(ROW_RADIUS),
+                            Stroke::new(1.0, pal.accent),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    if r.clicked() {
+                        new_mono = i;
+                    }
+                    r.on_hover_text(RichText::new(v.note.clone()).font(small.clone()));
+                }
+            });
+            ui.vertical(|ui| {
+                ui.set_width(column);
+                ui.label(
+                    RichText::new("prose")
+                        .font(small.clone())
+                        .color(pal.ink_soft),
+                );
+                for (i, v) in self.typo.prose_voices.iter().enumerate() {
+                    let selected = i == self.typo.prose_idx;
+                    let text = RichText::new(v.label.clone())
+                        .font(font.clone())
+                        .color(pal.ink_soft);
+                    let r = ui.selectable_label(selected, text);
+                    if focus == Some(mono_len + i) {
+                        ui.painter().rect_stroke(
+                            r.rect.shrink(1.0),
+                            CornerRadius::same(ROW_RADIUS),
+                            Stroke::new(1.0, pal.accent),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    if r.clicked() {
+                        new_prose = i;
+                    }
+                    r.on_hover_text(RichText::new(v.note.clone()).font(small.clone()));
+                }
+            });
+        });
+        ui.add_space(8.0);
+        let chrome = self
+            .typo
+            .ui_voices
+            .first()
+            .map(|v| v.label.clone())
+            .unwrap_or_else(|| self.typo.ui_label.clone());
+        ui.label(
+            RichText::new(format!("interface: {chrome}"))
+                .font(small.clone())
+                .color(pal.ink_soft),
+        );
+        if self.typo.bundled_fallback {
+            ui.label(
+                RichText::new("no system fonts found: egui's bundled faces are in use")
+                    .font(small.clone())
+                    .color(pal.ink_soft),
+            );
+        }
+        (new_mono, new_prose)
+    }
+
+    /// The Theme section: every theme shown by being used.
+    fn settings_theme(
+        &mut self,
+        ui: &mut Ui,
+        style: &SettingsStyle,
+        sample: &[SampleLine],
+    ) -> Option<usize> {
+        let small = style.small.clone();
+        let content = style.content;
+        let focus = style.focus;
+        let mut theme_choice = None;
+        // Each theme is shown by being used: a few lines of the
+        // sample, set in that theme's paper and ink. A name and a
+        // swatch tell you nothing about how a page reads.
+        let tile_w = (content - 14.0) * 0.5;
+        for row in theme::THEMES.chunks(2) {
+            ui.horizontal(|ui| {
+                for p in row {
+                    let chosen = p.name == self.palette.name;
+                    let tile_h = 84.0 * self.scale.min(1.5);
+                    let index = theme::THEMES
+                        .iter()
+                        .position(|t| t.name == p.name)
+                        .unwrap_or(0);
+                    let focused = focus == Some(index);
+                    let (rect, response) =
+                        ui.allocate_exact_size(vec2(tile_w, tile_h), egui::Sense::click());
+                    theme_tile(
+                        ui,
+                        rect,
+                        p,
+                        sample,
+                        TileState { chosen, focused },
+                        &self.typo,
+                        self.scale,
+                    );
+                    if response.clicked() {
+                        theme_choice = Some(
+                            theme::THEMES
+                                .iter()
+                                .position(|t| t.name == p.name)
+                                .unwrap_or(0),
+                        );
+                    }
+                    response.on_hover_text(RichText::new(p.mood).font(small.clone()));
+                    ui.add_space(10.0);
+                }
+            });
+            ui.add_space(10.0);
+        }
+        theme_choice
+    }
+
+    /// The Language section: the server switch, what each server is doing, and its path.
+    fn settings_language(
+        &mut self,
+        ui: &mut Ui,
+        style: &SettingsStyle,
+    ) -> (bool, bool, Option<String>) {
+        let pal = *style.pal;
+        let font = style.font.clone();
+        let small = style.small.clone();
+        let content = style.content;
+        let focus = style.focus;
+        let mut changed = false;
+        let mut lsp_changed = false;
+        let mut restart: Option<String> = None;
+        let mut on = self.store.config.lsp.enabled;
+        let mut base = 0;
+        if toggles(
+            ui,
+            &font,
+            &pal,
+            &mut [("start language servers", &mut on)],
+            focus,
+            &mut base,
+        ) {
+            self.store.config.lsp.enabled = on;
+            changed = true;
+            lsp_changed = true;
+        }
+        ui.add_space(10.0);
+
+        if self.lsp_kinds.is_empty() {
+            ui.label(
+                RichText::new(
+                    "nothing in this folder speaks a language zenith \
+                     has a server for",
+                )
+                .font(small.clone())
+                .color(pal.ink_soft),
+            );
+        }
+        for kind in self.lsp_kinds.clone() {
+            let (state, why) = self.server_state(kind.id);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(kind.title)
+                        .font(font.clone())
+                        .color(pal.ink_soft),
+                );
+                let ink = if state == "failed" {
+                    pal.tone(Tone::Invalid)
+                } else {
+                    pal.ink_soft
+                };
+                ui.label(RichText::new(state).font(small.clone()).color(ink));
+            });
+            if let Some(why) = why {
+                ui.label(RichText::new(why).font(small.clone()).color(pal.ink_soft));
+            }
+            let discovered = self
+                .available
+                .iter()
+                .find(|a| a.kind.id == kind.id)
+                .map(|a| display_path(&a.binary));
+            let entry = self
+                .store
+                .config
+                .lsp
+                .servers
+                .entry(kind.id.to_string())
+                .or_default();
+            ui.visuals_mut().extreme_bg_color = pal.panel_deep;
+            // A path is code, and it is edited: set it in the code
+            // voice, over a hairline, which is how this program
+            // draws every field it has.
+            let edit = ui.add(
+                egui::TextEdit::singleline(&mut entry.command)
+                    .hint_text(
+                        discovered
+                            .clone()
+                            .unwrap_or_else(|| "path to the binary".into()),
+                    )
+                    .font(self.typo.code_id(11.5 * self.scale))
+                    .desired_width(content)
+                    .frame(Frame::NONE),
+            );
+            ui.painter().hline(
+                edit.rect.x_range(),
+                edit.rect.bottom() + 2.0,
+                Stroke::new(1.0, pal.edge),
+            );
+            if edit.changed() {
+                changed = true;
+                self.lsp_path_dirty.insert(kind.id.to_string());
+            }
+            if edit.lost_focus() && self.lsp_path_dirty.remove(kind.id) {
+                // Finishing the edit restarts that language's
+                // server, so the new path is the one in use. A
+                // field visited and left alone is not an edit.
+                restart = Some(kind.id.to_string());
+            }
+            ui.add_space(8.0);
+        }
+        (changed, lsp_changed, restart)
+    }
+
+    /// The Keys section: the same map the help page shows, with a filter.
+    fn settings_keys(&mut self, ui: &mut Ui, style: &SettingsStyle) {
+        let pal = *style.pal;
+        let small = style.small.clone();
+        let content = style.content;
+        ui.visuals_mut().extreme_bg_color = pal.panel_deep;
+        let edit = ui.add(
+            egui::TextEdit::singleline(&mut self.sheets.keys_query)
+                .hint_text("filter keys")
+                .font(self.typo.ui_id(12.5 * self.scale))
+                .desired_width(content)
+                .frame(Frame::NONE),
+        );
+        ui.painter().hline(
+            edit.rect.x_range(),
+            edit.rect.bottom() + 2.0,
+            Stroke::new(1.0, pal.edge),
+        );
+        ui.add_space(8.0);
+        let query = self.sheets.keys_query.to_lowercase();
+        ScrollArea::vertical()
+            .id_salt("keys")
+            .max_height(280.0)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for (group, rows) in HELP_GROUPS {
+                    let matching: Vec<&(&str, &str)> = rows
+                        .iter()
+                        .filter(|(k, v)| {
+                            query.is_empty()
+                                || k.to_lowercase().contains(&query)
+                                || v.to_lowercase().contains(&query)
+                        })
+                        .collect();
+                    if matching.is_empty() {
+                        continue;
+                    }
+                    ui.label(
+                        RichText::new(group.to_uppercase())
+                            .font(self.typo.ui_id(9.5 * self.scale))
+                            .color(pal.ink_soft)
+                            .extra_letter_spacing(0.1 * self.scale),
+                    );
+                    ui.add_space(2.0);
+                    egui::Grid::new(format!("keys-{group}"))
+                        .num_columns(2)
+                        .spacing([16.0, 3.0])
+                        .show(ui, |ui| {
+                            for &(k, v) in matching {
+                                ui.label(
+                                    RichText::new(k)
+                                        .font(self.typo.code_id(11.5 * self.scale))
+                                        .color(pal.accent),
+                                );
+                                ui.label(RichText::new(v).font(small.clone()).color(pal.ink_soft));
+                                ui.end_row();
+                            }
+                        });
+                    ui.add_space(8.0);
+                }
+            });
+    }
+
     /// Settings: a modal screen, a rail of sections, and one section at a time.
     ///
     /// Modal because settings are a place you go, not a card that floats over the page and
@@ -908,581 +1398,199 @@ impl Zenith {
         }
         let sample = self.theme_preview.clone().unwrap_or_default();
 
-        let modal = egui::Modal::new(egui::Id::new("zenith-settings"))
-            .backdrop_color(theme::alpha(pal.ink, 44))
-            .frame(
-                Frame::NONE
-                    .fill(pal.panel)
-                    .stroke(Stroke::new(1.0, pal.edge))
-                    .corner_radius(CornerRadius::same(SHEET_RADIUS))
-                    .shadow(sheet_shadow(&pal)),
-            )
-            .show(ctx, |ui| {
-                ui.set_width(width);
-                // ---- the title ----
-                ui.add_space(18.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(20.0);
-                    ui.label(RichText::new("Settings").font(title.clone()).color(pal.ink));
-                });
-                ui.add_space(8.0);
-                ui.painter().hline(
-                    ui.min_rect().left()..=ui.min_rect().right(),
-                    ui.cursor().top(),
-                    Stroke::new(1.0, pal.edge),
-                );
-                ui.add_space(14.0);
-
-                let body_top = ui.cursor().top();
-                let mut rail_edge = 0.0;
-                ui.horizontal_top(|ui| {
-                    ui.add_space(20.0);
-                    // ---- the rail ----
-                    ui.vertical(|ui| {
-                        ui.set_width(rail);
-                        for (i, name) in SETTINGS_SECTIONS.iter().enumerate() {
-                            let selected = self.sheets.settings_tab == i;
-                            let text = RichText::new(*name).font(head.clone()).color(if selected {
-                                pal.ink
-                            } else {
-                                pal.ink_soft
-                            });
-                            let response =
-                                ui.add(egui::Label::new(text).sense(egui::Sense::click()));
-                            if selected && self.sheets.settings_rail_focus {
-                                ui.painter().rect_filled(
-                                    Rect::from_min_size(
-                                        Pos2::new(response.rect.left() - 8.0, response.rect.top() + 2.0),
-                                        vec2(2.0, (response.rect.height() - 4.0).max(2.0)),
-                                    ),
-                                    CornerRadius::same(1),
-                                    pal.accent,
-                                );
-                            }
-                            if response.clicked() {
-                                self.sheets.settings_tab = i;
-                                self.sheets.settings_rail_focus = true;
-                                self.sheets.settings_focus = 0;
-                            }
-                        }
-                        rail_edge = ui.min_rect().right();
-                    });
+        let modal =
+            egui::Modal::new(egui::Id::new("zenith-settings"))
+                .backdrop_color(theme::alpha(pal.ink, 44))
+                .frame(
+                    Frame::NONE
+                        .fill(pal.panel)
+                        .stroke(Stroke::new(1.0, pal.edge))
+                        .corner_radius(CornerRadius::same(SHEET_RADIUS))
+                        .shadow(sheet_shadow(&pal)),
+                )
+                .show(ctx, |ui| {
+                    ui.set_width(width);
+                    // ---- the title ----
                     ui.add_space(18.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(20.0);
+                        ui.label(RichText::new("Settings").font(title.clone()).color(pal.ink));
+                    });
+                    ui.add_space(8.0);
+                    ui.painter().hline(
+                        ui.min_rect().left()..=ui.min_rect().right(),
+                        ui.cursor().top(),
+                        Stroke::new(1.0, pal.edge),
+                    );
+                    ui.add_space(14.0);
 
-                    // ---- the section ----
-                    ui.vertical(|ui| {
-                        ui.set_width(content);
-                        // A fixed minimum height keeps the screen from jumping as the
-                        // reader moves down the rail.
-                        ui.set_min_height(296.0);
-                        let focus = if self.sheets.settings_rail_focus {
-                            None
+                    let body_top = ui.cursor().top();
+                    let mut rail_edge = 0.0;
+                    ui.horizontal_top(|ui| {
+                        ui.add_space(20.0);
+                        // ---- the rail ----
+                        ui.vertical(|ui| {
+                            ui.set_width(rail);
+                            for (i, name) in SETTINGS_SECTIONS.iter().enumerate() {
+                                let selected = self.sheets.settings_tab == i;
+                                let text = RichText::new(*name)
+                                    .font(head.clone())
+                                    .color(if selected { pal.ink } else { pal.ink_soft });
+                                let response =
+                                    ui.add(egui::Label::new(text).sense(egui::Sense::click()));
+                                if selected && self.sheets.settings_rail_focus {
+                                    ui.painter().rect_filled(
+                                        Rect::from_min_size(
+                                            Pos2::new(
+                                                response.rect.left() - 8.0,
+                                                response.rect.top() + 2.0,
+                                            ),
+                                            vec2(2.0, (response.rect.height() - 4.0).max(2.0)),
+                                        ),
+                                        CornerRadius::same(1),
+                                        pal.accent,
+                                    );
+                                }
+                                if response.clicked() {
+                                    self.sheets.settings_tab = i;
+                                    self.sheets.settings_rail_focus = true;
+                                    self.sheets.settings_focus = 0;
+                                }
+                            }
+                            rail_edge = ui.min_rect().right();
+                        });
+                        ui.add_space(18.0);
+
+                        // ---- the section ----
+                        ui.vertical(|ui| {
+                            ui.set_width(content);
+                            // A fixed minimum height keeps the screen from jumping as the
+                            // reader moves down the rail.
+                            ui.set_min_height(296.0);
+                            let focus = if self.sheets.settings_rail_focus {
+                                None
+                            } else {
+                                Some(self.sheets.settings_focus)
+                            };
+                            let style = SettingsStyle {
+                                pal: &pal,
+                                font: &font,
+                                small: &small,
+                                values: &values,
+                                content,
+                                single,
+                                focus,
+                            };
+                            match self.sheets.settings_tab {
+                                0 => {
+                                    let (page_changed, tree_now) = self.settings_page(ui, &style);
+                                    changed |= page_changed;
+                                    tree_changed |= tree_now;
+                                }
+                                1 => {
+                                    let (mono, prose) = self.settings_type(ui, &style);
+                                    new_mono = mono;
+                                    new_prose = prose;
+                                }
+                                2 => {
+                                    theme_choice = self.settings_theme(ui, &style, &sample);
+                                }
+                                3 => {
+                                    let (lsp_now, lsp_restart, restart_now) =
+                                        self.settings_language(ui, &style);
+                                    changed |= lsp_now;
+                                    lsp_changed |= lsp_restart;
+                                    restart = restart_now;
+                                }
+                                4 => self.settings_keys(ui, &style),
+                                _ => {}
+                            }
+                        });
+                    });
+                    ui.add_space(16.0);
+
+                    // ---- the footer ----
+                    // Reverting is the one thing here that cannot be undone by putting it
+                    // back by hand, so it lives alone under its own rule, and asks twice.
+                    let footer_y = ui.cursor().top();
+                    ui.painter().hline(
+                        (ui.min_rect().left() + 20.0)..=(ui.min_rect().right() - 20.0),
+                        footer_y,
+                        Stroke::new(1.0, pal.edge),
+                    );
+                    // The rail's rule runs the whole way to the footer, not just past the
+                    // last tab: it divides the sheet, not the list.
+                    ui.painter().vline(
+                        rail_edge + 9.0,
+                        egui::Rangef::new(body_top, footer_y),
+                        Stroke::new(1.0, pal.edge),
+                    );
+                    ui.add_space(10.0);
+                    let now = ui.input(|i| i.time);
+                    let armed = self.reset_asked.is_some_and(|t| now - t < 5.0);
+                    let reset_focused = !self.sheets.settings_rail_focus
+                        && self.sheets.settings_focus == self.settings_focus_count();
+                    let text = if armed {
+                        "restore defaults?"
+                    } else {
+                        "restore defaults"
+                    };
+                    let colour = if armed {
+                        pal.tone(Tone::Invalid)
+                    } else {
+                        pal.ink_soft
+                    };
+                    let galley =
+                        ui.painter()
+                            .layout_no_wrap(text.to_string(), small.clone(), colour);
+                    let button_h = (small.size * 2.2).max(26.0);
+                    let button_w = galley.size().x + 20.0;
+                    ui.horizontal(|ui| {
+                        ui.add_space(20.0);
+                        let (rect, reset) =
+                            ui.allocate_exact_size(vec2(button_w, button_h), egui::Sense::click());
+                        let fill = if reset.is_pointer_button_down_on() {
+                            theme::alpha(pal.ink, 30)
+                        } else if reset.hovered() {
+                            theme::alpha(pal.ink, 16)
                         } else {
-                            Some(self.sheets.settings_focus)
+                            Color32::TRANSPARENT
                         };
-                        match self.sheets.settings_tab {
-                            // -------------------------------------------- page
-                            0 => {
-                                if single {
-                                    let cfg = &mut self.store.config;
-                                    ui.vertical(|ui| {
-                                        ui.set_width(content);
-                                        let mut base = 0;
-                                        changed |= toggles(ui, &font, &pal, &mut [
-                                            ("soft wrap", &mut cfg.wrap),
-                                            ("indentation whispers", &mut cfg.guides),
-                                            ("comments as prose", &mut cfg.serif_comments),
-                                            ("focus lens", &mut cfg.focus_lens),
-                                            ("line numbers", &mut cfg.line_numbers),
-                                            ("compress blank lines", &mut cfg.compress_blank),
-                                            ("distilled types", &mut cfg.distilled),
-                                            ("themed window bar", &mut cfg.frameless),
-                                            ("render markdown", &mut cfg.markdown),
-                                        ], focus, &mut base);
-                                        ui.add_space(4.0);
-                                        ui.label(
-                                            RichText::new("the tree")
-                                                .font(small.clone())
-                                                .color(pal.ink_soft),
-                                        );
-                                        let tree = toggles(ui, &font, &pal, &mut [
-                                            ("source files only", &mut cfg.code_only),
-                                            ("include hidden files", &mut cfg.show_hidden),
-                                        ], focus, &mut base);
-                                        changed |= tree;
-                                        tree_changed |= tree;
-                                    });
+                        ui.painter().rect_filled(rect, CornerRadius::same(4), fill);
+                        ui.painter().rect_stroke(
+                            rect,
+                            CornerRadius::same(4),
+                            Stroke::new(
+                                1.0,
+                                if armed {
+                                    pal.tone(Tone::Invalid)
+                                } else if reset_focused {
+                                    pal.accent
                                 } else {
-                                    let half = (content - 12.0) * 0.5;
-                                    let mut left = 0;
-                                    let mut right = 5;
-                                    let mut tree_base = 9;
-                                    ui.horizontal_top(|ui| {
-                                        let cfg = &mut self.store.config;
-                                        ui.vertical(|ui| {
-                                            ui.set_width(half);
-                                            changed |= toggles(ui, &font, &pal, &mut [
-                                                ("soft wrap", &mut cfg.wrap),
-                                                ("indentation whispers", &mut cfg.guides),
-                                                ("comments as prose", &mut cfg.serif_comments),
-                                                ("focus lens", &mut cfg.focus_lens),
-                                                ("line numbers", &mut cfg.line_numbers),
-                                            ], focus, &mut left);
-                                        });
-                                        ui.vertical(|ui| {
-                                            ui.set_width(half);
-                                            changed |= toggles(ui, &font, &pal, &mut [
-                                                ("compress blank lines", &mut cfg.compress_blank),
-                                                ("distilled types", &mut cfg.distilled),
-                                                ("themed window bar", &mut cfg.frameless),
-                                                ("render markdown", &mut cfg.markdown),
-                                            ], focus, &mut right);
-                                            // The tree's own two questions, which are
-                                            // about what to read rather than how to set
-                                            // it. They re-read the folder as they change,
-                                            // so they still answer on the clicked frame.
-                                            ui.add_space(4.0);
-                                            ui.label(
-                                                RichText::new("the tree")
-                                                    .font(small.clone())
-                                                    .color(pal.ink_soft),
-                                            );
-                                            let tree = toggles(ui, &font, &pal, &mut [
-                                                ("source files only", &mut cfg.code_only),
-                                                ("include hidden files", &mut cfg.show_hidden),
-                                            ], focus, &mut tree_base);
-                                            changed |= tree;
-                                            tree_changed |= tree;
-                                        });
-                                    });
-                                }
-                                ui.add_space(6.0);
-                                let cfg = &mut self.store.config;
-                                let mut measure = cfg.measure as f32;
-                                if line_slider(
-                                    ui,
-                                    &pal,
-                                    &font,
-                                    &values,
-                                    Slider {
-                                        label: "measure",
-                                        value: &mut measure,
-                                        range: crate::catalog::MEASURE_MIN as f32
-                                            ..=crate::catalog::MEASURE_MAX as f32,
-                                        decimals: 0,
-                                    },
-                                    focus == Some(11),
-                                ) {
-                                    cfg.measure = measure.round() as usize;
-                                    changed = true;
-                                }
-                                changed |= line_slider(
-                                    ui,
-                                    &pal,
-                                    &font,
-                                    &values,
-                                    Slider {
-                                        label: "leading",
-                                        value: &mut cfg.leading,
-                                        range: crate::catalog::LEADING_MIN
-                                            ..=crate::catalog::LEADING_MAX,
-                                        decimals: 2,
-                                    },
-                                    focus == Some(12),
-                                );
-                                changed |= line_slider(
-                                    ui,
-                                    &pal,
-                                    &font,
-                                    &values,
-                                    Slider {
-                                        label: "type size",
-                                        value: &mut self.scale,
-                                        range: crate::catalog::SCALE_MIN
-                                            ..=crate::catalog::SCALE_MAX,
-                                        decimals: 2,
-                                    },
-                                    focus == Some(13),
-                                );
+                                    pal.edge
+                                },
+                            ),
+                            egui::StrokeKind::Inside,
+                        );
+                        ui.painter().galley(
+                            Pos2::new(
+                                rect.center().x - galley.size().x * 0.5,
+                                rect.center().y - galley.size().y * 0.5,
+                            ),
+                            galley,
+                            colour,
+                        );
+                        if reset.clicked() {
+                            if armed {
+                                self.reset_asked = None;
+                                reset_settings = true;
+                            } else {
+                                self.reset_asked = Some(now);
                             }
-                            // -------------------------------------------- type
-                            1 => {
-                                let column = (content - 16.0) * 0.5;
-                                let mono_len = self.typo.mono_voices.len();
-                                ui.horizontal_top(|ui| {
-                                    ui.vertical(|ui| {
-                                        ui.set_width(column);
-                                        ui.label(
-                                            RichText::new("code")
-                                                .font(small.clone())
-                                                .color(pal.ink_soft),
-                                        );
-                                        for (i, v) in self.typo.mono_voices.iter().enumerate() {
-                                            let selected = i == self.typo.mono_idx;
-                                            let ok = typography::loads(v);
-                                            let text = RichText::new(v.label.clone())
-                                                .font(font.clone())
-                                                .color(if ok { pal.ink_soft } else { pal.ink_faint });
-                                            let r = ui.selectable_label(selected, text);
-                                            if focus == Some(i) {
-                                                ui.painter().rect_stroke(
-                                                    r.rect.shrink(1.0),
-                                                    CornerRadius::same(ROW_RADIUS),
-                                                    Stroke::new(1.0, pal.accent),
-                                                    egui::StrokeKind::Inside,
-                                                );
-                                            }
-                                            if r.clicked() {
-                                                new_mono = i;
-                                            }
-                                            r.on_hover_text(
-                                                RichText::new(v.note.clone()).font(small.clone()),
-                                            );
-                                        }
-                                    });
-                                    ui.vertical(|ui| {
-                                        ui.set_width(column);
-                                        ui.label(
-                                            RichText::new("prose")
-                                                .font(small.clone())
-                                                .color(pal.ink_soft),
-                                        );
-                                        for (i, v) in self.typo.prose_voices.iter().enumerate() {
-                                            let selected = i == self.typo.prose_idx;
-                                            let text = RichText::new(v.label.clone())
-                                                .font(font.clone())
-                                                .color(pal.ink_soft);
-                                            let r = ui.selectable_label(selected, text);
-                                            if focus == Some(mono_len + i) {
-                                                ui.painter().rect_stroke(
-                                                    r.rect.shrink(1.0),
-                                                    CornerRadius::same(ROW_RADIUS),
-                                                    Stroke::new(1.0, pal.accent),
-                                                    egui::StrokeKind::Inside,
-                                                );
-                                            }
-                                            if r.clicked() {
-                                                new_prose = i;
-                                            }
-                                            r.on_hover_text(
-                                                RichText::new(v.note.clone()).font(small.clone()),
-                                            );
-                                        }
-                                    });
-                                });
-                                ui.add_space(8.0);
-                                let chrome = self
-                                    .typo
-                                    .ui_voices
-                                    .first()
-                                    .map(|v| v.label.clone())
-                                    .unwrap_or_else(|| self.typo.ui_label.clone());
-                                ui.label(
-                                    RichText::new(format!("interface: {chrome}"))
-                                        .font(small.clone())
-                                        .color(pal.ink_soft),
-                                );
-                                if self.typo.bundled_fallback {
-                                    ui.label(
-                                        RichText::new(
-                                            "no system fonts found: egui's bundled faces are in use",
-                                        )
-                                        .font(small.clone())
-                                        .color(pal.ink_soft),
-                                    );
-                                }
-                            }
-                            // -------------------------------------------- theme
-                            2 => {
-                                // Each theme is shown by being used: a few lines of the
-                                // sample, set in that theme's paper and ink. A name and a
-                                // swatch tell you nothing about how a page reads.
-                                let tile_w = (content - 14.0) * 0.5;
-                                for row in theme::THEMES.chunks(2) {
-                                    ui.horizontal(|ui| {
-                                        for p in row {
-                                            let chosen = p.name == self.palette.name;
-                                            let tile_h = 84.0 * self.scale.min(1.5);
-                                            let index = theme::THEMES
-                                                .iter()
-                                                .position(|t| t.name == p.name)
-                                                .unwrap_or(0);
-                                            let focused = focus == Some(index);
-                                            let (rect, response) = ui.allocate_exact_size(
-                                                vec2(tile_w, tile_h),
-                                                egui::Sense::click(),
-                                            );
-                                            theme_tile(
-                                                ui,
-                                                rect,
-                                                p,
-                                                &sample,
-                                                TileState { chosen, focused },
-                                                &self.typo,
-                                                self.scale,
-                                            );
-                                            if response.clicked() {
-                                                theme_choice = Some(
-                                                    theme::THEMES
-                                                        .iter()
-                                                        .position(|t| t.name == p.name)
-                                                        .unwrap_or(0),
-                                                );
-                                            }
-                                            response.on_hover_text(
-                                                RichText::new(p.mood).font(small.clone()),
-                                            );
-                                            ui.add_space(10.0);
-                                        }
-                                    });
-                                    ui.add_space(10.0);
-                                }
-                            }
-                            // -------------------------------------------- language
-                            3 => {
-                                let mut on = self.store.config.lsp.enabled;
-                                let mut base = 0;
-                                if toggles(
-                                    ui,
-                                    &font,
-                                    &pal,
-                                    &mut [("start language servers", &mut on)],
-                                    focus,
-                                    &mut base,
-                                ) {
-                                    self.store.config.lsp.enabled = on;
-                                    changed = true;
-                                    lsp_changed = true;
-                                }
-                                ui.add_space(10.0);
-
-                                if self.lsp_kinds.is_empty() {
-                                    ui.label(
-                                        RichText::new(
-                                            "nothing in this folder speaks a language zenith \
-                                             has a server for",
-                                        )
-                                        .font(small.clone())
-                                        .color(pal.ink_soft),
-                                    );
-                                }
-                                for kind in self.lsp_kinds.clone() {
-                                    let (state, why) = self.server_state(kind.id);
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            RichText::new(kind.title)
-                                                .font(font.clone())
-                                                .color(pal.ink_soft),
-                                        );
-                                        let ink = if state == "failed" {
-                                            pal.tone(Tone::Invalid)
-                                        } else {
-                                            pal.ink_soft
-                                        };
-                                        ui.label(
-                                            RichText::new(state).font(small.clone()).color(ink),
-                                        );
-                                    });
-                                    if let Some(why) = why {
-                                        ui.label(
-                                            RichText::new(why)
-                                                .font(small.clone())
-                                                .color(pal.ink_soft),
-                                        );
-                                    }
-                                    let discovered = self
-                                        .available
-                                        .iter()
-                                        .find(|a| a.kind.id == kind.id)
-                                        .map(|a| display_path(&a.binary));
-                                    let entry = self
-                                        .store
-                                        .config
-                                        .lsp
-                                        .servers
-                                        .entry(kind.id.to_string())
-                                        .or_default();
-                                    ui.visuals_mut().extreme_bg_color = pal.panel_deep;
-                                    // A path is code, and it is edited: set it in the code
-                                    // voice, over a hairline, which is how this program
-                                    // draws every field it has.
-                                    let edit = ui.add(
-                                        egui::TextEdit::singleline(&mut entry.command)
-                                            .hint_text(
-                                                discovered.clone().unwrap_or_else(|| {
-                                                    "path to the binary".into()
-                                                }),
-                                            )
-                                            .font(self.typo.code_id(11.5 * self.scale))
-                                            .desired_width(content)
-                                            .frame(Frame::NONE),
-                                    );
-                                    ui.painter().hline(
-                                        edit.rect.x_range(),
-                                        edit.rect.bottom() + 2.0,
-                                        Stroke::new(1.0, pal.edge),
-                                    );
-                                    if edit.changed() {
-                                        changed = true;
-                                        self.lsp_path_dirty.insert(kind.id.to_string());
-                                    }
-                                    if edit.lost_focus() && self.lsp_path_dirty.remove(kind.id) {
-                                        // Finishing the edit restarts that language's
-                                        // server, so the new path is the one in use. A
-                                        // field visited and left alone is not an edit.
-                                        restart = Some(kind.id.to_string());
-                                    }
-                                    ui.add_space(8.0);
-                                }
-                            }
-                            // -------------------------------------------- keys
-                            4 => {
-                                ui.visuals_mut().extreme_bg_color = pal.panel_deep;
-                                let edit = ui.add(
-                                    egui::TextEdit::singleline(&mut self.sheets.keys_query)
-                                        .hint_text("filter keys")
-                                        .font(self.typo.ui_id(12.5 * self.scale))
-                                        .desired_width(content)
-                                        .frame(Frame::NONE),
-                                );
-                                ui.painter().hline(
-                                    edit.rect.x_range(),
-                                    edit.rect.bottom() + 2.0,
-                                    Stroke::new(1.0, pal.edge),
-                                );
-                                ui.add_space(8.0);
-                                let query = self.sheets.keys_query.to_lowercase();
-                                ScrollArea::vertical()
-                                    .id_salt("keys")
-                                    .max_height(280.0)
-                                    .scroll_bar_visibility(
-                                        egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
-                                    )
-                                    .auto_shrink([false, false])
-                                    .show(ui, |ui| {
-                                        for (group, rows) in HELP_GROUPS {
-                                            let matching: Vec<&(&str, &str)> = rows
-                                                .iter()
-                                                .filter(|(k, v)| {
-                                                    query.is_empty()
-                                                        || k.to_lowercase().contains(&query)
-                                                        || v.to_lowercase().contains(&query)
-                                                })
-                                                .collect();
-                                            if matching.is_empty() {
-                                                continue;
-                                            }
-                                            ui.label(
-                                                RichText::new(group.to_uppercase())
-                                                    .font(self.typo.ui_id(9.5 * self.scale))
-                                                    .color(pal.ink_soft)
-                                                    .extra_letter_spacing(0.1 * self.scale),
-                                            );
-                                            ui.add_space(2.0);
-                                            egui::Grid::new(format!("keys-{group}"))
-                                                .num_columns(2)
-                                                .spacing([16.0, 3.0])
-                                                .show(ui, |ui| {
-                                                    for &(k, v) in matching {
-                                                        ui.label(
-                                                            RichText::new(k)
-                                                                .font(self.typo.code_id(
-                                                                    11.5 * self.scale,
-                                                                ))
-                                                                .color(pal.accent),
-                                                        );
-                                                        ui.label(
-                                                            RichText::new(v)
-                                                                .font(small.clone())
-                                                                .color(pal.ink_soft),
-                                                        );
-                                                        ui.end_row();
-                                                    }
-                                                });
-                                            ui.add_space(8.0);
-                                        }
-                                    });
-                            }
-                            _ => {}
                         }
                     });
+                    ui.add_space(14.0);
                 });
-                ui.add_space(16.0);
-
-                // ---- the footer ----
-                // Reverting is the one thing here that cannot be undone by putting it
-                // back by hand, so it lives alone under its own rule, and asks twice.
-                let footer_y = ui.cursor().top();
-                ui.painter().hline(
-                    (ui.min_rect().left() + 20.0)..=(ui.min_rect().right() - 20.0),
-                    footer_y,
-                    Stroke::new(1.0, pal.edge),
-                );
-                // The rail's rule runs the whole way to the footer, not just past the
-                // last tab: it divides the sheet, not the list.
-                ui.painter().vline(
-                    rail_edge + 9.0,
-                    egui::Rangef::new(body_top, footer_y),
-                    Stroke::new(1.0, pal.edge),
-                );
-                ui.add_space(10.0);
-                let now = ui.input(|i| i.time);
-                let armed = self.reset_asked.is_some_and(|t| now - t < 5.0);
-                let reset_focused = !self.sheets.settings_rail_focus
-                    && self.sheets.settings_focus == self.settings_focus_count();
-                let text = if armed { "restore defaults?" } else { "restore defaults" };
-                let colour = if armed { pal.tone(Tone::Invalid) } else { pal.ink_soft };
-                let galley = ui.painter().layout_no_wrap(text.to_string(), small.clone(), colour);
-                let button_h = (small.size * 2.2).max(26.0);
-                let button_w = galley.size().x + 20.0;
-                ui.horizontal(|ui| {
-                    ui.add_space(20.0);
-                    let (rect, reset) = ui.allocate_exact_size(
-                        vec2(button_w, button_h),
-                        egui::Sense::click(),
-                    );
-                    let fill = if reset.is_pointer_button_down_on() {
-                        theme::alpha(pal.ink, 30)
-                    } else if reset.hovered() {
-                        theme::alpha(pal.ink, 16)
-                    } else {
-                        Color32::TRANSPARENT
-                    };
-                    ui.painter().rect_filled(rect, CornerRadius::same(4), fill);
-                    ui.painter().rect_stroke(
-                        rect,
-                        CornerRadius::same(4),
-                        Stroke::new(
-                            1.0,
-                            if armed {
-                                pal.tone(Tone::Invalid)
-                            } else if reset_focused {
-                                pal.accent
-                            } else {
-                                pal.edge
-                            },
-                        ),
-                        egui::StrokeKind::Inside,
-                    );
-                    ui.painter().galley(
-                        Pos2::new(
-                            rect.center().x - galley.size().x * 0.5,
-                            rect.center().y - galley.size().y * 0.5,
-                        ),
-                        galley,
-                        colour,
-                    );
-                    if reset.clicked() {
-                        if armed {
-                            self.reset_asked = None;
-                            reset_settings = true;
-                        } else {
-                            self.reset_asked = Some(now);
-                        }
-                    }
-                });
-                ui.add_space(14.0);
-            });
 
         if reset_settings {
             self.reset_defaults(ctx);
