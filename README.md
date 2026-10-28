@@ -7,7 +7,7 @@
 **A reading room for source code.**  
 <https://dovidio.github.io/zenith/>
 
-![Zenith reading its own source](docs/self-portrait.jpg?v=2)
+![Zenith reading its own source](docs/self-portrait.jpg?v=3)
 
 Zenith is a native, read-only code reader for code you have to understand but didn't write: a review, an inherited service, a dependency you need to trust. It is not an editor with the editing removed. The page opens alone; the index, contents, launcher and settings are doors you summon.
 
@@ -25,7 +25,7 @@ Review reads whole files, not hunks. `g r` opens the working tree; `g b` chooses
 
 Changed lines carry more weight, and the code they replaced lifts in place when you hover it or press `p`. Untracked source is included; ignored and dependency trees never are. `J K` moves through changed files, `[ ]` through changes, and `q` keeps the review through a definition detour.
 
-![Reviewing a branch in Zenith](docs/review-detail.jpg?v=2)
+![Reviewing three changed files in Zenith](docs/review-detail.jpg?v=3)
 
 ## Reading
 
