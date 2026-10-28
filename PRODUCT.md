@@ -89,8 +89,8 @@ lighter editor; it is a different reading surface.
 - `DESIGN.md` — the intended interaction and visual system; a specification, not proof of
   implementation.
 - `docs/index.html`, `docs/site.css`, `docs/zenith.css` — the public site.
-- `docs/self-portrait.jpg`, `docs/self-portrait-zen.jpg`, `docs/themes.jpg` — app
-  screenshots produced by `--smoke`.
+- `docs/self-portrait.jpg`, `docs/reading-detail.jpg`, `docs/review-detail.jpg`,
+  `docs/review.jpg`, `docs/themes.jpg` — app screenshots produced by `--smoke`.
 - Source and tests under `src/`, including headless diagnostics (`--dump`, `--fonts`,
   `--lsp`, `--smoke`).
 - No customer testimonials, benchmarks, case studies, pricing, press or deployment

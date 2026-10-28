@@ -307,12 +307,15 @@ pre code { font: inherit; color: inherit; background: none; padding: 0; }
 .room-copy { min-width: 0; }
 .room-copy p { font-size: 16px; }
 .review {
+  display: grid;
+  grid-template-columns: 1fr .95fr;
+  gap: 48px;
   border-top: 1px solid var(--edge);
   padding: 30px 0;
+  align-items: start;
 }
-.review-copy { max-width: var(--measure); margin-bottom: 20px; }
+.review-copy { min-width: 0; }
 .review-copy p { font-size: 16px; }
-.review .window { max-width: 1200px; }
 .room-copy em { font-style: italic; }
 code {
   font-family: var(--voice-code);
@@ -383,7 +386,7 @@ code {
   .note { margin-bottom: 0; }
   .themes { align-items: flex-start; flex-direction: column; gap: 14px; }
   .theme-rack { justify-content: flex-start; }
-  .run, .room { grid-template-columns: 1fr; gap: 22px; }
+  .run, .room, .review { grid-template-columns: 1fr; gap: 22px; }
 }
 @media (max-width: 620px) {
   .sheet { width: calc(100% - 24px); margin: 12px auto; padding: 16px 16px 0; }
