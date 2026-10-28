@@ -1,0 +1,5 @@
+# Cognitive complexity is the local "this function is hard to hold in mind" signal.
+# Clippy computes it directly, so the pre-commit hook needs no Sonar server or account.
+# 25 is Clippy's default; writing it here makes the gate a decision rather than an
+# accident of the toolchain version.
+cognitive-complexity-threshold = 25

@@ -8,19 +8,11 @@ use super::widgets::*;
 use super::*;
 
 impl Zenith {
-    pub(super) fn palette_overlay(&mut self, ctx: &egui::Context) {
-        let pal = self.palette;
-        let screen = ctx.content_rect();
-        let width = (560.0 * self.scale)
-            .clamp(560.0, 820.0)
-            .min((screen.width() - 40.0).max(360.0));
-        // The launcher sits a third of the way down, like a spotlight, not against the
-        // top edge like a toolbar.
-        let high = self.scale > 1.3 || screen.height() <= 700.0;
-        let top = self.sheet_top(screen, high, true);
-        let pos = Pos2::new(screen.center().x - width * 0.5, top);
-        let needle = self.query.trim().to_string();
-
+    /// The launcher's rows: matched files, then the curated or ranked commands.
+    ///
+    /// Kept apart from the sheet so the drawing and the choosing can be read as two
+    /// decisions rather than one long branch.
+    fn palette_rows(&self, needle: &str) -> (Vec<LaunchRow>, usize) {
         // Matching files. The list is capped, but the reader is told how many were
         // matched; a silent cap makes a file look absent.
         let (matches, matched_total): (Vec<(i32, usize, Vec<usize>)>, usize) = match &self.folder {
@@ -30,7 +22,7 @@ impl Zenith {
                     .iter()
                     .enumerate()
                     .filter_map(|(i, f)| {
-                        fuzzy::match_path(&f.rel, &needle).map(|h| (h.score, i, h.positions))
+                        fuzzy::match_path(&f.rel, needle).map(|h| (h.score, i, h.positions))
                     })
                     .collect();
                 v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
@@ -126,7 +118,7 @@ impl Zenith {
                 if !self.launch_available(spec.action) {
                     continue;
                 }
-                if let Some(score) = launch_command_score(spec, &needle) {
+                if let Some(score) = launch_command_score(spec, needle) {
                     rows.push(self.launch_row(spec, score));
                 }
             }
@@ -142,6 +134,178 @@ impl Zenith {
             });
             rows.truncate(8);
         }
+        (rows, matched_total)
+    }
+
+    /// Draw one launcher row. Kept out of the scroll closure so the closure is only
+    /// about choosing, and the row is only about drawing.
+    fn paint_palette_row(
+        &self,
+        ui: &mut Ui,
+        rect: Rect,
+        row: &LaunchRow,
+        ink: Color32,
+        resp: &egui::Response,
+    ) {
+        let pal = self.palette;
+        let command_font = self.typo.ui_id(13.0 * self.scale);
+        let detail_font = self.typo.ui_id(11.5 * self.scale);
+        let file_font = self.typo.code_id(12.5 * self.scale);
+        let file_dir_font = self.typo.code_id(10.5 * self.scale);
+        let key_font = self.typo.code_id(10.5 * self.scale);
+        match row {
+            LaunchRow::Command { spec, detail, .. } => {
+                let label = ui.painter().text(
+                    Pos2::new(rect.left() + 10.0 * self.scale, rect.center().y),
+                    Align2::LEFT_CENTER,
+                    spec.label,
+                    command_font.clone(),
+                    ink,
+                );
+                if let Some(detail) = detail {
+                    let detail_ink = if detail == "on" {
+                        pal.accent
+                    } else {
+                        pal.ink_soft
+                    };
+                    ui.painter().text(
+                        Pos2::new(label.right() + 8.0 * self.scale, rect.center().y),
+                        Align2::LEFT_CENTER,
+                        detail,
+                        detail_font.clone(),
+                        detail_ink,
+                    );
+                }
+                if let Some(shortcut) = spec.shortcut {
+                    let galley =
+                        ui.painter()
+                            .layout_no_wrap(shortcut.to_string(), key_font.clone(), ink);
+                    let pad = 5.0 * self.scale;
+                    let chip_h = (18.0 * self.scale).clamp(18.0, 24.0);
+                    let chip_w = galley.size().x + pad * 2.0;
+                    let chip = Rect::from_min_size(
+                        Pos2::new(
+                            rect.right() - 8.0 * self.scale - chip_w,
+                            rect.center().y - chip_h * 0.5,
+                        ),
+                        vec2(chip_w, chip_h),
+                    );
+                    ui.painter()
+                        .rect_filled(chip, CornerRadius::same(3), pal.panel_deep);
+                    ui.painter().rect_stroke(
+                        chip,
+                        CornerRadius::same(3),
+                        Stroke::new(1.0, pal.edge),
+                        egui::StrokeKind::Inside,
+                    );
+                    ui.painter().galley(
+                        Pos2::new(
+                            chip.center().x - galley.size().x * 0.5,
+                            chip.center().y - galley.size().y * 0.5,
+                        ),
+                        galley,
+                        ink,
+                    );
+                }
+            }
+            LaunchRow::File {
+                rel,
+                marked,
+                positions,
+                ..
+            } => {
+                // A path is one line, not a paragraph. Long names and deep
+                // folders used to wrap inside a fixed-height row and paint
+                // over the row below; the name and its folder now each get
+                // one elided line, with the full path on hover.
+                let pad = 6.0 * self.scale;
+                let right = if *marked {
+                    24.0 * self.scale
+                } else {
+                    10.0 * self.scale
+                };
+                let max_w = (rect.width() - pad - right).max(20.0);
+                let (dir, name, name_start) = match rel.rfind('/') {
+                    Some(i) => (&rel[..i], &rel[i + 1..], i + 1),
+                    None => ("", rel.as_str(), 0),
+                };
+
+                let mut name_job = egui::text::LayoutJob::default();
+                name_job.wrap.max_width = max_w;
+                name_job.wrap.max_rows = 1;
+                name_job.wrap.break_anywhere = true;
+                for (ci, ch) in name.chars().enumerate() {
+                    let hit = positions.binary_search(&(name_start + ci)).is_ok();
+                    let mut f = TextFormat {
+                        font_id: file_font.clone(),
+                        color: ink,
+                        ..Default::default()
+                    };
+                    if hit {
+                        f.underline = Stroke::new(1.0, pal.accent_soft);
+                    }
+                    name_job.append(&ch.to_string(), 0.0, f);
+                }
+                let name_galley = ui.painter().layout_job(name_job);
+
+                let dir_galley = (!dir.is_empty()).then(|| {
+                    let mut job = egui::text::LayoutJob::default();
+                    job.wrap.max_width = max_w;
+                    job.wrap.max_rows = 1;
+                    job.wrap.break_anywhere = true;
+                    for (ci, ch) in dir.chars().enumerate() {
+                        let hit = positions.binary_search(&ci).is_ok();
+                        let mut f = TextFormat {
+                            font_id: file_dir_font.clone(),
+                            color: pal.ink_soft,
+                            ..Default::default()
+                        };
+                        if hit {
+                            f.underline = Stroke::new(1.0, pal.accent_soft);
+                        }
+                        job.append(&ch.to_string(), 0.0, f);
+                    }
+                    ui.painter().layout_job(job)
+                });
+
+                let gap = 1.0 * self.scale;
+                let name_h = name_galley.size().y;
+                let block_h = name_h + dir_galley.as_ref().map(|g| gap + g.size().y).unwrap_or(0.0);
+                let top = rect.center().y - block_h * 0.5;
+                let x = rect.left() + pad;
+                ui.painter().galley(Pos2::new(x, top), name_galley, ink);
+                if let Some(g) = dir_galley {
+                    ui.painter()
+                        .galley(Pos2::new(x, top + name_h + gap), g, pal.ink_soft);
+                }
+                if *marked {
+                    ui.painter().text(
+                        Pos2::new(rect.right() - 8.0 * self.scale, rect.center().y),
+                        Align2::RIGHT_CENTER,
+                        self.typo.marks.pick("✦"),
+                        file_font.clone(),
+                        pal.accent,
+                    );
+                }
+                resp.clone().on_hover_text(rel.as_str());
+            }
+        }
+    }
+
+    pub(super) fn palette_overlay(&mut self, ctx: &egui::Context) {
+        let pal = self.palette;
+        let screen = ctx.content_rect();
+        let width = (560.0 * self.scale)
+            .clamp(560.0, 820.0)
+            .min((screen.width() - 40.0).max(360.0));
+        // The launcher sits a third of the way down, like a spotlight, not against the
+        // top edge like a toolbar.
+        let high = self.scale > 1.3 || screen.height() <= 700.0;
+        let top = self.sheet_top(screen, high, true);
+        let pos = Pos2::new(screen.center().x - width * 0.5, top);
+        let needle = self.query.trim().to_string();
+
+        let (rows, matched_total) = self.palette_rows(&needle);
 
         let row_count = rows.len();
         self.palette_sel = self.palette_sel.min(row_count.saturating_sub(1));
@@ -255,12 +419,7 @@ impl Zenith {
                             .max_height(body_h)
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
-                                let command_font = self.typo.ui_id(13.0 * self.scale);
-                                let detail_font = self.typo.ui_id(11.5 * self.scale);
-                                let file_font = self.typo.code_id(12.5 * self.scale);
-                                let file_dir_font = self.typo.code_id(10.5 * self.scale);
                                 let group_font = self.typo.ui_id(9.5 * self.scale);
-                                let key_font = self.typo.code_id(10.5 * self.scale);
                                 let mut last_group: Option<LaunchGroup> = None;
 
                                 for (i, row) in rows.iter().enumerate() {
@@ -321,171 +480,7 @@ impl Zenith {
                                     }
 
                                     let ink = if selected { pal.ink } else { pal.ink_soft };
-                                    match row {
-                                        LaunchRow::Command { spec, detail, .. } => {
-                                            let label = ui.painter().text(
-                                                Pos2::new(
-                                                    rect.left() + 10.0 * self.scale,
-                                                    rect.center().y,
-                                                ),
-                                                Align2::LEFT_CENTER,
-                                                spec.label,
-                                                command_font.clone(),
-                                                ink,
-                                            );
-                                            if let Some(detail) = detail {
-                                                let detail_ink = if detail == "on" {
-                                                    pal.accent
-                                                } else {
-                                                    pal.ink_soft
-                                                };
-                                                ui.painter().text(
-                                                    Pos2::new(
-                                                        label.right() + 8.0 * self.scale,
-                                                        rect.center().y,
-                                                    ),
-                                                    Align2::LEFT_CENTER,
-                                                    detail,
-                                                    detail_font.clone(),
-                                                    detail_ink,
-                                                );
-                                            }
-                                            if let Some(shortcut) = spec.shortcut {
-                                                let galley = ui.painter().layout_no_wrap(
-                                                    shortcut.to_string(),
-                                                    key_font.clone(),
-                                                    ink,
-                                                );
-                                                let pad = 5.0 * self.scale;
-                                                let chip_h = (18.0 * self.scale).clamp(18.0, 24.0);
-                                                let chip_w = galley.size().x + pad * 2.0;
-                                                let chip = Rect::from_min_size(
-                                                    Pos2::new(
-                                                        rect.right() - 8.0 * self.scale - chip_w,
-                                                        rect.center().y - chip_h * 0.5,
-                                                    ),
-                                                    vec2(chip_w, chip_h),
-                                                );
-                                                ui.painter().rect_filled(
-                                                    chip,
-                                                    CornerRadius::same(3),
-                                                    pal.panel_deep,
-                                                );
-                                                ui.painter().rect_stroke(
-                                                    chip,
-                                                    CornerRadius::same(3),
-                                                    Stroke::new(1.0, pal.edge),
-                                                    egui::StrokeKind::Inside,
-                                                );
-                                                ui.painter().galley(
-                                                    Pos2::new(
-                                                        chip.center().x - galley.size().x * 0.5,
-                                                        chip.center().y - galley.size().y * 0.5,
-                                                    ),
-                                                    galley,
-                                                    ink,
-                                                );
-                                            }
-                                        }
-                                        LaunchRow::File {
-                                            rel,
-                                            marked,
-                                            positions,
-                                            ..
-                                        } => {
-                                            // A path is one line, not a paragraph. Long names and deep
-                                            // folders used to wrap inside a fixed-height row and paint
-                                            // over the row below; the name and its folder now each get
-                                            // one elided line, with the full path on hover.
-                                            let pad = 6.0 * self.scale;
-                                            let right = if *marked {
-                                                24.0 * self.scale
-                                            } else {
-                                                10.0 * self.scale
-                                            };
-                                            let max_w = (rect.width() - pad - right).max(20.0);
-                                            let (dir, name, name_start) = match rel.rfind('/') {
-                                                Some(i) => (&rel[..i], &rel[i + 1..], i + 1),
-                                                None => ("", rel.as_str(), 0),
-                                            };
-
-                                            let mut name_job = egui::text::LayoutJob::default();
-                                            name_job.wrap.max_width = max_w;
-                                            name_job.wrap.max_rows = 1;
-                                            name_job.wrap.break_anywhere = true;
-                                            for (ci, ch) in name.chars().enumerate() {
-                                                let hit = positions
-                                                    .binary_search(&(name_start + ci))
-                                                    .is_ok();
-                                                let mut f = TextFormat {
-                                                    font_id: file_font.clone(),
-                                                    color: ink,
-                                                    ..Default::default()
-                                                };
-                                                if hit {
-                                                    f.underline = Stroke::new(1.0, pal.accent_soft);
-                                                }
-                                                name_job.append(&ch.to_string(), 0.0, f);
-                                            }
-                                            let name_galley = ui.painter().layout_job(name_job);
-
-                                            let dir_galley = (!dir.is_empty()).then(|| {
-                                                let mut job = egui::text::LayoutJob::default();
-                                                job.wrap.max_width = max_w;
-                                                job.wrap.max_rows = 1;
-                                                job.wrap.break_anywhere = true;
-                                                for (ci, ch) in dir.chars().enumerate() {
-                                                    let hit = positions.binary_search(&ci).is_ok();
-                                                    let mut f = TextFormat {
-                                                        font_id: file_dir_font.clone(),
-                                                        color: pal.ink_soft,
-                                                        ..Default::default()
-                                                    };
-                                                    if hit {
-                                                        f.underline =
-                                                            Stroke::new(1.0, pal.accent_soft);
-                                                    }
-                                                    job.append(&ch.to_string(), 0.0, f);
-                                                }
-                                                ui.painter().layout_job(job)
-                                            });
-
-                                            let gap = 1.0 * self.scale;
-                                            let name_h = name_galley.size().y;
-                                            let block_h = name_h
-                                                + dir_galley
-                                                    .as_ref()
-                                                    .map(|g| gap + g.size().y)
-                                                    .unwrap_or(0.0);
-                                            let top = rect.center().y - block_h * 0.5;
-                                            let x = rect.left() + pad;
-                                            ui.painter().galley(
-                                                Pos2::new(x, top),
-                                                name_galley,
-                                                ink,
-                                            );
-                                            if let Some(g) = dir_galley {
-                                                ui.painter().galley(
-                                                    Pos2::new(x, top + name_h + gap),
-                                                    g,
-                                                    pal.ink_soft,
-                                                );
-                                            }
-                                            if *marked {
-                                                ui.painter().text(
-                                                    Pos2::new(
-                                                        rect.right() - 8.0 * self.scale,
-                                                        rect.center().y,
-                                                    ),
-                                                    Align2::RIGHT_CENTER,
-                                                    self.typo.marks.pick("✦"),
-                                                    file_font.clone(),
-                                                    pal.accent,
-                                                );
-                                            }
-                                            resp.clone().on_hover_text(rel.as_str());
-                                        }
-                                    }
+                                    self.paint_palette_row(ui, rect, row, ink, &resp);
                                     if resp.clicked() {
                                         chosen = Some(i);
                                     }

@@ -46,6 +46,11 @@ toml = "1"
 # mistake: JSON escapes strings in six ways and every one of them appears in a reply.
 serde_json = "1"
 
+[lints.clippy]
+# The local smell gate. Clippy computes cognitive complexity itself; the threshold is
+# in clippy.toml. Denied here so `cargo clippy` fails outside the hook too.
+cognitive_complexity = "deny"
+
 [profile.release]
 opt-level = 2
 lto = "thin"

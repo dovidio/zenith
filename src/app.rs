@@ -2253,6 +2253,25 @@ impl eframe::App for Zenith {
             }
         }
 
+        self.poll_folder(&ctx);
+        self.poll_review(&ctx);
+        self.poll_file(&ctx);
+        self.frame_housekeeping(&ctx);
+
+        self.paint_frame(ui);
+        self.smoke_tick(&ctx);
+    }
+
+    fn on_exit(&mut self) {
+        self.remember_position();
+        self.store.save_config();
+        self.store.save_session();
+    }
+}
+
+impl Zenith {
+    /// Drain the background folder walk, then open what it found.
+    fn poll_folder(&mut self, ctx: &egui::Context) {
         // Has the background walk of a folder finished?
         if let Some(load) = &self.folder_load {
             match load.rx.try_recv() {
@@ -2320,7 +2339,10 @@ impl eframe::App for Zenith {
                 }
             }
         }
+    }
 
+    /// Drain the background git review, then show its first changed file.
+    fn poll_review(&mut self, ctx: &egui::Context) {
         // Has the review's git diff finished?
         if let Some(load) = &self.session.load {
             match load.rx.try_recv() {
@@ -2368,7 +2390,10 @@ impl eframe::App for Zenith {
                 }
             }
         }
+    }
 
+    /// Drain the background pass that tones a large file.
+    fn poll_file(&mut self, ctx: &egui::Context) {
         // Has the background pass over a large file finished?
         if let Some(loading) = &self.loading {
             match loading.rx.try_recv() {
@@ -2399,19 +2424,10 @@ impl eframe::App for Zenith {
                 }
             }
         }
+    }
 
-        // The window's title, once the file it names has settled.
-        if self.title_dirty {
-            let rel = self.open.as_ref().map(|o| o.rel.clone());
-            self.set_window_title(&ctx, rel.as_deref());
-            self.title_dirty = false;
-        }
-
-        // The rows first: both the keyboard and the panel read this list, and they have to
-        // agree about what "the row below this one" means.
-        self.tree.rows = self.build_tree_rows();
-        self.tree.moved = false;
-
+    /// A development affordance: move the tree without a keyboard.
+    fn tree_hook(&mut self) {
         // A development affordance: move the tree selection without a keyboard, so a
         // screenshot can show the focused tree with something selected.
         if !self.tree.hook_done {
@@ -2458,14 +2474,31 @@ impl eframe::App for Zenith {
                 self.tree.hook_done = true;
             }
         }
+    }
+
+    /// Everything that must settle before the frame is drawn: title, rows, style, servers and keys.
+    fn frame_housekeeping(&mut self, ctx: &egui::Context) {
+        // The window's title, once the file it names has settled.
+        if self.title_dirty {
+            let rel = self.open.as_ref().map(|o| o.rel.clone());
+            self.set_window_title(ctx, rel.as_deref());
+            self.title_dirty = false;
+        }
+
+        // The rows first: both the keyboard and the panel read this list, and they have to
+        // agree about what "the row below this one" means.
+        self.tree.rows = self.build_tree_rows();
+        self.tree.moved = false;
+
+        self.tree_hook();
 
         if self.style_dirty {
-            apply_style(&ctx, &self.palette, &self.typo, self.scale);
-            self.rebuild_metrics(&ctx);
+            apply_style(ctx, &self.palette, &self.typo, self.scale);
+            self.rebuild_metrics(ctx);
             self.style_dirty = false;
         }
 
-        if let Some(dir) = dropped_folder(&ctx) {
+        if let Some(dir) = dropped_folder(ctx) {
             self.open_folder(&dir, None);
         }
 
@@ -2487,18 +2520,22 @@ impl eframe::App for Zenith {
         self.ensure_servers();
         self.ensure_outline();
 
-        self.reading_keys(&ctx);
+        self.reading_keys(ctx);
 
         // Keys may have just asked a question, so the send happens after them.
         self.advance_nav();
         #[cfg(debug_assertions)]
-        self.dev_nav(&ctx);
+        self.dev_nav(ctx);
         #[cfg(debug_assertions)]
         self.forced_notice();
         if self.discovering.is_some() || self.nav.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(60));
         }
+    }
 
+    /// Draw the frame in layers: bars, page, bloom, sheets, window edges.
+    fn paint_frame(&mut self, ui: &mut Ui) {
+        let ctx = ui.ctx().clone();
         let pal = self.palette;
         // The page owns the window. On macOS the desktop draws the title and the traffic
         // lights; on Linux and Windows we still have to draw the window's own buttons,
@@ -2559,13 +2596,6 @@ impl eframe::App for Zenith {
         if self.store.config.frameless && !cfg!(target_os = "macos") {
             resize_handles(ui);
         }
-        self.smoke_tick(&ctx);
-    }
-
-    fn on_exit(&mut self) {
-        self.remember_position();
-        self.store.save_config();
-        self.store.save_session();
     }
 }
 

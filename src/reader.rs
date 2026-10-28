@@ -803,6 +803,29 @@ pub fn paint(painter: &Painter, p: &Paint) {
         let _ = h;
     }
 
+    paint_markdown(painter, p, first, last);
+    // 3. The text itself.
+    for i in first..last {
+        let Some(galley) = galley_at(i) else {
+            continue;
+        };
+        let indent_px = p.laid.indent_px(p.doc.lines[i].indent);
+        painter.galley(
+            Pos2::new(ox + indent_px, t(p.laid.top_of(i))),
+            galley.clone(),
+            p.style.tones[Tone::Plain.index()],
+        );
+    }
+
+    paint_fades(painter, p, first, last);
+    let line = p.caret.line;
+    let cursor_galley = galley_at(line);
+    paint_cursor(painter, p, cursor_galley);
+}
+
+fn paint_markdown(painter: &Painter, p: &Paint, first: usize, last: usize) {
+    let ox = p.laid.col_x;
+    let t = |y: f32| p.origin_y + y;
     // 2b. A rendered document has furniture the text cannot draw: the ground behind a
     // fenced block or a quotation, and a rule where the source said `---`.
     if let Some(md) = &p.doc.md {
@@ -870,20 +893,11 @@ pub fn paint(painter: &Painter, p: &Paint) {
             }
         }
     }
+}
 
-    // 3. The text itself.
-    for i in first..last {
-        let Some(galley) = galley_at(i) else {
-            continue;
-        };
-        let indent_px = p.laid.indent_px(p.doc.lines[i].indent);
-        painter.galley(
-            Pos2::new(ox + indent_px, t(p.laid.top_of(i))),
-            galley.clone(),
-            p.style.tones[Tone::Plain.index()],
-        );
-    }
-
+fn paint_fades(painter: &Painter, p: &Paint, first: usize, last: usize) {
+    let ox = p.laid.col_x;
+    let t = |y: f32| p.origin_y + y;
     // 4. Fades: one scrim per run of unfocused lines, painted over the page.
     if let Some((f0, f1)) = p.focus {
         let scrim = alpha(p.palette.fade, p.fade_alpha);
@@ -914,7 +928,11 @@ pub fn paint(painter: &Painter, p: &Paint) {
             flush(r, painter);
         }
     }
+}
 
+fn paint_cursor(painter: &Painter, p: &Paint, galley: Option<&Arc<Galley>>) {
+    let ox = p.laid.col_x;
+    let t = |y: f32| p.origin_y + y;
     // 5. The reading cursor: a ribbon in the margin, the faintest wash, and a
     //    hairline at the column.
     let line = p.caret.line;
@@ -945,7 +963,7 @@ pub fn paint(painter: &Painter, p: &Paint) {
             let indent = p.laid.indent_px(p.doc.lines[line].indent);
             // The galley knows which row owns the column, and how far along it is: two
             // things arithmetic on `col` cannot know once a line wraps.
-            let (x, y0, y1) = match galley_at(line) {
+            let (x, y0, y1) = match galley {
                 Some(galley) => {
                     let at = galley.pos_from_cursor(egui::text::CCursor {
                         index: p.caret.col.into(),
