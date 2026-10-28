@@ -256,7 +256,7 @@ h2 {
   color: var(--tone-keyword);
   margin: 0 0 8px;
 }
-.run-copy p, .room-copy p, .trust p, .close p {
+.run-copy p, .room-copy p, .review-copy p, .trust p, .close p {
   margin: 0 0 12px;
   max-width: var(--measure);
 }
@@ -306,6 +306,13 @@ pre code { font: inherit; color: inherit; background: none; padding: 0; }
 }
 .room-copy { min-width: 0; }
 .room-copy p { font-size: 16px; }
+.review {
+  border-top: 1px solid var(--edge);
+  padding: 30px 0;
+}
+.review-copy { max-width: var(--measure); margin-bottom: 20px; }
+.review-copy p { font-size: 16px; }
+.review .window { max-width: 1200px; }
 .room-copy em { font-style: italic; }
 code {
   font-family: var(--voice-code);
